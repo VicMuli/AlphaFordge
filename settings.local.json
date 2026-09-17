@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import strategy_builder; print\\('import OK'\\)\")",
+      "Bash(python test_pipeline.py)",
+      "Bash(python -c ' *)",
+      "Read(//c/Users/HP/AppData/Roaming/MetaQuotes/Terminal/CDE1ED2F37049DA2E508A3C44B675D09/MQL5/Profiles/Tester/**)",
+      "Read(//c/Users/HP/AppData/Roaming/MetaQuotes/Terminal/**)",
+      "Bash(python -c \"import strategy_library as s; print\\('strategies in library:', [x['name'] for x in s.STRATEGY_LIBRARY]\\); print\\('count:', len\\(s.STRATEGY_LIBRARY\\)\\)\")",
+      "Bash(python -c \"import strategies, strategy_library as s; print\\('exports:', strategies.__all__\\); print\\('library:', [x['name'] for x in s.STRATEGY_LIBRARY]\\)\")",
+      "Bash(python -c \"import param_optimizer, strategy_library; print\\('OK'\\)\")",
+      "Bash(python -c \"import param_optimizer; print\\('OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('param_optimizer.py'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "Bash(python -c \"import ast, sys; files=['filter_recovery_engine.py','mql5_translator.py','strategy_research_agent.py','param_optimizer.py']; [print\\(f+'  OK'\\) or None for f in files if not ast.parse\\(open\\(f\\).read\\(\\)\\)] or [print\\(f+': SYNTAX ERROR — '+str\\(e\\)\\) for f in files for e in [None] if False]\")",
+      "Bash(python export_eas.py --out generated_eas)",
+      "Bash(python -c \"from pathlib import Path; files = sorted\\(Path\\('generated_eas'\\).glob\\('*.mq5'\\)\\); print\\(f'{len\\(files\\)} .mq5 files:'\\); [print\\(f'  {f.name}'\\) for f in files[:10]]; print\\(f'  ... and {len\\(files\\)-10} more'\\) if len\\(files\\)>10 else None\")"
+    ]
+  }
+}
