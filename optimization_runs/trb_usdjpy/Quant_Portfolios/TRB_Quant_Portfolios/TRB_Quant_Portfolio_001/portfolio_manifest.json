@@ -1,0 +1,94 @@
+{
+  "portfolio_name": "TRB_Quant_Portfolio_001",
+  "created_utc": "2026-09-15T09:28:26.027783+00:00",
+  "deposit": 2500.0,
+  "currency": "USD",
+  "backtest_range": [
+    "2013.01.01",
+    "2026.07.03"
+  ],
+  "trade_count": 3326,
+  "trade_count_definition": "Completed positions grouped by MT5 Position ID where available; otherwise deal-row fallback.",
+  "candidates": [
+    {
+      "candidate": "cand_015",
+      "run_dir": "run_20260911_094409",
+      "weight": 1.0,
+      "candidate_dir": "C:\\Users\\HP\\Desktop\\MT5 runner\\optimization_runs\\trb_usdjpy\\run_20260911_094409\\passed_candidates\\cand_015",
+      "mt5_report": "C:\\Users\\HP\\Desktop\\MT5 runner\\optimization_runs\\trb_usdjpy\\run_20260911_094409\\passed_candidates\\cand_015\\full_backtest_report\\Full_BT_cand_015.htm",
+      "raw_activity_rows": 1326,
+      "completed_trade_count": 1031,
+      "trade_count_method": "mt5_official_summary"
+    },
+    {
+      "candidate": "cand_013",
+      "run_dir": "run_20260909_101955",
+      "weight": 1.0,
+      "candidate_dir": "C:\\Users\\HP\\Desktop\\MT5 runner\\optimization_runs\\trb_usdjpy\\run_20260909_101955\\passed_candidates\\cand_013",
+      "mt5_report": "C:\\Users\\HP\\Desktop\\MT5 runner\\optimization_runs\\trb_usdjpy\\run_20260909_101955\\passed_candidates\\cand_013\\full_backtest_report\\Full_BT_cand_013.htm",
+      "raw_activity_rows": 2188,
+      "completed_trade_count": 1704,
+      "trade_count_method": "mt5_official_summary"
+    },
+    {
+      "candidate": "cand_014",
+      "run_dir": "run_20260909_101955",
+      "weight": 1.0,
+      "candidate_dir": "C:\\Users\\HP\\Desktop\\MT5 runner\\optimization_runs\\trb_usdjpy\\run_20260909_101955\\passed_candidates\\cand_014",
+      "mt5_report": "C:\\Users\\HP\\Desktop\\MT5 runner\\optimization_runs\\trb_usdjpy\\run_20260909_101955\\passed_candidates\\cand_014\\full_backtest_report\\Full_BT_cand_014.htm",
+      "raw_activity_rows": 2166,
+      "completed_trade_count": 1686,
+      "trade_count_method": "mt5_official_summary"
+    },
+    {
+      "candidate": "cand_011",
+      "run_dir": "run_20260909_101955",
+      "weight": 1.0,
+      "candidate_dir": "C:\\Users\\HP\\Desktop\\MT5 runner\\optimization_runs\\trb_usdjpy\\run_20260909_101955\\passed_candidates\\cand_011",
+      "mt5_report": "C:\\Users\\HP\\Desktop\\MT5 runner\\optimization_runs\\trb_usdjpy\\run_20260909_101955\\passed_candidates\\cand_011\\full_backtest_report\\Full_BT_cand_011.htm",
+      "raw_activity_rows": 2216,
+      "completed_trade_count": 1728,
+      "trade_count_method": "mt5_official_summary"
+    },
+    {
+      "candidate": "cand_009",
+      "run_dir": "run_20260909_101955",
+      "weight": 1.0,
+      "candidate_dir": "C:\\Users\\HP\\Desktop\\MT5 runner\\optimization_runs\\trb_usdjpy\\run_20260909_101955\\passed_candidates\\cand_009",
+      "mt5_report": "C:\\Users\\HP\\Desktop\\MT5 runner\\optimization_runs\\trb_usdjpy\\run_20260909_101955\\passed_candidates\\cand_009\\full_backtest_report\\Full_BT_cand_009.htm",
+      "raw_activity_rows": 2243,
+      "completed_trade_count": 1754,
+      "trade_count_method": "mt5_official_summary"
+    },
+    {
+      "candidate": "cand_003",
+      "run_dir": "run_20260909_101955",
+      "weight": 1.0,
+      "candidate_dir": "C:\\Users\\HP\\Desktop\\MT5 runner\\optimization_runs\\trb_usdjpy\\run_20260909_101955\\passed_candidates\\cand_003",
+      "mt5_report": "C:\\Users\\HP\\Desktop\\MT5 runner\\optimization_runs\\trb_usdjpy\\run_20260909_101955\\passed_candidates\\cand_003\\full_backtest_report\\Full_BT_cand_003.htm",
+      "raw_activity_rows": 2250,
+      "completed_trade_count": 1760,
+      "trade_count_method": "mt5_official_summary"
+    },
+    {
+      "candidate": "cand_014",
+      "run_dir": "run_20260911_094409",
+      "weight": 1.0,
+      "candidate_dir": "C:\\Users\\HP\\Desktop\\MT5 runner\\optimization_runs\\trb_usdjpy\\run_20260911_094409\\passed_candidates\\cand_014",
+      "mt5_report": "C:\\Users\\HP\\Desktop\\MT5 runner\\optimization_runs\\trb_usdjpy\\run_20260911_094409\\passed_candidates\\cand_014\\full_backtest_report\\Full_BT_cand_014.htm",
+      "raw_activity_rows": 1702,
+      "completed_trade_count": 1325,
+      "trade_count_method": "mt5_official_summary"
+    },
+    {
+      "candidate": "cand_007",
+      "run_dir": "run_20260911_094409",
+      "weight": 1.0,
+      "candidate_dir": "C:\\Users\\HP\\Desktop\\MT5 runner\\optimization_runs\\trb_usdjpy\\run_20260911_094409\\passed_candidates\\cand_007",
+      "mt5_report": "C:\\Users\\HP\\Desktop\\MT5 runner\\optimization_runs\\trb_usdjpy\\run_20260911_094409\\passed_candidates\\cand_007\\full_backtest_report\\Full_BT_cand_007.htm",
+      "raw_activity_rows": 1001,
+      "completed_trade_count": 762,
+      "trade_count_method": "mt5_official_summary"
+    }
+  ]
+}

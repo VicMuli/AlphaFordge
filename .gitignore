@@ -1,0 +1,7 @@
+node_modules
+dist
+.env
+__pycache__
+.claude
+optimization_runs/**/run_*
+optimization_runs/trb_usdjpy/run_*
