@@ -144,10 +144,23 @@ def resolve_portfolio_dir() -> Path | None:
         return None
 
     p = Path(WORK_DIR) / "Quant_Portfolios" / f"{QUANT_NAME}_Quant_Portfolios" / PORTFOLIO_NAME
-    if not p.exists():
-        print(f"ERROR: Resolved portfolio folder does not exist: {p}")
-        return None
-    return p
+    if p.exists():
+        return p
+
+    # Fallback search across work directories
+    work_path = Path(WORK_DIR)
+    search_roots = [work_path, work_path.parent, Path(__file__).parent / "optimization_runs"]
+    for root in search_roots:
+        if root.exists():
+            try:
+                for match in root.rglob(PORTFOLIO_NAME):
+                    if match.is_dir() and ((match / "combined_trades.csv").exists() or (match / "portfolio_manifest.json").exists()):
+                        return match
+            except OSError:
+                pass
+
+    print(f"ERROR: Resolved portfolio folder does not exist: {p}")
+    return None
 
 
 def load_portfolio(portfolio_dir: Path):

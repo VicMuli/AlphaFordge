@@ -287,12 +287,130 @@ def get_candidates(work_dir: str, run_dir: str) -> list:
     return cands
 
 
-def get_portfolios(work_dir: str, quant_name: str) -> list:
+def is_valid_portfolio_dir(d: Path) -> bool:
+    """Verify that a directory is an actual quant portfolio folder (not a parent container)."""
+    if not d.is_dir():
+        return False
+    name_lower = d.name.lower()
+    # Exclude parent container directories
+    if name_lower in ("quant_portfolios", "portfolios") or name_lower.endswith("_quant_portfolios") or name_lower.endswith("_portfolios"):
+        return False
+    # Check for portfolio files
+    if (d / "portfolio_manifest.json").exists() or (d / "combined_trades.csv").exists():
+        return True
+    if any(f.is_file() and (f.name.endswith("_Report.docx") or f.name.startswith("chart_")) for f in d.iterdir()):
+        return True
+    pname = d.parent.name.lower()
+    if "quant_portfolios" in pname or pname == "quant_portfolios":
+        return True
+    if "portfolio_" in name_lower:
+        return True
+    return False
+
+
+def get_portfolios(work_dir: str, quant_name: str = "") -> list:
+    """Return sorted list of valid portfolio directory names found under work_dir."""
     base = _resolve_work_dir(work_dir)
-    p = base / "Quant_Portfolios" / f"{quant_name}_Quant_Portfolios"
-    if not p.exists():
+    if not base.exists():
         return []
-    return sorted([d.name for d in p.iterdir() if d.is_dir()], reverse=True)
+
+    found_dirs: list[Path] = []
+
+    # 1. Direct standard location: base / Quant_Portfolios / {quant_name}_Quant_Portfolios
+    if quant_name:
+        direct = base / "Quant_Portfolios" / f"{quant_name}_Quant_Portfolios"
+        if direct.exists() and direct.is_dir():
+            for d in direct.iterdir():
+                if is_valid_portfolio_dir(d):
+                    found_dirs.append(d)
+
+    # 2. Check 1-level subfolders (e.g. base / trb_usdjpy / Quant_Portfolios / ...)
+    try:
+        for sub in base.iterdir():
+            if sub.is_dir() and not sub.name.startswith("."):
+                qp = sub / "Quant_Portfolios"
+                if qp.exists() and qp.is_dir():
+                    if quant_name:
+                        qsub = qp / f"{quant_name}_Quant_Portfolios"
+                        if qsub.exists() and qsub.is_dir():
+                            for d in qsub.iterdir():
+                                if is_valid_portfolio_dir(d):
+                                    found_dirs.append(d)
+                    for sub2 in qp.iterdir():
+                        if is_valid_portfolio_dir(sub2):
+                            found_dirs.append(sub2)
+                        elif sub2.is_dir():
+                            for sub3 in sub2.iterdir():
+                                if is_valid_portfolio_dir(sub3):
+                                    found_dirs.append(sub3)
+    except OSError:
+        pass
+
+    # 3. Search via rglob for any Quant_Portfolios or portfolio_manifest.json under base
+    try:
+        for qp in base.rglob("Quant_Portfolios"):
+            if qp.is_dir():
+                for item in qp.iterdir():
+                    if is_valid_portfolio_dir(item):
+                        found_dirs.append(item)
+                    elif item.is_dir():
+                        for item2 in item.iterdir():
+                            if is_valid_portfolio_dir(item2):
+                                found_dirs.append(item2)
+    except OSError:
+        pass
+
+    try:
+        for manifest in base.rglob("portfolio_manifest.json"):
+            if is_valid_portfolio_dir(manifest.parent):
+                found_dirs.append(manifest.parent)
+        for trades in base.rglob("combined_trades.csv"):
+            if is_valid_portfolio_dir(trades.parent):
+                found_dirs.append(trades.parent)
+    except OSError:
+        pass
+
+    # Deduplicate by folder name
+    unique_names = {d.name: d for d in found_dirs}
+    return sorted(list(unique_names.keys()), reverse=True)
+
+
+def find_portfolio_path(work_dir: str, quant_name: str, port_name: str) -> Path | None:
+    """Find the exact directory Path for a given portfolio name."""
+    if not port_name or port_name == "(none)":
+        return None
+    base = _resolve_work_dir(work_dir)
+    if not base.exists():
+        return None
+
+    # 1. Direct standard location: base / Quant_Portfolios / {quant_name}_Quant_Portfolios / port_name
+    if quant_name:
+        cand = base / "Quant_Portfolios" / f"{quant_name}_Quant_Portfolios" / port_name
+        if cand.exists() and is_valid_portfolio_dir(cand):
+            return cand
+
+    # 2. Check in subfolders (e.g. base / trb_usdjpy / Quant_Portfolios / ...)
+    try:
+        for sub in base.iterdir():
+            if sub.is_dir() and not sub.name.startswith("."):
+                cand = sub / "Quant_Portfolios" / f"{quant_name}_Quant_Portfolios" / port_name
+                if cand.exists() and is_valid_portfolio_dir(cand):
+                    return cand
+                cand2 = sub / "Quant_Portfolios" / port_name
+                if cand2.exists() and is_valid_portfolio_dir(cand2):
+                    return cand2
+    except OSError:
+        pass
+
+    # 3. Search via rglob
+    try:
+        for found in base.rglob(port_name):
+            if is_valid_portfolio_dir(found):
+                return found
+    except OSError:
+        pass
+
+    return None
 
 
 def patch_script(script_path: Path, patches: dict):
@@ -581,9 +699,27 @@ class DashboardPanel(BasePanel):
                     pc = len([d for d in pdir.iterdir() if d.is_dir() and d.name.startswith("cand_")])
                 else:
                     pc = len([d for d in rp.iterdir() if d.is_dir() and d.name.startswith("cand_")])
-                self._recent_box.insert("end", f"  {r}   passed candidates: {pc}\n")
+                self._recent_box.insert("end", f"  📁 {r}   passed candidates: {pc}\n")
         if not runs:
             self._recent_box.insert("end", "  No optimization runs found.\n")
+
+        ports = get_portfolios(wdir, cfg.get("quant_name", "TRB"))
+        if ports:
+            self._recent_box.insert("end", "\n  📦 Built Quant Portfolios:\n")
+            for p_name in ports:
+                p_path = find_portfolio_path(wdir, cfg.get("quant_name", "TRB"), p_name)
+                c_info = ""
+                if p_path:
+                    mf = p_path / "portfolio_manifest.json"
+                    if mf.exists():
+                        try:
+                            with open(mf, "r") as mff:
+                                mdata = json.load(mff)
+                                c_count = len(mdata.get("candidates", []))
+                                c_info = f" ({c_count} candidates)"
+                        except Exception:
+                            pass
+                self._recent_box.insert("end", f"    • {p_name}{c_info}\n")
         self._recent_box.configure(state="disabled")
 
 
@@ -1096,10 +1232,14 @@ class PortfolioPanel(BasePanel):
         self._mc_port_cb  = ctk.CTkComboBox(mc_row, values=portfolios or ["(none)"],
                                              variable=self._mc_port_var, width=320,
                                              font=FB, fg_color=C["inp"], border_color=C["border"],
-                                             button_color=C["accent"])
+                                             button_color=C["accent"],
+                                             command=self._on_port_selected)
         self._mc_port_cb.pack(side="left")
         make_btn(mc_row, "⟳", lambda: self._refresh_portfolios(),
                  color=C["card"], hover=C["hover"], width=40).pack(side="left", padx=(8,0))
+        self._port_info_lbl = make_label(mc_row, "", font=FSM, color=C["accent"])
+        self._port_info_lbl.pack(side="left", padx=(16, 0))
+        self._update_port_info()
 
         # Log
         log_card = make_card(self)
@@ -1184,18 +1324,57 @@ class PortfolioPanel(BasePanel):
         portfolios = get_portfolios(cfg.get("work_dir",""), cfg.get("quant_name","TRB"))
         self._mc_port_cb.configure(values=portfolios or ["(none)"])
         if portfolios:
-            self._mc_port_var.set(portfolios[0])
+            if not self._mc_port_var.get() or self._mc_port_var.get() not in portfolios:
+                self._mc_port_var.set(portfolios[0])
+        else:
+            self._mc_port_var.set("(none)")
+        self._update_port_info()
+
+    def _on_port_selected(self, choice=None):
+        self._update_port_info()
+
+    def _update_port_info(self):
+        if not hasattr(self, "_port_info_lbl"):
+            return
+        port = self._mc_port_var.get()
+        if not port or port == "(none)":
+            self._port_info_lbl.configure(text="No built portfolios detected.", text_color=C["sub"])
+            return
+        cfg = self.cfg
+        p_path = find_portfolio_path(cfg.get("work_dir", ""), cfg.get("quant_name", "TRB"), port)
+        if not p_path or not p_path.exists():
+            self._port_info_lbl.configure(text="📍 Path not resolved", text_color=C["danger"])
+            return
+        info_items = [f"📍 {p_path.name}"]
+        mf = p_path / "portfolio_manifest.json"
+        if mf.exists():
+            try:
+                with open(mf, "r") as mff:
+                    mdata = json.load(mff)
+                    info_items.append(f"{len(mdata.get('candidates', []))} candidates")
+            except Exception:
+                pass
+        if (p_path / "combined_trades.csv").exists():
+            info_items.append("Trades: ✓")
+        docx = list(p_path.glob("*_Report.docx"))
+        if docx:
+            info_items.append("Report: ✓")
+        self._port_info_lbl.configure(text="  |  ".join(info_items), text_color=C["accent"])
 
     def _run_mc(self):
         port = self._mc_port_var.get()
         if not port or port == "(none)":
             messagebox.showwarning("Missing", "No portfolio selected.")
             return
-        cfg   = self.cfg
-        patch_script(SCRIPT_DIR / "run_portfolio_montecarlo.py", {
+        cfg = self.cfg
+        port_path = find_portfolio_path(cfg.get("work_dir", ""), cfg.get("quant_name", "TRB"), port)
+        patches = {
             "PORTFOLIO_NAME": port,
-            "QUANT_NAME":     cfg.get("quant_name","TRB"),
-        })
+            "QUANT_NAME":     cfg.get("quant_name", "TRB"),
+        }
+        if port_path and port_path.exists():
+            patches["PORTFOLIO_DIR"] = str(port_path)
+        patch_script(SCRIPT_DIR / "run_portfolio_montecarlo.py", patches)
         self.log_clear(self._log)
         self.run_script("run_portfolio_montecarlo.py", self._log)
 
@@ -1203,12 +1382,20 @@ class PortfolioPanel(BasePanel):
         cfg  = self.cfg
         port = self._mc_port_var.get()
         if port and port != "(none)":
-            d = (Path(cfg.get("work_dir","")) / "Quant_Portfolios"
-                 / f"{cfg.get('quant_name','TRB')}_Quant_Portfolios" / port)
-            if d.exists():
-                os.startfile(str(d))
+            p = find_portfolio_path(cfg.get("work_dir", ""), cfg.get("quant_name", "TRB"), port)
+            if p and p.exists():
+                if sys.platform == "win32":
+                    os.startfile(str(p))
+                else:
+                    cmd = ["xdg-open", str(p)] if shutil.which("xdg-open") else ["open", str(p)]
+                    subprocess.Popen(cmd)
                 return
-        os.startfile(cfg.get("work_dir", str(SCRIPT_DIR)))
+        wdir = _resolve_work_dir(cfg.get("work_dir", ""))
+        if sys.platform == "win32":
+            os.startfile(str(wdir))
+        else:
+            cmd = ["xdg-open", str(wdir)] if shutil.which("xdg-open") else ["open", str(wdir)]
+            subprocess.Popen(cmd)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

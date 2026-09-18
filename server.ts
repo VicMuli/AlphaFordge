@@ -211,14 +211,22 @@ async function startServer() {
 
       const portfolios: string[] = [];
       async function scanPortfolios(dir: string, depth = 0) {
-        if (depth > 5 || !existsSync(dir)) return;
+        if (depth > 6 || !existsSync(dir)) return;
         try {
           const entries = await fs.readdir(dir, { withFileTypes: true });
           for (const e of entries) {
             if (e.isDirectory()) {
               const full = path.join(dir, e.name);
-              if (e.name.toLowerCase().includes('portfolio_') || e.name.startsWith(quantName)) {
-                if (!portfolios.includes(e.name)) portfolios.push(e.name);
+              const lower = e.name.toLowerCase();
+              const isContainer = lower === 'quant_portfolios' || lower === 'portfolios' ||
+                                  lower.endsWith('_quant_portfolios') || lower.endsWith('_portfolios');
+              if (!isContainer) {
+                const hasManifest = existsSync(path.join(full, 'portfolio_manifest.json'));
+                const hasTrades = existsSync(path.join(full, 'combined_trades.csv'));
+                const isPortfolioPattern = lower.includes('portfolio_');
+                if (hasManifest || hasTrades || isPortfolioPattern) {
+                  if (!portfolios.includes(e.name)) portfolios.push(e.name);
+                }
               }
               await scanPortfolios(full, depth + 1);
             }
