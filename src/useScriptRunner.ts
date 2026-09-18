@@ -5,12 +5,60 @@ export function useScriptRunner() {
   const [isRunning, setIsRunning] = useState(false);
   const eventSourceRef = useRef<EventSource | null>(null);
 
-  const runScript = (scriptName: string) => {
+  const runScript = async (
+    scriptName: string,
+    options?: {
+      envOverrides?: Record<string, string>;
+      patch?: {
+        patches?: Record<string, any>;
+        candidates?: any[];
+      };
+      onStart?: () => void;
+    }
+  ) => {
     if (isRunning) return;
     setIsRunning(true);
-    setLogs([`▶ Connecting to Python runner for ${scriptName}...`]);
+    if (options?.onStart) options.onStart();
 
-    const es = new EventSource(`/api/run-stream?script=${encodeURIComponent(scriptName)}`);
+    // If script needs pre-patching (like run_wf_pipeline, run_full_backtest, build_quant_portfolio)
+    if (options?.patch) {
+      try {
+        setLogs(prev => [...prev, `[PREPARE] Patching parameters into ${scriptName}...`]);
+        const res = await fetch('/api/patch-script', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            script: scriptName,
+            patches: options.patch.patches,
+            candidates: options.patch.candidates,
+          }),
+        });
+        if (!res.ok) {
+          const err = await res.json();
+          setLogs(prev => [...prev, `[ERROR] Failed to patch script: ${err.error || 'Unknown error'}`]);
+          setIsRunning(false);
+          return;
+        }
+      } catch (e: any) {
+        setLogs(prev => [...prev, `[ERROR] Patching network error: ${e.message}`]);
+        setIsRunning(false);
+        return;
+      }
+    }
+
+    setLogs(prev => [...prev, `▶ Launching Python execution for ${scriptName}...`]);
+
+    // Build URL with query params
+    const query = new URLSearchParams({ script: scriptName });
+    if (options?.envOverrides) {
+      for (const [k, v] of Object.entries(options.envOverrides)) {
+        if (v !== undefined && v !== null && v !== '') {
+          query.append(k, String(v));
+        }
+      }
+    }
+
+    const es = new EventSource(`/api/run-stream?${query.toString()}`);
     eventSourceRef.current = es;
 
     es.onmessage = (event) => {
@@ -61,5 +109,5 @@ export function useScriptRunner() {
     };
   }, []);
 
-  return { logs, isRunning, runScript, stopScript, clearLogs };
+  return { logs, isRunning, runScript, stopScript, clearLogs, setLogs };
 }

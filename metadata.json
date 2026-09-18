@@ -1,0 +1,6 @@
+{
+  "name": "AlphaForge - MT5 Quant Optimizer",
+  "description": "AlphaForge v1.0 MT5 Quant Optimizer & Portfolio Builder web preview mirroring app.py",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
