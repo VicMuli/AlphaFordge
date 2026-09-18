@@ -141,14 +141,37 @@ async function startServer() {
 
       const runs: { name: string; path: string; passedCandidates: number; candidates: string[] }[] = [];
       
+      const excludedRunNames = [
+        'run_optimization', 'run_full_backtest', 'run_research_backtest',
+        'run_portfolio_montecarlo', 'run_wf_pipeline', 'run_can_monte_carlo',
+        'run_post_optimization', 'run_opt', 'run_tester', 'run_temp', 'run_archive'
+      ];
+
+      function isValidOptRun(name: string, dirPath: string): boolean {
+        const lower = name.toLowerCase();
+        if (!lower.startsWith('run_')) return false;
+        if (excludedRunNames.includes(lower)) return false;
+        if (/^run_\d{8}_\d{6}$/.test(name) || /^run_\d+$/.test(name)) return true;
+        if (existsSync(path.join(dirPath, 'passed_candidates'))) return true;
+        if (existsSync(path.join(dirPath, 'opt_all_passes.csv'))) return true;
+        if (existsSync(path.join(dirPath, 'opt'))) return true;
+        if (existsSync(path.join(dirPath, 'Certified_Candidates.docx'))) return true;
+        try {
+          const files = readdirSync(dirPath);
+          if (files.some(f => f.startsWith('cand_') || f.startsWith('mc_passed_'))) return true;
+        } catch {}
+        return false;
+      }
+
       async function scanRuns(dir: string, depth = 0) {
         if (depth > 4 || !existsSync(dir)) return;
         try {
           const entries = await fs.readdir(dir, { withFileTypes: true });
           for (const entry of entries) {
             if (entry.isDirectory()) {
+              if (entry.name === 'Quant_Portfolios' || entry.name.startsWith('.')) continue;
               const fullPath = path.join(dir, entry.name);
-              if (entry.name.startsWith('run_')) {
+              if (isValidOptRun(entry.name, fullPath)) {
                 let passedCount = 0;
                 const candidates: string[] = [];
                 const passedDir = path.join(fullPath, 'passed_candidates');

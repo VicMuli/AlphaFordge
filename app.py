@@ -124,29 +124,146 @@ def save_config(cfg: dict) -> bool:
         return False
 
 
+def is_valid_optimization_run(d: Path) -> bool:
+    """Verify that a directory is an actual optimization run folder."""
+    if not d.is_dir():
+        return False
+    name = d.name
+    name_lower = name.lower()
+
+    # Must start with run_
+    if not name_lower.startswith("run_"):
+        return False
+
+    # Exclude non-run script output folders, tools, or scratch dirs
+    excluded_names = {
+        "run_optimization", "run_full_backtest", "run_research_backtest",
+        "run_portfolio_montecarlo", "run_wf_pipeline", "run_can_monte_carlo",
+        "run_post_optimization", "run_opt", "run_tester", "run_temp", "run_archive"
+    }
+    if name_lower in excluded_names:
+        return False
+
+    # Must NOT be a nested subfolder of another run, candidate, or portfolio
+    for parent in d.parents:
+        pname = parent.name.lower()
+        if pname.startswith("run_") or pname.startswith("cand_") or pname == "passed_candidates":
+            return False
+        if "quant_portfolios" in pname or "researched_strategies" in pname:
+            return False
+
+    # Positive confirmation:
+    # 1. Standard timestamp format run_YYYYMMDD_HHMMSS or run_\d+
+    if re.match(r"^run_\d{8}_\d{6}$", name) or re.match(r"^run_\d+$", name):
+        return True
+
+    # 2. Contains passed_candidates folder or direct cand_XXX candidate folders
+    if (d / "passed_candidates").is_dir():
+        return True
+    try:
+        if any(sub.is_dir() and sub.name.startswith("cand_") for sub in d.iterdir()):
+            return True
+    except OSError:
+        pass
+
+    # 3. Contains optimization output markers (opt_all_passes.csv, opt dir, docx report)
+    if (d / "opt_all_passes.csv").exists() or (d / "opt").is_dir() or (d / "Certified_Candidates.docx").exists():
+        return True
+    try:
+        if any(f.is_file() and f.name.startswith("mc_passed_") for f in d.iterdir()):
+            return True
+    except OSError:
+        pass
+
+    return False
+
+
 def get_run_dirs(work_dir: str) -> list:
-    p = Path(work_dir)
+    """Return sorted list of valid optimization run directory names."""
+    p = Path(work_dir) if work_dir else Path(".")
     if not p.exists():
+        fallback = SCRIPT_DIR / "optimization_runs"
+        if fallback.exists():
+            p = fallback
+        else:
+            return []
+
+    valid_runs = []
+
+    # 1. Direct children of work_dir
+    try:
+        for d in p.iterdir():
+            if is_valid_optimization_run(d):
+                valid_runs.append(d)
+            elif d.is_dir() and not d.name.startswith(".") and d.name != "Quant_Portfolios":
+                # Check one level deeper (e.g. work_dir/<symbol_ea>/run_*)
+                try:
+                    for sub in d.iterdir():
+                        if is_valid_optimization_run(sub):
+                            valid_runs.append(sub)
+                except OSError:
+                    pass
+    except OSError:
         return []
-    dirs = sorted(list(set(d.name for d in p.rglob("run_*") if d.is_dir())), reverse=True)
-    return dirs
+
+    # Deduplicate and sort descending (latest first)
+    unique_names = sorted(list({d.name for d in valid_runs}), reverse=True)
+    return unique_names
+
+
+def find_run_path(work_dir: str, run_dir: str) -> Path | None:
+    """Find the Path for a given run directory name."""
+    if not run_dir:
+        return None
+    p = Path(work_dir) if work_dir else Path(".")
+    if not p.exists():
+        fallback = SCRIPT_DIR / "optimization_runs"
+        if fallback.exists():
+            p = fallback
+        else:
+            return None
+
+    # Direct match in work_dir
+    cand = p / run_dir
+    if cand.exists() and cand.is_dir() and is_valid_optimization_run(cand):
+        return cand
+
+    # Match in 1 level subfolders (e.g. work_dir/trb_usdjpy/run_...)
+    try:
+        for sub in p.iterdir():
+            if sub.is_dir() and sub.name != "Quant_Portfolios":
+                nested = sub / run_dir
+                if nested.exists() and nested.is_dir() and is_valid_optimization_run(nested):
+                    return nested
+    except OSError:
+        pass
+
+    # Fallback to rglob if placed deeper
+    try:
+        for found in p.rglob(run_dir):
+            if is_valid_optimization_run(found):
+                return found
+    except OSError:
+        pass
+
+    # Generic directory fallback if name matches
+    try:
+        fallback_found = [d for d in p.rglob(run_dir) if d.is_dir()]
+        return fallback_found[0] if fallback_found else None
+    except OSError:
+        return None
 
 
 def get_candidates(work_dir: str, run_dir: str) -> list:
-    p = Path(work_dir)
-    if not p.exists():
+    rp = find_run_path(work_dir, run_dir)
+    if not rp or not rp.exists():
         return []
-    found = list(p.rglob(run_dir))
-    if not found:
-        return []
-    p = found[0]
-    # Check passed_candidates/ first, then direct cand_* folders
-    pc = p / "passed_candidates"
+    pc = rp / "passed_candidates"
     cands = []
-    if pc.exists():
+    if pc.exists() and pc.is_dir():
         cands = sorted([d.name for d in pc.iterdir() if d.is_dir() and d.name.startswith("cand_")])
     if not cands:
-        cands = sorted([d.name for d in p.iterdir() if d.is_dir() and d.name.startswith("cand_")])
+        cands = sorted([d.name for d in rp.iterdir() if d.is_dir() and d.name.startswith("cand_")])
     return cands
 
 
@@ -417,11 +534,13 @@ class DashboardPanel(BasePanel):
         runs   = get_run_dirs(wdir)
         passed = 0
         for r in runs:
-            found = list(Path(wdir).rglob(r))
-            if found:
-                pdir = found[0] / "passed_candidates"
+            rp = find_run_path(wdir, r)
+            if rp:
+                pdir = rp / "passed_candidates"
                 if pdir.exists():
-                    passed += len(list(pdir.iterdir()))
+                    passed += len([d for d in pdir.iterdir() if d.is_dir() and d.name.startswith("cand_")])
+                else:
+                    passed += len([d for d in rp.iterdir() if d.is_dir() and d.name.startswith("cand_")])
                     
         portfolios = len(get_portfolios(wdir, cfg.get("quant_name", "TRB")))
         research   = len(list(Path(rdir).iterdir())) if Path(rdir).exists() else 0
@@ -434,14 +553,16 @@ class DashboardPanel(BasePanel):
         self._recent_box.configure(state="normal")
         self._recent_box.delete("1.0", "end")
         for r in runs[:12]:
-            found = list(Path(wdir).rglob(r))
-            if found:
-                rp   = found[0]
+            rp = find_run_path(wdir, r)
+            if rp:
                 pdir = rp / "passed_candidates"
-                pc   = len(list(pdir.iterdir())) if pdir.exists() else 0
+                if pdir.exists():
+                    pc = len([d for d in pdir.iterdir() if d.is_dir() and d.name.startswith("cand_")])
+                else:
+                    pc = len([d for d in rp.iterdir() if d.is_dir() and d.name.startswith("cand_")])
                 self._recent_box.insert("end", f"  {r}   passed candidates: {pc}\n")
         if not runs:
-            self._recent_box.insert("end", "  No runs found.\n")
+            self._recent_box.insert("end", "  No optimization runs found.\n")
         self._recent_box.configure(state="disabled")
 
 
@@ -726,10 +847,9 @@ class WalkForwardPanel(BasePanel):
         cand   = self._cand_var.get()
         if not run or not cand:
             return None
-        found = list(Path(wdir).rglob(run))
-        if not found:
+        run_path = find_run_path(wdir, run)
+        if not run_path:
             return None
-        run_path = found[0]
         # Try passed_candidates first
         pc = run_path / "passed_candidates" / cand
         if pc.exists():
@@ -881,11 +1001,13 @@ class FullBacktestPanel(BasePanel):
         run  = self._run_var.get()
         cand = self._cand_var.get()
         if run and cand:
-            found = list(Path(cfg.get("work_dir","")).rglob(run))
-            if found:
-                d = found[0] / cand / "full_backtest_report"
+            run_path = find_run_path(cfg.get("work_dir",""), run)
+            if run_path:
+                d = run_path / "passed_candidates" / cand / "full_backtest"
                 if not d.exists():
-                    d = found[0] / cand
+                    d = run_path / cand / "full_backtest_report"
+                if not d.exists():
+                    d = run_path / cand
                 if d.exists():
                     os.startfile(str(d))
                     return
