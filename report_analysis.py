@@ -10,7 +10,7 @@ this report's HTML layout confuses it) and produces:
 Usage:
     from report_analysis import analyze
 
-    result = analyze(r"C:\Users\HP\Desktop\MT5 runner\xaub_run_003\auto_report.htm")
+    result = analyze(r"C:\Users\HP\Desktop\AlphaFordge\xaub_run_003\auto_report.htm")
     print_summary(result)
 """
 

@@ -43,7 +43,7 @@ Usage:
 
     results = run_walk_forward(
         run_single_backtest, analyze, base_kwargs, windows,
-        base_work_dir=r"C:\Users\HP\Desktop\MT5 runner\walk_forward_xaub1",
+        base_work_dir=r"C:\Users\HP\Desktop\AlphaFordge\walk_forward_xaub1",
     )
     print_walk_forward_summary(results)
 """

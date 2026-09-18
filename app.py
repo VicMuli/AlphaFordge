@@ -106,13 +106,32 @@ NAV_ITEMS = [
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 def load_config():
+    cfg = dict(DEFAULT_CONFIG)
     if CONFIG_FILE.exists():
         try:
             with open(CONFIG_FILE, "r") as f:
-                return {**DEFAULT_CONFIG, **json.load(f)}
+                loaded = json.load(f)
+                cfg.update(loaded)
         except Exception:
             pass
-    return dict(DEFAULT_CONFIG)
+
+    # Ensure paths always resolve to the active project folder (AlphaFordge),
+    # replacing any obsolete references to "MT5 runner"
+    migrated = False
+    for k, subfolder in [
+        ("work_dir", "optimization_runs"),
+        ("research_dir", "researched_strategies"),
+        ("strategies_dir", "strategies"),
+    ]:
+        curr_val = str(cfg.get(k, ""))
+        if "MT5 runner" in curr_val or not curr_val:
+            cfg[k] = str(SCRIPT_DIR / subfolder)
+            migrated = True
+
+    if migrated:
+        save_config(cfg)
+
+    return cfg
 
 
 def save_config(cfg: dict) -> bool:
@@ -178,15 +197,20 @@ def is_valid_optimization_run(d: Path) -> bool:
     return False
 
 
+def _resolve_work_dir(work_dir: str) -> Path:
+    if not work_dir or "MT5 runner" in str(work_dir):
+        return SCRIPT_DIR / "optimization_runs"
+    p = Path(work_dir)
+    if not p.exists() and (SCRIPT_DIR / "optimization_runs").exists():
+        return SCRIPT_DIR / "optimization_runs"
+    return p
+
+
 def get_run_dirs(work_dir: str) -> list:
     """Return sorted list of valid optimization run directory names."""
-    p = Path(work_dir) if work_dir else Path(".")
+    p = _resolve_work_dir(work_dir)
     if not p.exists():
-        fallback = SCRIPT_DIR / "optimization_runs"
-        if fallback.exists():
-            p = fallback
-        else:
-            return []
+        return []
 
     valid_runs = []
 
@@ -215,13 +239,9 @@ def find_run_path(work_dir: str, run_dir: str) -> Path | None:
     """Find the Path for a given run directory name."""
     if not run_dir:
         return None
-    p = Path(work_dir) if work_dir else Path(".")
+    p = _resolve_work_dir(work_dir)
     if not p.exists():
-        fallback = SCRIPT_DIR / "optimization_runs"
-        if fallback.exists():
-            p = fallback
-        else:
-            return None
+        return None
 
     # Direct match in work_dir
     cand = p / run_dir
@@ -268,7 +288,8 @@ def get_candidates(work_dir: str, run_dir: str) -> list:
 
 
 def get_portfolios(work_dir: str, quant_name: str) -> list:
-    p = Path(work_dir) / "Quant_Portfolios" / f"{quant_name}_Quant_Portfolios"
+    base = _resolve_work_dir(work_dir)
+    p = base / "Quant_Portfolios" / f"{quant_name}_Quant_Portfolios"
     if not p.exists():
         return []
     return sorted([d.name for d in p.iterdir() if d.is_dir()], reverse=True)

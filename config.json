@@ -29,8 +29,8 @@
   "mc_daily_dd": "5.0",
   "mc_phase1_target": "8.0",
   "mc_phase2_target": "5.0",
-  "work_dir": "C:\\Users\\HP\\Desktop\\MT5 runner\\optimization_runs",
+  "work_dir": "C:\\Users\\HP\\Desktop\\AlphaFordge\\optimization_runs",
   "quant_name": "TRB",
-  "research_dir": "C:\\Users\\HP\\Desktop\\MT5 runner\\researched_strategies",
-  "strategies_dir": "C:\\Users\\HP\\Desktop\\MT5 runner\\strategies"
+  "research_dir": "C:\\Users\\HP\\Desktop\\AlphaFordge\\researched_strategies",
+  "strategies_dir": "C:\\Users\\HP\\Desktop\\AlphaFordge\\strategies"
 }

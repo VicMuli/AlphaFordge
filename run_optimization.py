@@ -11,6 +11,7 @@ Flow
 """
 
 import datetime
+import json
 import time
 from pathlib import Path
 
@@ -433,7 +434,19 @@ HOLDOUT_MONTHS = _months_between(HOLDOUT_FROM, HOLDOUT_TO)
 
 # Dynamic Work Directory based on EA + Symbol, so ORB and TRB runs (and
 # different symbols within each) never collide or overwrite each other.
-WORK_DIR = rf"C:\Users\HP\Desktop\MT5 runner\optimization_runs\{ACTIVE_EA.lower()}_{SYMBOL_KEY.lower()}"
+_SCRIPT_DIR = Path(__file__).resolve().parent
+_CONFIG_FILE = _SCRIPT_DIR / "config.json"
+_BASE_WORK_DIR = _SCRIPT_DIR / "optimization_runs"
+if _CONFIG_FILE.exists():
+    try:
+        with open(_CONFIG_FILE, "r") as _f:
+            _cfg = json.load(_f)
+            if _cfg.get("work_dir") and "MT5 runner" not in _cfg.get("work_dir"):
+                _BASE_WORK_DIR = Path(_cfg["work_dir"])
+    except Exception:
+        pass
+
+WORK_DIR = str(_BASE_WORK_DIR / f"{ACTIVE_EA.lower()}_{SYMBOL_KEY.lower()}")
 
 FIXED_PARAMS, OPT_RANGES = _ea_cfg["build"](SYMBOL_KEY, PIP_SIZE)
 
