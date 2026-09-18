@@ -1,17 +1,42 @@
 import React, { useState } from 'react';
-import { Card, SectionHeader, Button, Input } from './ui';
-import { Save, AlertCircle } from 'lucide-react';
+import { Card, SectionHeader, Button } from './ui';
+import { Save, CheckCircle2 } from 'lucide-react';
 
 export default function Settings({ config, setConfig }: { config: any, setConfig: any }) {
   const [localConfig, setLocalConfig] = useState(config);
+  const [isSaved, setIsSaved] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+
+  // Sync if parent config updates
+  React.useEffect(() => {
+    setLocalConfig(config);
+  }, [config]);
 
   const handleChange = (k: string, v: string) => {
     setLocalConfig({ ...localConfig, [k]: v });
+    setIsSaved(false);
   };
 
-  const handleSave = () => {
-    setConfig(localConfig);
-    alert('Settings saved (mock)!');
+  const handleSave = async () => {
+    setIsSaving(true);
+    try {
+      const res = await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(localConfig)
+      });
+      if (res.ok) {
+        setConfig(localConfig);
+        setIsSaved(true);
+        setTimeout(() => setIsSaved(false), 4000);
+      } else {
+        alert('Failed to save settings');
+      }
+    } catch (e: any) {
+      alert(`Error saving settings: ${e.message}`);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const SETTINGS_GROUPS = [
@@ -69,9 +94,15 @@ export default function Settings({ config, setConfig }: { config: any, setConfig
     <div className="flex flex-col h-full overflow-y-auto pb-12">
       <SectionHeader title="🔧 Settings & Configuration" subtitle="Global parameters for AlphaForge pipelines" />
       
-      <div className="flex justify-end mb-6 sticky top-0 z-10 bg-[#111827] py-4 border-b border-[#2d3748]">
-        <Button onClick={handleSave} className="shadow-lg shadow-black/50">
-          <Save size={18} /> Save All Settings
+      <div className="flex justify-end items-center gap-4 mb-6 sticky top-0 z-10 bg-[#111827] py-4 border-b border-[#2d3748]">
+        {isSaved && (
+          <div className="flex items-center gap-2 text-emerald-400 text-sm font-medium">
+            <CheckCircle2 size={18} />
+            <span>Saved to config.json</span>
+          </div>
+        )}
+        <Button onClick={handleSave} disabled={isSaving} className="shadow-lg shadow-black/50">
+          <Save size={18} /> {isSaving ? 'Saving...' : 'Save All Settings'}
         </Button>
       </div>
 

@@ -1,15 +1,12 @@
-import React, { useState } from 'react';
 import { Card, SectionHeader, Button, Input, LogViewer } from './ui';
-import { Plus, RefreshCw, FolderOpen, Play } from 'lucide-react';
+import { Plus, RefreshCw, FolderOpen, Square, Trash2 } from 'lucide-react';
+import { useScriptRunner } from '../useScriptRunner';
 
 export default function Strategies({ config }: { config: any }) {
-  const [logs, setLogs] = useState<string[]>([]);
+  const { logs, isRunning, runScript, stopScript, clearLogs } = useScriptRunner();
   
-  const handleBuild = async () => {
-    setLogs(prev => [...prev, `▶  ${new Date().toLocaleTimeString()}  strategy_builder.py\n   CWD: /workspace\n────────────────────────────────────────────────────────────`]);
-    setTimeout(() => {
-      setLogs(prev => [...prev, `✔  Finished (code 0) ${new Date().toLocaleTimeString()}\n`]);
-    }, 1000);
+  const handleBuild = () => {
+    runScript('strategy_builder.py');
   };
 
   return (
@@ -25,8 +22,17 @@ export default function Strategies({ config }: { config: any }) {
               <Input label="Base Symbol" defaultValue={config.symbol} />
               <Input label="Timeframe" defaultValue={config.period} />
               <div className="flex gap-4 pt-4">
-                <Button onClick={handleBuild}>
-                  <Plus size={18} /> Create Strategy Structure
+                {isRunning ? (
+                  <Button onClick={stopScript} variant="blue" className="bg-red-600 hover:bg-red-700">
+                    <Square size={18} /> Stop Execution
+                  </Button>
+                ) : (
+                  <Button onClick={handleBuild}>
+                    <Plus size={18} /> Create Strategy Structure
+                  </Button>
+                )}
+                <Button variant="secondary" onClick={clearLogs}>
+                  <Trash2 size={18} /> Clear Log
                 </Button>
               </div>
             </div>
@@ -49,7 +55,7 @@ export default function Strategies({ config }: { config: any }) {
         </div>
       </Card>
 
-      <LogViewer logs={logs} title="Strategy Builder Output" />
+      <LogViewer logs={logs} title={`Strategy Builder Output ${isRunning ? '(Executing...)' : ''}`} />
     </div>
   );
 }

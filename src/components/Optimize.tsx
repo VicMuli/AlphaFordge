@@ -1,23 +1,12 @@
-import React, { useState } from 'react';
 import { Card, SectionHeader, Button, LogViewer } from './ui';
-import { Play, Settings as SettingsIcon, FolderOpen } from 'lucide-react';
+import { Play, Settings as SettingsIcon, FolderOpen, Square, Trash2 } from 'lucide-react';
+import { useScriptRunner } from '../useScriptRunner';
 
 export default function Optimize({ config }: { config: any }) {
-  const [logs, setLogs] = useState<string[]>([]);
+  const { logs, isRunning, runScript, stopScript, clearLogs } = useScriptRunner();
   
-  const handleRun = async () => {
-    setLogs(prev => [...prev, `▶  ${new Date().toLocaleTimeString()}  run_optimization.py\n   CWD: /workspace\n────────────────────────────────────────────────────────────`]);
-    try {
-      const res = await fetch('/api/run', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ script: 'run_optimization.py' })
-      });
-      const data = await res.json();
-      setLogs(prev => [...prev, `Starting Optimization Pipeline...`, `Running Train phase...`, `✔  Finished (code 0) ${new Date().toLocaleTimeString()}\n`]);
-    } catch (e) {
-      setLogs(prev => [...prev, `[ERROR] Failed to run optimization\n`]);
-    }
+  const handleRun = () => {
+    runScript('run_optimization.py');
   };
 
   return (
@@ -48,7 +37,7 @@ export default function Optimize({ config }: { config: any }) {
       <Card className="mb-6">
         <div className="flex justify-between max-w-3xl">
           {[
-            { phase: "Train Optimize", icon: "🔵" },
+            { phase: "Train Optimize", icon: isRunning ? "⏳" : "🔵" },
             { phase: "Val / Holdout", icon: "🔵" },
             { phase: "Monte Carlo", icon: "🔵" },
             { phase: "Passed →", icon: "🔵" }
@@ -62,18 +51,24 @@ export default function Optimize({ config }: { config: any }) {
       </Card>
 
       <div className="flex gap-4 mb-6">
-        <Button onClick={handleRun}>
-          <Play size={18} /> Run Full Pipeline
-        </Button>
-        <Button variant="secondary">
-          <SettingsIcon size={18} /> Configure in Settings
+        {isRunning ? (
+          <Button onClick={stopScript} variant="blue" className="bg-red-600 hover:bg-red-700">
+            <Square size={18} /> Stop Execution
+          </Button>
+        ) : (
+          <Button onClick={handleRun}>
+            <Play size={18} /> Run Full Pipeline
+          </Button>
+        )}
+        <Button variant="secondary" onClick={clearLogs}>
+          <Trash2 size={18} /> Clear Log
         </Button>
         <Button variant="secondary">
           <FolderOpen size={18} /> Open Runs Folder
         </Button>
       </div>
 
-      <LogViewer logs={logs} title="Live Pipeline Output" />
+      <LogViewer logs={logs} title={`Live Pipeline Output ${isRunning ? '(Executing...)' : ''}`} />
     </div>
   );
 }

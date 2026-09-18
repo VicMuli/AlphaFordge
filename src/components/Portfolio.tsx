@@ -1,22 +1,16 @@
-import React, { useState } from 'react';
 import { Card, SectionHeader, Button, Input, LogViewer } from './ui';
-import { Package, Dices, FolderOpen, RefreshCw, Plus } from 'lucide-react';
+import { Package, Dices, FolderOpen, RefreshCw, Plus, Square, Trash2 } from 'lucide-react';
+import { useScriptRunner } from '../useScriptRunner';
 
 export default function Portfolio({ config }: { config: any }) {
-  const [logs, setLogs] = useState<string[]>([]);
+  const { logs, isRunning, runScript, stopScript, clearLogs } = useScriptRunner();
   
-  const handleBuild = async () => {
-    setLogs(prev => [...prev, `▶  ${new Date().toLocaleTimeString()}  build_quant_portfolio.py\n   CWD: /workspace\n────────────────────────────────────────────────────────────`]);
-    setTimeout(() => {
-      setLogs(prev => [...prev, `✔  Finished (code 0) ${new Date().toLocaleTimeString()}\n`]);
-    }, 1000);
+  const handleBuild = () => {
+    runScript('build_quant_portfolio.py');
   };
 
-  const handleRunMC = async () => {
-    setLogs(prev => [...prev, `▶  ${new Date().toLocaleTimeString()}  run_portfolio_montecarlo.py\n   CWD: /workspace\n────────────────────────────────────────────────────────────`]);
-    setTimeout(() => {
-      setLogs(prev => [...prev, `✔  Finished (code 0) ${new Date().toLocaleTimeString()}\n`]);
-    }, 1500);
+  const handleRunMC = () => {
+    runScript('run_portfolio_montecarlo.py');
   };
 
   return (
@@ -43,11 +37,22 @@ export default function Portfolio({ config }: { config: any }) {
         </div>
 
         <div className="flex gap-4 mb-8">
-          <Button onClick={handleBuild}>
-            <Package size={18} /> Build Portfolio
-          </Button>
-          <Button variant="blue" onClick={handleRunMC}>
-            <Dices size={18} /> Run Portfolio MC
+          {isRunning ? (
+            <Button onClick={stopScript} variant="blue" className="bg-red-600 hover:bg-red-700">
+              <Square size={18} /> Stop Execution
+            </Button>
+          ) : (
+            <>
+              <Button onClick={handleBuild}>
+                <Package size={18} /> Build Portfolio
+              </Button>
+              <Button variant="blue" onClick={handleRunMC}>
+                <Dices size={18} /> Run Portfolio MC
+              </Button>
+            </>
+          )}
+          <Button variant="secondary" onClick={clearLogs}>
+            <Trash2 size={18} /> Clear Log
           </Button>
           <Button variant="secondary">
             <FolderOpen size={18} /> Open Portfolio Folder
@@ -63,7 +68,7 @@ export default function Portfolio({ config }: { config: any }) {
         </div>
       </Card>
 
-      <LogViewer logs={logs} title="Portfolio Output" />
+      <LogViewer logs={logs} title={`Portfolio Output ${isRunning ? '(Executing...)' : ''}`} />
     </div>
   );
 }

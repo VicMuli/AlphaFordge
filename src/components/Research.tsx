@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Card, SectionHeader, Button, Input, LogViewer } from './ui';
-import { Play, FolderOpen, Search } from 'lucide-react';
+import { Play, FolderOpen, Search, Square, Trash2 } from 'lucide-react';
+import { useScriptRunner } from '../useScriptRunner';
 
 export default function Research({ config }: { config: any }) {
-  const [logs, setLogs] = useState<string[]>([]);
+  const { logs, isRunning, runScript, stopScript, clearLogs } = useScriptRunner();
   const [params, setParams] = useState({
     name: 'My_Strategy_v1',
     expert: config.expert || '',
@@ -15,19 +16,8 @@ export default function Research({ config }: { config: any }) {
     deposit: config.deposit || '2500'
   });
 
-  const handleRun = async () => {
-    setLogs(prev => [...prev, `▶  ${new Date().toLocaleTimeString()}  run_research_backtest.py\n   CWD: /workspace\n────────────────────────────────────────────────────────────`]);
-    try {
-      const res = await fetch('/api/run', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ script: 'run_research_backtest.py', params })
-      });
-      const data = await res.json();
-      setLogs(prev => [...prev, `✔  Finished (code 0) ${new Date().toLocaleTimeString()}\n`]);
-    } catch (e) {
-      setLogs(prev => [...prev, `[ERROR] Failed to run backtest\n`]);
-    }
+  const handleRun = () => {
+    runScript('run_research_backtest.py');
   };
 
   return (
@@ -50,8 +40,17 @@ export default function Research({ config }: { config: any }) {
         </div>
 
         <div className="flex gap-4 mt-8">
-          <Button onClick={handleRun}>
-            <Play size={18} /> Run Research Backtest
+          {isRunning ? (
+            <Button onClick={stopScript} variant="blue" className="bg-red-600 hover:bg-red-700">
+              <Square size={18} /> Stop Execution
+            </Button>
+          ) : (
+            <Button onClick={handleRun}>
+              <Play size={18} /> Run Research Backtest
+            </Button>
+          )}
+          <Button variant="secondary" onClick={clearLogs}>
+            <Trash2 size={18} /> Clear Log
           </Button>
           <Button variant="secondary">
             <FolderOpen size={18} /> Open Output Folder
@@ -59,7 +58,7 @@ export default function Research({ config }: { config: any }) {
         </div>
       </Card>
 
-      <LogViewer logs={logs} />
+      <LogViewer logs={logs} title={`Research Backtest Output ${isRunning ? '(Executing...)' : ''}`} />
     </div>
   );
 }

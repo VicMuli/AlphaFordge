@@ -1,22 +1,12 @@
-import React, { useState } from 'react';
 import { Card, SectionHeader, Button, Input, LogViewer } from './ui';
-import { Play, FolderOpen, RefreshCw } from 'lucide-react';
+import { Play, FolderOpen, RefreshCw, Square, Trash2 } from 'lucide-react';
+import { useScriptRunner } from '../useScriptRunner';
 
 export default function FullBacktest({ config }: { config: any }) {
-  const [logs, setLogs] = useState<string[]>([]);
+  const { logs, isRunning, runScript, stopScript, clearLogs } = useScriptRunner();
   
-  const handleRun = async () => {
-    setLogs(prev => [...prev, `▶  ${new Date().toLocaleTimeString()}  run_full_backtest.py\n   CWD: /workspace\n────────────────────────────────────────────────────────────`]);
-    try {
-      const res = await fetch('/api/run', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ script: 'run_full_backtest.py' })
-      });
-      setLogs(prev => [...prev, `✔  Finished (code 0) ${new Date().toLocaleTimeString()}\n`]);
-    } catch (e) {
-      setLogs(prev => [...prev, `[ERROR] Failed to run full backtest\n`]);
-    }
+  const handleRun = () => {
+    runScript('run_full_backtest.py');
   };
 
   return (
@@ -49,8 +39,17 @@ export default function FullBacktest({ config }: { config: any }) {
         </div>
 
         <div className="flex gap-4">
-          <Button onClick={handleRun}>
-            <Play size={18} /> Run Full Backtest
+          {isRunning ? (
+            <Button onClick={stopScript} variant="blue" className="bg-red-600 hover:bg-red-700">
+              <Square size={18} /> Stop Execution
+            </Button>
+          ) : (
+            <Button onClick={handleRun}>
+              <Play size={18} /> Run Full Backtest
+            </Button>
+          )}
+          <Button variant="secondary" onClick={clearLogs}>
+            <Trash2 size={18} /> Clear Log
           </Button>
           <Button variant="secondary">
             <FolderOpen size={18} /> Open Output
@@ -61,7 +60,7 @@ export default function FullBacktest({ config }: { config: any }) {
         </div>
       </Card>
 
-      <LogViewer logs={logs} title="Full Backtest Output" />
+      <LogViewer logs={logs} title={`Full Backtest Output ${isRunning ? '(Executing...)' : ''}`} />
     </div>
   );
 }
