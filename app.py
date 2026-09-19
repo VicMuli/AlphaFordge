@@ -885,10 +885,12 @@ class OptimizePanel(BasePanel):
         # Buttons
         btn_row = ctk.CTkFrame(self, fg_color="transparent")
         btn_row.grid(row=3, column=0, sticky="ew", padx=32, pady=(20, 0))
-        make_btn(btn_row, "▶  Run Full Pipeline", self._run, width=210).pack(side="left")
+        make_btn(btn_row, "▶  Run Full Pipeline", self._run, width=200).pack(side="left")
+        make_btn(btn_row, "🔧  Parameters & Ranges", self._open_param_dialog,
+                 color=C["accent"], hover=C["hover"], width=200).pack(side="left", padx=(12, 0))
         make_btn(btn_row, "⚙  Configure in Settings",
                  lambda: self.app.show_panel("settings"),
-                 color=C["card"], hover=C["hover"], width=200).pack(side="left", padx=(12, 0))
+                 color=C["card"], hover=C["hover"], width=190).pack(side="left", padx=(12, 0))
         make_btn(btn_row, "📂 Open Runs Folder",
                  lambda: os.startfile(self.cfg.get("work_dir", str(SCRIPT_DIR))),
                  color=C["card"], hover=C["hover"], width=170).pack(side="left", padx=(12, 0))
@@ -906,6 +908,209 @@ class OptimizePanel(BasePanel):
     def _run(self):
         self.log_clear(self._log)
         self.run_script("run_optimization.py", self._log)
+
+    def _open_param_dialog(self):
+        ea = self.cfg.get("active_ea", "TRB").upper()
+        dlg = ctk.CTkToplevel(self)
+        dlg.title(f"Optimization Parameters & Ranges — {ea}")
+        dlg.geometry("780x640")
+        dlg.configure(fg_color=C["bg"])
+        dlg.grab_set()
+
+        make_section_header(dlg, f"🔧 {ea} Parameters & Indicator Ranges",
+            "Configure which parameters are fixed and the search ranges for optimization"
+        ).pack(fill="x", padx=24, pady=(20, 10))
+
+        scroll = ctk.CTkScrollableFrame(dlg, fg_color=C["panel"], corner_radius=10)
+        scroll.pack(fill="both", expand=True, padx=24, pady=10)
+        scroll.columnconfigure(1, weight=1)
+
+        opt_params = self.cfg.get("optimization_params", {}).get(ea, self.cfg.get("optimization_params", {}))
+        fixed_dict = dict(opt_params.get("fixed_params", {}))
+        ranges_dict = dict(opt_params.get("opt_ranges", {}))
+        toggles_dict = dict(opt_params.get("indicator_toggles", {}))
+
+        # Default fallback indicators & params if not yet in config
+        if ea == "ORB":
+            default_indicators = [
+                ("InpUseEmaFilter", "EMA Filter", toggles_dict.get("InpUseEmaFilter", 1)),
+                ("InpUseRsiFilter", "RSI Filter", toggles_dict.get("InpUseRsiFilter", 0)),
+                ("InpUseAtrFilter", "ATR Filter", toggles_dict.get("InpUseAtrFilter", 0)),
+                ("InpUseAdxFilter", "ADX Filter", toggles_dict.get("InpUseAdxFilter", 0)),
+                ("InpUseMacdFilter", "MACD Filter", toggles_dict.get("InpUseMacdFilter", 1)),
+                ("InpUseHtfFilter", "HTF Filter", toggles_dict.get("InpUseHtfFilter", 0)),
+            ]
+            default_params = [
+                ("InpTPRatio", "optimize", 1.5, (1.0, 0.25, 3.0)),
+                ("InpSLBufferPips", "optimize", 1, (0, 1, 10)),
+                ("InpMaxRangePips", "optimize", 50, (30, 10, 150)),
+                ("InpFixedLotSize", "fixed", 1.0, (0.1, 0.1, 2.0)),
+                ("InpRiskPercent", "optimize", 1.0, (0.25, 0.25, 2.0)),
+                ("InpRangeStartHour", "optimize", 8, (6, 1, 10)),
+                ("InpRangeEndHour", "optimize", 9, (9, 1, 12)),
+                ("InpEntryCutoffHour", "optimize", 15, (12, 1, 20)),
+                ("InpMacdFast", "optimize", 12, (6, 1, 16)),
+                ("InpMacdSlow", "optimize", 26, (18, 2, 34)),
+                ("InpMacdSignal", "optimize", 9, (5, 1, 13)),
+            ]
+        else:
+            default_indicators = [
+                ("UseTrendFilter", "EMA Trend Filter", toggles_dict.get("UseTrendFilter", 1)),
+                ("UseAdxFilter", "ADX Volatility Filter", toggles_dict.get("UseAdxFilter", 1)),
+                ("UseAtrFilter", "ATR Range Filter", toggles_dict.get("UseAtrFilter", 1)),
+                ("UseAtrTrailingStop", "ATR Trailing Stop", toggles_dict.get("UseAtrTrailingStop", 0)),
+                ("UseNewsFilter", "News Event Filter", toggles_dict.get("UseNewsFilter", 0)),
+            ]
+            default_params = [
+                ("LotSize", "fixed", 0.2, (0.1, 0.05, 0.5)),
+                ("PipsOffset", "fixed", 13, (8, 1, 20)),
+                ("TPMultiplier", "fixed", 3.0, (1.5, 0.5, 4.5)),
+                ("MinRangePips", "fixed", 25, (15, 5, 50)),
+                ("MaxRangePips", "fixed", 180, (100, 20, 240)),
+                ("StartHourGMT", "fixed", 0, (0, 1, 3)),
+                ("EndHourGMT", "fixed", 7, (5, 1, 9)),
+                ("CancelHourGMT", "fixed", 10, (8, 1, 14)),
+                ("CloseHourGMT", "fixed", 13, (11, 1, 17)),
+                ("RiskPercent", "fixed", 1.0, (0.25, 0.25, 2.0)),
+                ("EMAPeriod", "fixed", 200, (50, 25, 300)),
+                ("AdxPeriod", "optimize", 14, (7, 1, 21)),
+                ("AdxMin", "optimize", 20.0, (15.0, 2.5, 40.0)),
+                ("AtrPeriod", "optimize", 14, (7, 1, 21)),
+                ("AtrMinPips", "optimize", 0.0, (0.0, 2.0, 30.0)),
+            ]
+
+        # Indicator Toggles UI
+        make_label(scroll, "📊 Indicator Filters", font=FH3, color=C["accent"]).pack(anchor="w", padx=12, pady=(8, 4))
+        ind_frame = ctk.CTkFrame(scroll, fg_color=C["card"], corner_radius=8)
+        ind_frame.pack(fill="x", padx=12, pady=(0, 14))
+
+        ind_vars = {}
+        for row_idx, (t_param, t_label, default_val) in enumerate(default_indicators):
+            init_val = bool(toggles_dict.get(t_param, default_val))
+            var = ctk.BooleanVar(value=init_val)
+            ind_vars[t_param] = var
+            cb = ctk.CTkCheckBox(ind_frame, text=f"{t_label} ({t_param})", variable=var,
+                                 font=FB, fg_color=C["accent"], hover_color=C["hover"])
+            cb.grid(row=row_idx // 2, column=row_idx % 2, sticky="w", padx=16, pady=8)
+
+        # Parameters Table UI
+        make_label(scroll, "⚙ Core & Indicator Parameters (Fixed vs Optimize)", font=FH3, color=C["accent"]).pack(anchor="w", padx=12, pady=(8, 4))
+        params_container = ctk.CTkFrame(scroll, fg_color="transparent")
+        params_container.pack(fill="x", padx=12, pady=4)
+
+        param_rows = {}
+        for p_name, def_mode, def_fixed, def_range in default_params:
+            # Current value from config if exists
+            cur_is_opt = p_name in ranges_dict or (def_mode == "optimize" and p_name not in fixed_dict)
+            cur_fixed = fixed_dict.get(p_name, def_fixed)
+            cur_rng = ranges_dict.get(p_name, def_range)
+
+            rf = ctk.CTkFrame(params_container, fg_color=C["card"], corner_radius=6)
+            rf.pack(fill="x", pady=4)
+
+            # Param Name
+            make_label(rf, p_name, font=FB, color=C["text"], width=180, anchor="w").pack(side="left", padx=12, pady=8)
+
+            # Mode switch (Fixed vs Optimize)
+            mode_var = ctk.StringVar(value="Optimize" if cur_is_opt else "Fixed")
+            seg = ctk.CTkSegmentedButton(rf, values=["Fixed", "Optimize"], variable=mode_var, width=150, font=FSM)
+            seg.pack(side="left", padx=8)
+
+            # Input entries
+            inp_frame = ctk.CTkFrame(rf, fg_color="transparent")
+            inp_frame.pack(side="left", fill="x", expand=True, padx=8)
+
+            # Fixed entry
+            e_fixed = make_entry(inp_frame, width=90)
+            e_fixed.insert(0, str(cur_fixed))
+
+            # Range entries (start, step, stop)
+            range_frame = ctk.CTkFrame(inp_frame, fg_color="transparent")
+            make_label(range_frame, "Start:", font=FSM, color=C["sub"]).pack(side="left")
+            e_start = make_entry(range_frame, width=60); e_start.insert(0, str(cur_rng[0]))
+            e_start.pack(side="left", padx=4)
+
+            make_label(range_frame, "Step:", font=FSM, color=C["sub"]).pack(side="left", padx=(6,0))
+            e_step = make_entry(range_frame, width=60); e_step.insert(0, str(cur_rng[1]))
+            e_step.pack(side="left", padx=4)
+
+            make_label(range_frame, "Stop:", font=FSM, color=C["sub"]).pack(side="left", padx=(6,0))
+            e_stop = make_entry(range_frame, width=60); e_stop.insert(0, str(cur_rng[2]))
+            e_stop.pack(side="left", padx=4)
+
+            def _update_view(mode_val, ef=e_fixed, rf_box=range_frame):
+                if mode_val == "Fixed":
+                    rf_box.pack_forget()
+                    ef.pack(side="left", padx=4)
+                else:
+                    ef.pack_forget()
+                    rf_box.pack(side="left")
+
+            mode_var.trace_add("write", lambda *args, mv=mode_var, ef=e_fixed, rf_box=range_frame: _update_view(mv.get(), ef, rf_box))
+            _update_view(mode_var.get(), e_fixed, range_frame)
+
+            param_rows[p_name] = {
+                "mode": mode_var,
+                "fixed": e_fixed,
+                "start": e_start,
+                "step": e_step,
+                "stop": e_stop
+            }
+
+        # Footer Actions
+        footer = ctk.CTkFrame(dlg, fg_color="transparent")
+        footer.pack(fill="x", padx=24, pady=16)
+
+        status_lbl = make_label(footer, "", font=FB, color=C["success"])
+        status_lbl.pack(side="left", padx=8)
+
+        def _save_params():
+            new_fixed = {}
+            new_ranges = {}
+            new_toggles = {k: 1 if v.get() else 0 for k, v in ind_vars.items()}
+
+            for p_name, widgets in param_rows.items():
+                m = widgets["mode"].get()
+                if m == "Fixed":
+                    try:
+                        v = widgets["fixed"].get().strip()
+                        new_fixed[p_name] = float(v) if "." in v else int(v)
+                    except ValueError:
+                        new_fixed[p_name] = widgets["fixed"].get().strip()
+                else:
+                    try:
+                        st = float(widgets["start"].get().strip())
+                        sp = float(widgets["step"].get().strip())
+                        so = float(widgets["stop"].get().strip())
+                        if st.is_integer() and sp.is_integer() and so.is_integer():
+                            new_ranges[p_name] = [int(st), int(sp), int(so)]
+                        else:
+                            new_ranges[p_name] = [st, sp, so]
+                    except ValueError:
+                        pass
+
+            if "optimization_params" not in self.app.config:
+                self.app.config["optimization_params"] = {}
+
+            ea_data = {
+                "active_ea": ea,
+                "indicator_toggles": new_toggles,
+                "fixed_params": new_fixed,
+                "opt_ranges": new_ranges,
+            }
+            self.app.config["optimization_params"][ea] = ea_data
+            self.app.config["optimization_params"]["active_ea"] = ea
+            self.app.config["optimization_params"]["indicator_toggles"] = new_toggles
+            self.app.config["optimization_params"]["fixed_params"] = new_fixed
+            self.app.config["optimization_params"]["opt_ranges"] = new_ranges
+
+            if save_config(self.app.config):
+                status_lbl.configure(text="✔  Parameters saved to config.json!", text_color=C["success"])
+            else:
+                status_lbl.configure(text="✘  Save failed", text_color=C["danger"])
+
+        make_btn(footer, "💾 Save & Apply", _save_params, width=160).pack(side="right", padx=(8, 0))
+        make_btn(footer, "Close", dlg.destroy, color=C["card"], hover=C["hover"], width=100).pack(side="right")
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

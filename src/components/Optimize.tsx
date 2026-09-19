@@ -1,7 +1,33 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Card, SectionHeader, Button, LogViewer } from './ui';
-import { Play, Settings as SettingsIcon, FolderOpen, Square, Trash2 } from 'lucide-react';
+import { 
+  Play, 
+  Settings as SettingsIcon, 
+  FolderOpen, 
+  Square, 
+  Trash2, 
+  Save, 
+  RotateCcw, 
+  Plus, 
+  Search, 
+  Sliders, 
+  CheckCircle2, 
+  Lock, 
+  Zap, 
+  Layers, 
+  Filter, 
+  Clock, 
+  ShieldAlert,
+  ChevronDown,
+  ChevronUp,
+  Info
+} from 'lucide-react';
 import { useScriptRunner } from '../useScriptRunner';
+import { StrategyParam, IndicatorDefinition } from '../types';
+import { 
+  getDefaultConfigForEa, 
+  buildOptimizationConfig 
+} from '../constants/optimizationParams';
 
 export default function Optimize({ 
   config, 
@@ -13,6 +39,141 @@ export default function Optimize({
   const { logs, isRunning, runScript, stopScript, clearLogs } = useScriptRunner();
   const [currentPhase, setCurrentPhase] = useState<number>(0);
 
+  // Active strategy (TRB vs ORB)
+  const activeEa = ((config?.active_ea || 'TRB') as string).toUpperCase();
+
+  // State for parameters and indicators
+  const [params, setParams] = useState<StrategyParam[]>([]);
+  const [indicators, setIndicators] = useState<IndicatorDefinition[]>([]);
+  const [activeCategory, setActiveCategory] = useState<string>('all');
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [saveStatus, setSaveStatus] = useState<string | null>(null);
+  const [showAddModal, setShowAddModal] = useState<boolean>(false);
+  const [showIndicatorsGrid, setShowIndicatorsGrid] = useState<boolean>(true);
+
+  // Form state for adding custom parameter
+  const [newParam, setNewParam] = useState<Partial<StrategyParam>>({
+    name: '',
+    label: '',
+    category: 'custom',
+    mode: 'fixed',
+    fixedValue: 1.0,
+    range: { start: 1.0, step: 0.5, stop: 3.0 },
+    description: '',
+  });
+
+  // Load saved optimization configuration from backend or fallback to EA defaults
+  useEffect(() => {
+    let isMounted = true;
+    const loadParams = async () => {
+      const defaults = getDefaultConfigForEa(activeEa);
+      let mergedParams: StrategyParam[] = defaults.params;
+      let mergedIndicators: IndicatorDefinition[] = defaults.indicators;
+
+      try {
+        const res = await fetch(`/api/optimization-params?ea=${activeEa}`);
+        if (res.ok) {
+          const json = await res.json();
+          const savedData = json.data;
+          if (savedData) {
+            // 1. Merge indicators
+            if (Array.isArray(savedData.indicators) && savedData.indicators.length > 0) {
+              const savedIndMap = new Map<string, any>(
+                savedData.indicators.map((i: any) => [i.id || i.toggleParam, i])
+              );
+              mergedIndicators = mergedIndicators.map(ind => {
+                const s = savedIndMap.get(ind.id) || savedIndMap.get(ind.toggleParam);
+                return s ? { ...ind, enabled: !!s.enabled, optimize: s.optimize !== undefined ? !!s.optimize : ind.optimize } : ind;
+              });
+            } else if (savedData.indicator_toggles) {
+              mergedIndicators = mergedIndicators.map(ind => ({
+                ...ind,
+                enabled: savedData.indicator_toggles[ind.toggleParam] !== undefined
+                  ? Boolean(savedData.indicator_toggles[ind.toggleParam])
+                  : ind.enabled
+              }));
+            }
+
+            // 2. Merge fixed_params and opt_ranges
+            const fixedDict = savedData.fixed_params || {};
+            const rangesDict = savedData.opt_ranges || {};
+
+            mergedParams = mergedParams.map(p => {
+              const updated = { ...p };
+              if (fixedDict[p.name] !== undefined) {
+                updated.mode = 'fixed';
+                updated.fixedValue = fixedDict[p.name];
+              }
+              if (rangesDict[p.name] !== undefined && Array.isArray(rangesDict[p.name]) && rangesDict[p.name].length === 3) {
+                updated.mode = 'optimize';
+                updated.range = {
+                  start: Number(rangesDict[p.name][0]) || 0,
+                  step: Number(rangesDict[p.name][1]) || 1,
+                  stop: Number(rangesDict[p.name][2]) || 10,
+                };
+              }
+              return updated;
+            });
+
+            // 3. Merge detailed params array (while preserving full metadata like category, label, etc.)
+            if (Array.isArray(savedData.params) && savedData.params.length > 0) {
+              const savedParamMap = new Map<string, any>(savedData.params.map((p: any) => [p.name, p]));
+
+              mergedParams = mergedParams.map(p => {
+                const s = savedParamMap.get(p.name);
+                if (!s) return p;
+                return {
+                  ...p,
+                  category: s.category || p.category || 'core',
+                  label: s.label || p.label || p.name,
+                  description: s.description || p.description || '',
+                  mode: s.mode === 'optimize' ? 'optimize' : 'fixed',
+                  fixedValue: s.fixedValue !== undefined ? s.fixedValue : (s.value !== undefined ? s.value : p.fixedValue),
+                  range: s.range ? {
+                    start: Number(s.range.start) || p.range.start,
+                    step: Number(s.range.step) || p.range.step,
+                    stop: Number(s.range.stop) || p.range.stop,
+                  } : p.range,
+                };
+              });
+
+              // Also preserve custom params added by user
+              savedData.params.forEach((s: any) => {
+                if (s.name && !mergedParams.some(p => p.name === s.name)) {
+                  mergedParams.push({
+                    name: s.name,
+                    label: s.label || s.name,
+                    category: s.category || 'custom',
+                    mode: s.mode === 'optimize' ? 'optimize' : 'fixed',
+                    fixedValue: s.fixedValue !== undefined ? s.fixedValue : 1,
+                    range: s.range ? {
+                      start: Number(s.range.start) || 1,
+                      step: Number(s.range.step) || 1,
+                      stop: Number(s.range.stop) || 10,
+                    } : { start: 1, step: 1, stop: 10 },
+                    description: s.description || 'Custom parameter',
+                    isCustom: true,
+                  });
+                }
+              });
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('Could not fetch saved optimization params, loading defaults:', err);
+      }
+
+      if (isMounted) {
+        setParams(mergedParams);
+        setIndicators(mergedIndicators);
+      }
+    };
+
+    loadParams();
+    return () => { isMounted = false; };
+  }, [activeEa]);
+
+  // Phase tracker from pipeline logs
   useEffect(() => {
     if (!isRunning) {
       if (logs.some(l => l.includes('[FINISHED] Process exited with code 0'))) {
@@ -31,7 +192,211 @@ export default function Optimize({
     }
   }, [logs, isRunning]);
 
-  const handleRun = () => {
+  // Save parameters to backend
+  const handleSaveParams = async () => {
+    try {
+      setSaveStatus('saving');
+      const payload = buildOptimizationConfig(activeEa, params, indicators);
+      const res = await fetch('/api/optimization-params', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ activeEa, payload }),
+      });
+
+      if (res.ok) {
+        setSaveStatus('saved');
+        setTimeout(() => setSaveStatus(null), 3000);
+      } else {
+        setSaveStatus('error');
+      }
+    } catch (e) {
+      console.error(e);
+      setSaveStatus('error');
+    }
+  };
+
+  // Reset to default EA recommendations
+  const handleResetDefaults = () => {
+    const defaults = getDefaultConfigForEa(activeEa);
+    setParams(defaults.params);
+    setIndicators(defaults.indicators);
+    setSaveStatus('reset');
+    setTimeout(() => setSaveStatus(null), 3000);
+  };
+
+  // Presets
+  const applyPreset = (preset: 'core_only' | 'indicators_only' | 'explore_all') => {
+    setParams(prev => prev.map(p => {
+      if (preset === 'core_only') {
+        if (p.category === 'core' || p.category === 'timing') {
+          return { ...p, mode: 'optimize' };
+        }
+        return { ...p, mode: 'fixed' };
+      } else if (preset === 'indicators_only') {
+        if (p.category === 'indicator') {
+          return { ...p, mode: 'optimize' };
+        }
+        return { ...p, mode: 'fixed' };
+      } else if (preset === 'explore_all') {
+        if (p.name !== 'MagicNumber' && !p.name.includes('Magic') && p.category !== 'risk') {
+          return { ...p, mode: 'optimize' };
+        }
+      }
+      return p;
+    }));
+  };
+
+  // Toggle single parameter mode (fixed <-> optimize)
+  const toggleParamMode = (name: string) => {
+    setParams(prev => prev.map(p => {
+      if (p.name === name) {
+        const nextMode = p.mode === 'fixed' ? 'optimize' : 'fixed';
+        return { ...p, mode: nextMode };
+      }
+      return p;
+    }));
+  };
+
+  // Update fixed value
+  const updateFixedValue = (name: string, value: string | number) => {
+    setParams(prev => prev.map(p => {
+      if (p.name === name) {
+        return { ...p, fixedValue: value };
+      }
+      return p;
+    }));
+  };
+
+  // Update range fields (start, step, stop)
+  const updateRangeField = (name: string, field: 'start' | 'step' | 'stop', value: number) => {
+    setParams(prev => prev.map(p => {
+      if (p.name === name) {
+        return {
+          ...p,
+          range: {
+            ...p.range,
+            [field]: value,
+          },
+        };
+      }
+      return p;
+    }));
+  };
+
+  // Toggle indicator enabled / disabled
+  const toggleIndicatorEnabled = (indId: string) => {
+    setIndicators(prev => prev.map(ind => {
+      if (ind.id === indId) {
+        const nextEnabled = !ind.enabled;
+        return { ...ind, enabled: nextEnabled };
+      }
+      return ind;
+    }));
+  };
+
+  // Toggle all params for an indicator between Fixed and Optimize
+  const toggleIndicatorMode = (indId: string) => {
+    const ind = indicators.find(i => i.id === indId);
+    if (!ind) return;
+    const nextOptimize = !ind.optimize;
+
+    setIndicators(prev => prev.map(i => i.id === indId ? { ...i, optimize: nextOptimize } : i));
+    setParams(prev => prev.map(p => {
+      if (p.indicatorId === indId) {
+        return { ...p, mode: nextOptimize ? 'optimize' : 'fixed' };
+      }
+      return p;
+    }));
+  };
+
+  // Add custom parameter
+  const handleAddCustomParam = () => {
+    if (!newParam.name || !newParam.name.trim()) return;
+    const cleanName = newParam.name.trim();
+
+    const created: StrategyParam = {
+      name: cleanName,
+      label: newParam.label?.trim() || cleanName,
+      category: (newParam.category as any) || 'custom',
+      mode: newParam.mode || 'fixed',
+      fixedValue: newParam.fixedValue !== undefined ? newParam.fixedValue : 1.0,
+      range: newParam.range || { start: 1.0, step: 0.5, stop: 5.0 },
+      description: newParam.description || 'User-defined parameter',
+      isCustom: true,
+    };
+
+    setParams(prev => [...prev, created]);
+    setShowAddModal(false);
+    setNewParam({
+      name: '',
+      label: '',
+      category: 'custom',
+      mode: 'fixed',
+      fixedValue: 1.0,
+      range: { start: 1.0, step: 0.5, stop: 3.0 },
+      description: '',
+    });
+  };
+
+  // Remove custom parameter
+  const handleRemoveParam = (name: string) => {
+    setParams(prev => prev.filter(p => p.name !== name));
+  };
+
+  // Calculation of active search space stats
+  const stats = useMemo(() => {
+    const optimizingParams = params.filter(p => {
+      if (p.mode !== 'optimize') return false;
+      if (p.indicatorId) {
+        const ind = indicators.find(i => i.id === p.indicatorId);
+        return ind ? ind.enabled : true;
+      }
+      return true;
+    });
+
+    const fixedParams = params.filter(p => !optimizingParams.includes(p));
+
+    let totalCombinations = 1;
+    optimizingParams.forEach(p => {
+      const start = Number(p.range?.start) || 0;
+      const step = (p.range?.step && Number(p.range.step) > 0) ? Number(p.range.step) : 1;
+      const stop = p.range?.stop !== undefined ? Number(p.range.stop) : start;
+      const count = Math.max(1, Math.floor((stop - start) / step) + 1);
+      totalCombinations *= count;
+    });
+
+    const activeInds = indicators.filter(i => i.enabled).length;
+
+    return {
+      numOptimizing: optimizingParams.length,
+      numFixed: fixedParams.length,
+      totalCombinations,
+      activeInds,
+    };
+  }, [params, indicators]);
+
+  // Filtered parameters based on active category & search query
+  const filteredParams = useMemo(() => {
+    return params.filter(p => {
+      if (!p) return false;
+      const category = p.category || 'custom';
+      if (activeCategory !== 'all' && category !== activeCategory) {
+        return false;
+      }
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase();
+        const matchName = (p.name || '').toLowerCase().includes(q);
+        const matchLabel = (p.label || '').toLowerCase().includes(q);
+        const matchDesc = (p.description || '').toLowerCase().includes(q);
+        return matchName || matchLabel || matchDesc;
+      }
+      return true;
+    });
+  }, [params, activeCategory, searchQuery]);
+
+  const handleRun = async () => {
+    // Auto-save any pending changes first
+    await handleSaveParams();
     setCurrentPhase(1);
     runScript('run_optimization.py');
   };
@@ -44,45 +409,474 @@ export default function Optimize({
   ];
 
   return (
-    <div className="flex flex-col h-full space-y-4">
+    <div className="flex flex-col h-full space-y-4 pb-8 overflow-y-auto">
       <SectionHeader 
-        title="⚙ Optimization Pipeline" 
-        subtitle="Train → Validation → Holdout → Monte Carlo certification" 
+        title="⚙ Optimization Pipeline & Strategy Parameters" 
+        subtitle={`Adjust indicator filters, fixed parameters, and parameter ranges for ${activeEa} before executing`} 
       />
       
-      {/* Config Summary Card */}
-      <Card className="p-4">
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs">
-          <div className="border-r border-[#2d3748] pr-2">
-            <div className="text-[#8b95a6] mb-1 font-medium">EA / Expert</div>
-            <div className="font-semibold text-white truncate">
-              {config.active_ea || 'TRB'} – {config.expert || 'TRB V2.0.ex5'}
+      {/* Top Banner: Strategy & Config Overview */}
+      <Card className="p-4 border border-[#2d3748] bg-[#141b2d]">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs flex-1">
+            <div className="border-r border-[#2d3748] pr-2">
+              <div className="text-[#8b95a6] mb-1 font-medium">Strategy / EA</div>
+              <div className="font-semibold text-white flex items-center gap-1.5">
+                <span className="px-1.5 py-0.5 rounded bg-blue-900/60 text-blue-300 font-mono text-[11px] border border-blue-700">
+                  {activeEa}
+                </span>
+                <span className="truncate">{config.expert || `${activeEa} Strategy.ex5`}</span>
+              </div>
+            </div>
+            <div className="border-r border-[#2d3748] pr-2">
+              <div className="text-[#8b95a6] mb-1 font-medium">Symbol & Timeframe</div>
+              <div className="font-semibold text-white">
+                {config.symbol || 'USDJPY Dukascopy'} ({config.period || 'M15'})
+              </div>
+            </div>
+            <div className="border-r border-[#2d3748] pr-2">
+              <div className="text-[#8b95a6] mb-1 font-medium">Testing Windows</div>
+              <div className="font-semibold text-white">
+                {config.train_from || '2013.01.01'} → {config.holdout_to || '2026.07.03'}
+              </div>
+            </div>
+            <div>
+              <div className="text-[#8b95a6] mb-1 font-medium">Deposit & Leverage</div>
+              <div className="font-semibold text-white">
+                ${config.deposit || '2500'} {config.currency || 'USD'} ({config.leverage || '1:100'})
+              </div>
             </div>
           </div>
-          <div className="border-r border-[#2d3748] pr-2">
-            <div className="text-[#8b95a6] mb-1 font-medium">Symbol</div>
-            <div className="font-semibold text-white">
-              {config.symbol || 'USDJPY Dukascopy'} ({config.period || 'M15'})
+
+          {/* Quick Stats Pill */}
+          <div className="flex items-center gap-2 bg-[#0d1322] px-3 py-2 rounded-lg border border-[#232f48] text-xs">
+            <div className="flex items-center gap-1 text-amber-400 font-semibold">
+              <Zap size={14} />
+              <span>{stats.numOptimizing}</span>
+              <span className="text-[#8b95a6] font-normal">optimizing</span>
             </div>
-          </div>
-          <div className="border-r border-[#2d3748] pr-2">
-            <div className="text-[#8b95a6] mb-1 font-medium">Date Range</div>
-            <div className="font-semibold text-white">
-              {config.train_from || '2013.01.01'} → {config.holdout_to || '2026.07.03'}
+            <span className="text-[#2d3748]">•</span>
+            <div className="flex items-center gap-1 text-slate-300 font-semibold">
+              <Lock size={13} className="text-slate-400" />
+              <span>{stats.numFixed}</span>
+              <span className="text-[#8b95a6] font-normal">fixed</span>
             </div>
-          </div>
-          <div>
-            <div className="text-[#8b95a6] mb-1 font-medium">Deposit</div>
-            <div className="font-semibold text-white">
-              ${config.deposit || '2500'} {config.currency || 'USD'} ({config.leverage || '1:100'})
+            <span className="text-[#2d3748]">•</span>
+            <div className="flex items-center gap-1 text-emerald-400 font-semibold">
+              <Filter size={13} />
+              <span>{stats.activeInds}/{indicators.length}</span>
+              <span className="text-[#8b95a6] font-normal">indicators</span>
             </div>
           </div>
         </div>
       </Card>
 
-      {/* Phase Progression */}
-      <Card className="p-4">
-        <div className="flex items-center justify-between max-w-2xl mx-auto px-4">
+      {/* ─────────────────────────────────────────────────────────────
+          SECTION 1: INDICATOR FILTERS SWITCHBOARD
+          ───────────────────────────────────────────────────────────── */}
+      <Card className="p-4 border border-[#232f48]">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <div className="p-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+              <Filter size={16} />
+            </div>
+            <div>
+              <h3 className="text-sm font-semibold text-white">Indicator Filter Switchboard</h3>
+              <p className="text-xs text-[#8b95a6]">Enable or disable indicator filters, and select whether their inputs are held fixed or optimized</p>
+            </div>
+          </div>
+          <button 
+            onClick={() => setShowIndicatorsGrid(!showIndicatorsGrid)}
+            className="text-xs text-[#8b95a6] hover:text-white flex items-center gap-1 px-2 py-1 rounded bg-[#131b2e] border border-[#232f48]"
+          >
+            {showIndicatorsGrid ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+            <span>{showIndicatorsGrid ? 'Collapse' : 'Expand'}</span>
+          </button>
+        </div>
+
+        {showIndicatorsGrid && (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 pt-1">
+            {indicators.map(ind => {
+              const indicatorParams = params.filter(p => p.indicatorId === ind.id);
+              const anyOptimizing = indicatorParams.some(p => p.mode === 'optimize');
+
+              return (
+                <div 
+                  key={ind.id} 
+                  className={`p-3 rounded-lg border transition-all ${
+                    ind.enabled 
+                      ? 'bg-[#151d30] border-emerald-800/60 shadow-sm' 
+                      : 'bg-[#0f1523] border-[#222c40] opacity-60'
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-2 mb-1.5">
+                    <label className="flex items-center gap-2 cursor-pointer select-none">
+                      <input 
+                        type="checkbox"
+                        checked={ind.enabled}
+                        onChange={() => toggleIndicatorEnabled(ind.id)}
+                        className="w-4 h-4 rounded border-[#38455e] text-emerald-500 bg-[#0a0e1a] focus:ring-emerald-500 focus:ring-1 cursor-pointer accent-emerald-500"
+                      />
+                      <span className={`text-sm font-semibold ${ind.enabled ? 'text-white' : 'text-[#8b95a6]'}`}>
+                        {ind.name}
+                      </span>
+                    </label>
+
+                    {ind.enabled && (
+                      <button
+                        onClick={() => toggleIndicatorMode(ind.id)}
+                        className={`text-[11px] px-2 py-0.5 rounded font-medium transition-colors flex items-center gap-1 ${
+                          anyOptimizing
+                            ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 hover:bg-amber-500/30'
+                            : 'bg-slate-700/50 text-slate-300 border border-slate-600 hover:bg-slate-700'
+                        }`}
+                        title="Toggle all parameters of this indicator between Fixed and Optimize"
+                      >
+                        {anyOptimizing ? <Zap size={11} /> : <Lock size={11} />}
+                        <span>{anyOptimizing ? 'Optimizing' : 'Fixed'}</span>
+                      </button>
+                    )}
+                  </div>
+
+                  <p className="text-[11px] text-[#8b95a6] line-clamp-2 mb-2 leading-relaxed">
+                    {ind.description}
+                  </p>
+
+                  <div className="text-[11px] font-mono text-[#a0aec0] flex flex-wrap items-center gap-1 pt-1 border-t border-[#232f48]/70">
+                    <span className="text-[#64748b]">Params:</span>
+                    {indicatorParams.map(p => (
+                      <span 
+                        key={p.name}
+                        className={`px-1.5 py-0.5 rounded text-[10px] ${
+                          !ind.enabled 
+                            ? 'bg-[#1a2336] text-[#64748b]' 
+                            : p.mode === 'optimize' 
+                              ? 'bg-amber-950/70 text-amber-300 border border-amber-800/60 font-semibold' 
+                              : 'bg-[#1c263b] text-slate-300 border border-[#2d3a54]'
+                        }`}
+                      >
+                        {p.name} {p.mode === 'optimize' ? `(${p.range.start}..${p.range.stop})` : `=${p.fixedValue}`}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Card>
+
+      {/* ─────────────────────────────────────────────────────────────
+          SECTION 2: PARAMETER ADJUSTMENT TABLE (FIXED VS OPTIMIZE)
+          ───────────────────────────────────────────────────────────── */}
+      <Card className="p-4 border border-[#232f48]">
+        {/* Header & Controls */}
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 mb-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <div className="p-1.5 rounded-lg bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                <Sliders size={16} />
+              </div>
+              <h3 className="text-sm font-semibold text-white">Strategy Parameters Configuration</h3>
+            </div>
+            <p className="text-xs text-[#8b95a6] mt-0.5">
+              Set each parameter to either <span className="text-slate-300 font-medium">Fixed</span> (constant value) or <span className="text-amber-400 font-medium">Optimize</span> (Start, Step, Stop range)
+            </p>
+          </div>
+
+          {/* Action Buttons */}
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={handleSaveParams}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5 shadow-sm ${
+                saveStatus === 'saved'
+                  ? 'bg-emerald-600 text-white'
+                  : 'bg-[#2563eb] hover:bg-[#1d4ed8] text-white border border-blue-500/40'
+              }`}
+            >
+              {saveStatus === 'saved' ? <CheckCircle2 size={14} /> : <Save size={14} />}
+              <span>{saveStatus === 'saved' ? 'Saved to Pipeline!' : 'Save & Apply Parameters'}</span>
+            </button>
+
+            <button
+              onClick={handleResetDefaults}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium bg-[#1a2336] hover:bg-[#222f48] text-[#cbd5e1] border border-[#2d3a54] flex items-center gap-1.5 transition-colors"
+              title="Reset all parameters back to EA recommended defaults"
+            >
+              <RotateCcw size={13} />
+              <span>Reset Defaults</span>
+            </button>
+
+            <button
+              onClick={() => setShowAddModal(true)}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium bg-[#1e293b] hover:bg-[#2e3e57] text-[#f1f5f9] border border-[#3b4d6e] flex items-center gap-1.5 transition-colors"
+            >
+              <Plus size={14} />
+              <span>Add Custom Param</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Presets & Filter Bar */}
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pt-2 pb-3 border-t border-b border-[#232f48]">
+          {/* Category Tabs */}
+          <div className="flex items-center gap-1 overflow-x-auto text-xs py-1">
+            {[
+              { id: 'all', label: 'All Parameters', count: params.length },
+              { id: 'core', label: 'Core Strategy', count: params.filter(p => (p.category || 'custom') === 'core').length },
+              { id: 'timing', label: 'Timing', count: params.filter(p => (p.category || 'custom') === 'timing').length },
+              { id: 'risk', label: 'Risk & Compliance', count: params.filter(p => (p.category || 'custom') === 'risk').length },
+              { id: 'indicator', label: 'Indicators', count: params.filter(p => (p.category || 'custom') === 'indicator').length },
+              { id: 'custom', label: 'Custom', count: params.filter(p => (p.category || 'custom') === 'custom').length },
+            ].map(tab => (
+              <button
+                key={tab.id}
+                onClick={() => setActiveCategory(tab.id)}
+                className={`px-2.5 py-1 rounded-md transition-colors whitespace-nowrap font-medium ${
+                  activeCategory === tab.id
+                    ? 'bg-[#3b82f6] text-white shadow-sm'
+                    : 'text-[#8b95a6] hover:text-white hover:bg-[#1a2336]'
+                }`}
+              >
+                {tab.label} <span className="text-[10px] opacity-75">({tab.count})</span>
+              </button>
+            ))}
+          </div>
+
+          {/* Search Input & Quick Presets */}
+          <div className="flex items-center gap-2">
+            <div className="relative flex-1 md:w-52">
+              <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[#64748b]" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                placeholder="Filter by name..."
+                className="w-full pl-8 pr-2.5 py-1 text-xs bg-[#101726] border border-[#232f48] rounded-md text-white placeholder-[#64748b] focus:outline-none focus:border-blue-500"
+              />
+            </div>
+
+            {/* Quick Preset buttons */}
+            <div className="hidden lg:flex items-center gap-1 text-[11px]">
+              <span className="text-[#64748b] mr-1">Presets:</span>
+              <button
+                onClick={() => applyPreset('core_only')}
+                className="px-2 py-1 rounded bg-[#162035] hover:bg-[#202d4a] text-[#94a3b8] hover:text-white border border-[#232f48]"
+                title="Optimize Core Strategy, hold Indicators fixed"
+              >
+                Core Only
+              </button>
+              <button
+                onClick={() => applyPreset('indicators_only')}
+                className="px-2 py-1 rounded bg-[#162035] hover:bg-[#202d4a] text-[#94a3b8] hover:text-white border border-[#232f48]"
+                title="Optimize Indicator Filters, hold Core Strategy fixed"
+              >
+                Indicators Only
+              </button>
+              <button
+                onClick={() => applyPreset('explore_all')}
+                className="px-2 py-1 rounded bg-[#162035] hover:bg-[#202d4a] text-[#94a3b8] hover:text-white border border-[#232f48]"
+                title="Optimize both Core Strategy and Indicator Filters"
+              >
+                Explore All
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Parameters List Table */}
+        <div className="overflow-x-auto mt-2">
+          <table className="w-full text-left text-xs border-collapse">
+            <thead>
+              <tr className="border-b border-[#232f48] text-[#8b95a6] font-medium">
+                <th className="py-2.5 px-3">Parameter</th>
+                <th className="py-2.5 px-2">Category</th>
+                <th className="py-2.5 px-3 text-center">Mode</th>
+                <th className="py-2.5 px-3">Configuration</th>
+                <th className="py-2.5 px-2 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-[#1e273a]">
+              {filteredParams.length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="py-8 text-center text-[#8b95a6]">
+                    No parameters found matching category "{activeCategory}" {searchQuery && `and search "${searchQuery}"`}
+                  </td>
+                </tr>
+              ) : (
+                filteredParams.map(p => {
+                  const isOptimizing = p.mode === 'optimize';
+                  const cat = p.category || 'custom';
+                  const startVal = Number(p.range?.start) || 0;
+                  const stepVal = (p.range?.step && Number(p.range.step) > 0) ? Number(p.range.step) : 1;
+                  const stopVal = p.range?.stop !== undefined ? Number(p.range.stop) : startVal;
+                  const stepCount = Math.max(1, Math.floor((stopVal - startVal) / stepVal) + 1);
+
+                  // Check if parent indicator is disabled
+                  let isParentDisabled = false;
+                  if (p.indicatorId) {
+                    const ind = indicators.find(i => i.id === p.indicatorId);
+                    if (ind && !ind.enabled) isParentDisabled = true;
+                  }
+
+                  return (
+                    <tr 
+                      key={p.name} 
+                      className={`hover:bg-[#162032]/60 transition-colors ${
+                        isParentDisabled ? 'opacity-40 bg-[#0d121c]' : ''
+                      }`}
+                    >
+                      {/* Name & Description */}
+                      <td className="py-2.5 px-3 min-w-[200px]">
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-mono font-semibold text-white">{p.name}</span>
+                          {p.isCustom && (
+                            <span className="px-1 py-0.2 rounded text-[9px] bg-purple-900/60 text-purple-300 border border-purple-700">
+                              Custom
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[11px] text-[#8b95a6] truncate max-w-xs" title={p.description || p.label}>
+                          {p.label || p.description}
+                        </div>
+                      </td>
+
+                      {/* Category Badge */}
+                      <td className="py-2.5 px-2 whitespace-nowrap">
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-medium ${
+                          cat === 'core' 
+                            ? 'bg-blue-900/40 text-blue-300 border border-blue-800/60' 
+                            : cat === 'timing'
+                              ? 'bg-cyan-900/40 text-cyan-300 border border-cyan-800/60'
+                              : cat === 'risk'
+                                ? 'bg-red-900/40 text-red-300 border border-red-800/60'
+                                : cat === 'indicator'
+                                  ? 'bg-emerald-900/40 text-emerald-300 border border-emerald-800/60'
+                                  : 'bg-purple-900/40 text-purple-300 border border-purple-800/60'
+                        }`}>
+                          {cat.toUpperCase()}
+                        </span>
+                      </td>
+
+                      {/* Mode Toggle Selector */}
+                      <td className="py-2.5 px-3 text-center whitespace-nowrap">
+                        <div className="inline-flex rounded-lg p-0.5 bg-[#0f1626] border border-[#232f48]">
+                          <button
+                            type="button"
+                            onClick={() => toggleParamMode(p.name)}
+                            disabled={isParentDisabled}
+                            className={`px-2.5 py-1 rounded text-xs font-medium transition-colors flex items-center gap-1 ${
+                              !isOptimizing
+                                ? 'bg-[#232f48] text-white shadow-sm'
+                                : 'text-[#8b95a6] hover:text-white'
+                            }`}
+                          >
+                            <Lock size={11} className={!isOptimizing ? 'text-slate-300' : ''} />
+                            <span>Fixed</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => toggleParamMode(p.name)}
+                            disabled={isParentDisabled}
+                            className={`px-2.5 py-1 rounded text-xs font-medium transition-colors flex items-center gap-1 ${
+                              isOptimizing
+                                ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
+                                : 'text-[#8b95a6] hover:text-white'
+                            }`}
+                          >
+                            <Zap size={11} className={isOptimizing ? 'text-slate-950' : ''} />
+                            <span>Optimize</span>
+                          </button>
+                        </div>
+                      </td>
+
+                      {/* Configuration Controls (Fixed value vs Range) */}
+                      <td className="py-2.5 px-3">
+                        {!isOptimizing ? (
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="text"
+                              value={p.fixedValue !== undefined ? p.fixedValue : ''}
+                              onChange={e => updateFixedValue(p.name, e.target.value)}
+                              disabled={isParentDisabled}
+                              className="w-28 px-2.5 py-1 bg-[#0a0f1d] border border-[#2d3a54] rounded text-white font-mono text-xs focus:outline-none focus:border-blue-500"
+                              placeholder="Value"
+                            />
+                            <span className="text-[11px] text-[#64748b]">
+                              {isParentDisabled ? '(Indicator disabled)' : 'Fixed constant for all passes'}
+                            </span>
+                          </div>
+                        ) : (
+                          <div className="flex flex-wrap items-center gap-2">
+                            <div className="flex items-center gap-1">
+                              <span className="text-[11px] text-[#8b95a6]">Start:</span>
+                              <input
+                                type="number"
+                                step="any"
+                                value={p.range?.start !== undefined ? p.range.start : 0}
+                                onChange={e => updateRangeField(p.name, 'start', parseFloat(e.target.value) || 0)}
+                                disabled={isParentDisabled}
+                                className="w-20 px-2 py-1 bg-[#0a0f1d] border border-amber-900/60 rounded text-amber-200 font-mono text-xs focus:outline-none focus:border-amber-500"
+                              />
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <span className="text-[11px] text-[#8b95a6]">Step:</span>
+                              <input
+                                type="number"
+                                step="any"
+                                value={p.range?.step !== undefined ? p.range.step : 1}
+                                onChange={e => updateRangeField(p.name, 'step', parseFloat(e.target.value) || 1)}
+                                disabled={isParentDisabled}
+                                className="w-18 px-2 py-1 bg-[#0a0f1d] border border-amber-900/60 rounded text-amber-200 font-mono text-xs focus:outline-none focus:border-amber-500"
+                              />
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <span className="text-[11px] text-[#8b95a6]">Stop:</span>
+                              <input
+                                type="number"
+                                step="any"
+                                value={p.range?.stop !== undefined ? p.range.stop : 0}
+                                onChange={e => updateRangeField(p.name, 'stop', parseFloat(e.target.value) || 0)}
+                                disabled={isParentDisabled}
+                                className="w-20 px-2 py-1 bg-[#0a0f1d] border border-amber-900/60 rounded text-amber-200 font-mono text-xs focus:outline-none focus:border-amber-500"
+                              />
+                            </div>
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-amber-950/60 text-amber-300 border border-amber-800/40">
+                              ~{stepCount} steps
+                            </span>
+                          </div>
+                        )}
+                      </td>
+
+                      {/* Actions */}
+                      <td className="py-2.5 px-2 text-right">
+                        {p.isCustom ? (
+                          <button
+                            onClick={() => handleRemoveParam(p.name)}
+                            className="p-1 rounded text-red-400 hover:text-red-300 hover:bg-red-950/40 transition-colors"
+                            title="Delete custom parameter"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        ) : (
+                          <span className="text-[#334155] text-xs font-mono select-none">—</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      {/* ─────────────────────────────────────────────────────────────
+          SECTION 3: PIPELINE EXECUTION & STATUS
+          ───────────────────────────────────────────────────────────── */}
+      <Card className="p-4 border border-[#232f48]">
+        {/* Phase Progression */}
+        <div className="flex items-center justify-between max-w-2xl mx-auto px-4 mb-4">
           {phases.map((item, idx) => {
             const isCurrent = isRunning && currentPhase === item.phaseNum;
             const isCompleted = currentPhase > item.phaseNum;
@@ -100,39 +894,200 @@ export default function Optimize({
             );
           })}
         </div>
+
+        {/* Action Controls */}
+        <div className="flex flex-wrap items-center gap-3 pt-2 border-t border-[#232f48]">
+          {isRunning ? (
+            <Button onClick={stopScript} variant="blue" className="bg-red-600 hover:bg-red-700">
+              <Square size={16} /> Stop Execution
+            </Button>
+          ) : (
+            <Button onClick={handleRun}>
+              <Play size={16} /> Run Full Pipeline
+            </Button>
+          )}
+
+          <Button 
+            variant="secondary" 
+            onClick={handleSaveParams}
+            className={saveStatus === 'saved' ? 'border-emerald-500 text-emerald-400' : ''}
+          >
+            <Save size={16} /> Save Parameters
+          </Button>
+
+          {onNavigateToSettings && (
+            <Button variant="secondary" onClick={onNavigateToSettings}>
+              <SettingsIcon size={16} /> Configure in Settings
+            </Button>
+          )}
+
+          <Button variant="secondary" onClick={clearLogs}>
+            <Trash2 size={16} /> Clear Log
+          </Button>
+
+          <Button 
+            variant="secondary" 
+            onClick={() => alert(`Optimization runs directory:\n${config.work_dir || "optimization_runs"}`)}
+          >
+            <FolderOpen size={16} /> Open Runs Folder
+          </Button>
+        </div>
       </Card>
 
-      {/* Action Buttons */}
-      <div className="flex flex-wrap items-center gap-3">
-        {isRunning ? (
-          <Button onClick={stopScript} variant="blue" className="bg-red-600 hover:bg-red-700">
-            <Square size={16} /> Stop Execution
-          </Button>
-        ) : (
-          <Button onClick={handleRun}>
-            <Play size={16} /> Run Full Pipeline
-          </Button>
-        )}
-        {onNavigateToSettings && (
-          <Button variant="secondary" onClick={onNavigateToSettings}>
-            <SettingsIcon size={16} /> Configure in Settings
-          </Button>
-        )}
-        <Button variant="secondary" onClick={clearLogs}>
-          <Trash2 size={16} /> Clear Log
-        </Button>
-        <Button 
-          variant="secondary" 
-          onClick={() => alert(`Optimization runs folder:\n${config.work_dir || "optimization_runs"}`)}
-        >
-          <FolderOpen size={16} /> Open Runs Folder
-        </Button>
+      {/* Live Log Viewer */}
+      <div className="min-h-[320px] flex flex-col">
+        <LogViewer logs={logs} title={`Live Pipeline Output ${isRunning ? '(Running MT5 Strategy Tester...)' : ''}`} />
       </div>
 
-      {/* Live Log */}
-      <div className="flex-1 min-h-[300px] flex flex-col">
-        <LogViewer logs={logs} title={`Live Pipeline Output ${isRunning ? '(Running...)' : ''}`} />
-      </div>
+      {/* ─────────────────────────────────────────────────────────────
+          MODAL: ADD CUSTOM PARAMETER
+          ───────────────────────────────────────────────────────────── */}
+      {showAddModal && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-[#141d30] border border-[#2d3a54] rounded-xl w-full max-w-md p-5 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-[#232f48] pb-3">
+              <div className="flex items-center gap-2">
+                <div className="p-1 rounded bg-purple-500/20 text-purple-300">
+                  <Plus size={16} />
+                </div>
+                <h3 className="text-base font-semibold text-white">Add Strategy Parameter</h3>
+              </div>
+              <button 
+                onClick={() => setShowAddModal(false)}
+                className="text-[#8b95a6] hover:text-white text-lg font-bold"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div>
+                <label className="block text-[#8b95a6] mb-1 font-medium">Parameter Name (exact EA input name)</label>
+                <input
+                  type="text"
+                  value={newParam.name || ''}
+                  onChange={e => setNewParam({ ...newParam, name: e.target.value })}
+                  placeholder="e.g. InpBreakoutFilter"
+                  className="w-full px-3 py-2 bg-[#0d1322] border border-[#232f48] rounded-lg text-white font-mono focus:outline-none focus:border-blue-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[#8b95a6] mb-1 font-medium">Label / Description</label>
+                <input
+                  type="text"
+                  value={newParam.label || ''}
+                  onChange={e => setNewParam({ ...newParam, label: e.target.value })}
+                  placeholder="e.g. Breakout Filter Threshold"
+                  className="w-full px-3 py-2 bg-[#0d1322] border border-[#232f48] rounded-lg text-white focus:outline-none focus:border-blue-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[#8b95a6] mb-1 font-medium">Category</label>
+                  <select
+                    value={newParam.category || 'custom'}
+                    onChange={e => setNewParam({ ...newParam, category: e.target.value as any })}
+                    className="w-full px-2.5 py-2 bg-[#0d1322] border border-[#232f48] rounded-lg text-white focus:outline-none focus:border-blue-500"
+                  >
+                    <option value="core">Core Strategy</option>
+                    <option value="timing">Session / Timing</option>
+                    <option value="risk">Risk & Compliance</option>
+                    <option value="indicator">Indicator Filter</option>
+                    <option value="custom">Custom</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[#8b95a6] mb-1 font-medium">Mode</label>
+                  <select
+                    value={newParam.mode || 'fixed'}
+                    onChange={e => setNewParam({ ...newParam, mode: e.target.value as any })}
+                    className="w-full px-2.5 py-2 bg-[#0d1322] border border-[#232f48] rounded-lg text-white focus:outline-none focus:border-blue-500"
+                  >
+                    <option value="fixed">Fixed (Constant)</option>
+                    <option value="optimize">Optimize (Range)</option>
+                  </select>
+                </div>
+              </div>
+
+              {newParam.mode === 'fixed' ? (
+                <div>
+                  <label className="block text-[#8b95a6] mb-1 font-medium">Fixed Value</label>
+                  <input
+                    type="text"
+                    value={newParam.fixedValue !== undefined ? newParam.fixedValue : ''}
+                    onChange={e => setNewParam({ ...newParam, fixedValue: e.target.value })}
+                    placeholder="e.g. 15 or 1.5"
+                    className="w-full px-3 py-2 bg-[#0d1322] border border-[#232f48] rounded-lg text-white font-mono focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+              ) : (
+                <div className="grid grid-cols-3 gap-2">
+                  <div>
+                    <label className="block text-[#8b95a6] mb-1 font-medium">Start</label>
+                    <input
+                      type="number"
+                      step="any"
+                      value={newParam.range?.start || 0}
+                      onChange={e => setNewParam({ 
+                        ...newParam, 
+                        range: { ...newParam.range!, start: parseFloat(e.target.value) || 0 } 
+                      })}
+                      className="w-full px-2.5 py-1.5 bg-[#0d1322] border border-amber-800/60 rounded-lg text-amber-200 font-mono focus:outline-none focus:border-amber-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[#8b95a6] mb-1 font-medium">Step</label>
+                    <input
+                      type="number"
+                      step="any"
+                      value={newParam.range?.step || 1}
+                      onChange={e => setNewParam({ 
+                        ...newParam, 
+                        range: { ...newParam.range!, step: parseFloat(e.target.value) || 1 } 
+                      })}
+                      className="w-full px-2.5 py-1.5 bg-[#0d1322] border border-amber-800/60 rounded-lg text-amber-200 font-mono focus:outline-none focus:border-amber-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[#8b95a6] mb-1 font-medium">Stop</label>
+                    <input
+                      type="number"
+                      step="any"
+                      value={newParam.range?.stop || 10}
+                      onChange={e => setNewParam({ 
+                        ...newParam, 
+                        range: { ...newParam.range!, stop: parseFloat(e.target.value) || 10 } 
+                      })}
+                      className="w-full px-2.5 py-1.5 bg-[#0d1322] border border-amber-800/60 rounded-lg text-amber-200 font-mono focus:outline-none focus:border-amber-500"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-[#232f48]">
+              <button
+                type="button"
+                onClick={() => setShowAddModal(false)}
+                className="px-3 py-1.5 rounded-lg text-xs font-medium text-[#8b95a6] hover:text-white hover:bg-[#1f293d]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleAddCustomParam}
+                disabled={!newParam.name || !newParam.name.trim()}
+                className="px-4 py-1.5 rounded-lg text-xs font-medium bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white"
+              >
+                Add Parameter
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

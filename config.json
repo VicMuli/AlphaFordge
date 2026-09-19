@@ -32,5 +32,52 @@
   "work_dir": "C:\\Users\\HP\\Desktop\\AlphaFordge\\optimization_runs",
   "quant_name": "TRB",
   "research_dir": "C:\\Users\\HP\\Desktop\\AlphaFordge\\researched_strategies",
-  "strategies_dir": "C:\\Users\\HP\\Desktop\\AlphaFordge\\strategies"
+  "strategies_dir": "C:\\Users\\HP\\Desktop\\AlphaFordge\\strategies",
+  "optimization_params": {
+    "TRB": {
+      "indicator_toggles": {
+        "UseTrendFilter": 1,
+        "UseAdxFilter": 1,
+        "UseAtrFilter": 0
+      },
+      "fixed_params": {
+        "LotSize": 0.2,
+        "MinRangePips": 25
+      },
+      "opt_ranges": {
+        "TPMultiplier": [
+          1.5,
+          0.5,
+          4.5
+        ],
+        "PipsOffset": [
+          8,
+          1,
+          20
+        ]
+      }
+    },
+    "active_ea": "TRB",
+    "indicator_toggles": {
+      "UseTrendFilter": 1,
+      "UseAdxFilter": 1,
+      "UseAtrFilter": 0
+    },
+    "fixed_params": {
+      "LotSize": 0.2,
+      "MinRangePips": 25
+    },
+    "opt_ranges": {
+      "TPMultiplier": [
+        1.5,
+        0.5,
+        4.5
+      ],
+      "PipsOffset": [
+        8,
+        1,
+        20
+      ]
+    }
+  }
 }

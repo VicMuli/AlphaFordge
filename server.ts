@@ -53,6 +53,55 @@ async function startServer() {
     }
   });
 
+  // Get and Save optimization parameters
+  app.get("/api/optimization-params", async (req, res) => {
+    try {
+      const configPath = path.join(process.cwd(), 'config.json');
+      let cfg: any = {};
+      if (existsSync(configPath)) {
+        cfg = JSON.parse(await fs.readFile(configPath, 'utf-8'));
+      }
+      const activeEa = (req.query.ea as string) || cfg.active_ea || 'TRB';
+      const optParams = cfg.optimization_params;
+      if (optParams) {
+        const eaData = optParams[activeEa] || (optParams.active_ea === activeEa ? optParams : null);
+        if (eaData) {
+          return res.json({ status: "ok", data: eaData, activeEa });
+        }
+      }
+      res.json({ status: "ok", data: null, activeEa });
+    } catch (e: any) {
+      res.status(500).json({ status: "error", message: e.message });
+    }
+  });
+
+  app.post("/api/optimization-params", async (req, res) => {
+    try {
+      const configPath = path.join(process.cwd(), 'config.json');
+      let cfg: any = {};
+      if (existsSync(configPath)) {
+        cfg = JSON.parse(await fs.readFile(configPath, 'utf-8'));
+      }
+      const { activeEa, payload } = req.body;
+      const targetEa = activeEa || cfg.active_ea || 'TRB';
+      if (!cfg.optimization_params) {
+        cfg.optimization_params = {};
+      }
+      cfg.optimization_params[targetEa] = payload;
+      cfg.optimization_params.active_ea = targetEa;
+      cfg.optimization_params.indicator_toggles = payload.indicator_toggles;
+      cfg.optimization_params.fixed_params = payload.fixed_params;
+      cfg.optimization_params.opt_ranges = payload.opt_ranges;
+      cfg.optimization_params.params = payload.params;
+      cfg.optimization_params.indicators = payload.indicators;
+
+      await fs.writeFile(configPath, JSON.stringify(cfg, null, 2), 'utf-8');
+      res.json({ status: "ok", message: "Optimization parameters saved successfully" });
+    } catch (e: any) {
+      res.status(500).json({ status: "error", message: e.message });
+    }
+  });
+
   // Apply config to scripts (matches app.py _apply_scripts)
   app.post("/api/apply-scripts", async (req, res) => {
     try {

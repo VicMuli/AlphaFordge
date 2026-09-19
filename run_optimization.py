@@ -446,9 +446,98 @@ if _CONFIG_FILE.exists():
     except Exception:
         pass
 
+def _apply_optimization_config_overrides(fixed: dict, ranges: dict, cfg: dict, active_ea: str) -> tuple[dict, dict]:
+    """
+    Applies user-configured fixed parameters and optimization ranges from config.json.
+    Allows adjusting which indicator or core strategy parameters should be fixed
+    and the parameter ranges to optimize.
+    """
+    fixed = dict(fixed)
+    ranges = dict(ranges)
+    opt_cfg = cfg.get("optimization_params", {})
+    if not opt_cfg:
+        return fixed, ranges
+
+    ea_cfg = opt_cfg.get(active_ea, opt_cfg)
+
+    # 1. Indicator toggles
+    toggles = ea_cfg.get("indicator_toggles", {})
+    if isinstance(toggles, dict):
+        for toggle_param, is_active in toggles.items():
+            val = 1 if (is_active is True or is_active == 1 or str(is_active).lower() in ("true", "1", "yes")) else 0
+            fixed[toggle_param] = val
+
+    # 2. Structured params list
+    params_list = ea_cfg.get("params", [])
+    if isinstance(params_list, list):
+        for p in params_list:
+            if not isinstance(p, dict):
+                continue
+            name = p.get("name")
+            if not name:
+                continue
+            mode = p.get("mode", "fixed")
+            if mode == "fixed":
+                ranges.pop(name, None)
+                val = p.get("value", p.get("fixedValue", fixed.get(name, 0)))
+                try:
+                    if isinstance(val, str):
+                        val = float(val) if "." in val else int(val)
+                except ValueError:
+                    pass
+                fixed[name] = val
+            elif mode == "optimize":
+                fixed.pop(name, None)
+                rng = p.get("range", {})
+                if isinstance(rng, dict):
+                    start = float(rng.get("start", 0))
+                    step = float(rng.get("step", 1))
+                    stop = float(rng.get("stop", 10))
+                elif isinstance(rng, (list, tuple)) and len(rng) == 3:
+                    start, step, stop = float(rng[0]), float(rng[1]), float(rng[2])
+                else:
+                    start = float(p.get("start", 0))
+                    step = float(p.get("step", 1))
+                    stop = float(p.get("stop", 10))
+                if start.is_integer() and step.is_integer() and stop.is_integer():
+                    ranges[name] = (int(start), int(step), int(stop))
+                else:
+                    ranges[name] = (start, step, stop)
+
+    # 3. Direct fixed_params overrides
+    if "fixed_params" in ea_cfg and isinstance(ea_cfg["fixed_params"], dict):
+        for k, v in ea_cfg["fixed_params"].items():
+            ranges.pop(k, None)
+            try:
+                if isinstance(v, str):
+                    v = float(v) if "." in v else int(v)
+            except ValueError:
+                pass
+            fixed[k] = v
+
+    # 4. Direct opt_ranges overrides
+    if "opt_ranges" in ea_cfg and isinstance(ea_cfg["opt_ranges"], dict):
+        for k, r in ea_cfg["opt_ranges"].items():
+            if isinstance(r, (list, tuple)) and len(r) == 3:
+                fixed.pop(k, None)
+                start, step, stop = float(r[0]), float(r[1]), float(r[2])
+                if start.is_integer() and step.is_integer() and stop.is_integer():
+                    ranges[k] = (int(start), int(step), int(stop))
+                else:
+                    ranges[k] = (start, step, stop)
+
+    return fixed, ranges
+
+
 WORK_DIR = str(_BASE_WORK_DIR / f"{ACTIVE_EA.lower()}_{SYMBOL_KEY.lower()}")
 
 FIXED_PARAMS, OPT_RANGES = _ea_cfg["build"](SYMBOL_KEY, PIP_SIZE)
+
+# Apply user overrides from config.json (configured in Optimize tab)
+if "_cfg" in locals() and _cfg:
+    FIXED_PARAMS, OPT_RANGES = _apply_optimization_config_overrides(
+        FIXED_PARAMS, OPT_RANGES, _cfg, ACTIVE_EA
+    )
 
 # -- Pipeline settings -----------------------------------------------------
 TOP_N_TRAIN         = 20
@@ -831,6 +920,20 @@ def main():
     print("-" * 72)
 
     opt_set_path = profiles_tester_dir / "run_opt_strategy.set"
+
+    print("=" * 72)
+    print(f"  STRATEGY OPTIMIZATION PARAMETERS ({ACTIVE_EA} | {SYMBOL_KEY})")
+    print("=" * 72)
+    print(f"  [RANGES TO OPTIMIZE] ({len(OPT_RANGES)} parameters varied in MT5):")
+    for k, rng in OPT_RANGES.items():
+        st, sp, so = rng
+        passes = int(abs(so - st) / sp) + 1 if sp > 0 else 1
+        print(f"    • {k}: {st} -> {so} (step: {sp} | ~{passes} values)")
+    print(f"  [FIXED PARAMETERS] ({len(FIXED_PARAMS)} parameters held constant):")
+    for k in sorted(FIXED_PARAMS.keys()):
+        print(f"    • {k} = {FIXED_PARAMS[k]}")
+    print("=" * 72)
+
     generate_optimization_set_file(
         fixed_params=FIXED_PARAMS,
         ranges=OPT_RANGES,
