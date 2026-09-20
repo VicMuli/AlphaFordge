@@ -41,6 +41,8 @@ from walk_forward import (
 from strategy_builder import (
     check_train_criteria,
     check_oos_criteria,
+    check_phase_criteria,
+    get_qualification_criteria,
     _normalise_opt_row,
     _extract_opt_ea_params,
     _deals_to_trades,
@@ -539,6 +541,8 @@ if "_cfg" in locals() and _cfg:
         FIXED_PARAMS, OPT_RANGES, _cfg, ACTIVE_EA
     )
 
+CRITERIA_CFG = _cfg.get("qualification_criteria", {}) if "_cfg" in locals() and _cfg else {}
+
 # -- Pipeline settings -----------------------------------------------------
 TOP_N_TRAIN         = 20
 OPTIMIZATION_MODE   = 2
@@ -653,10 +657,25 @@ def _gate(result: dict | None, label: str, months_span: float, is_train: bool = 
     deals = result.get("deals")
     trades = _deals_to_trades(deals) if (deals is not None and not deals.empty) else None
     
-    if is_train:
-        passed, reasons = check_train_criteria(curated, starting_capital=DEPOSIT, months_span=months_span)
+    label_upper = label.strip().upper()
+    if is_train or label_upper == "TRAIN":
+        phase = "train"
+    elif label_upper in ("VAL", "VALIDATION"):
+        phase = "val"
+    elif label_upper in ("HOLDOUT", "HOLD_OUT"):
+        phase = "holdout"
     else:
-        passed, reasons = check_oos_criteria(curated, trades=trades, months_span=months_span, starting_capital=DEPOSIT)
+        phase = "val"
+
+    crit = CRITERIA_CFG.get(phase) if "CRITERIA_CFG" in globals() else None
+    passed, reasons = check_phase_criteria(
+        phase=phase,
+        row_or_curated=curated,
+        trades=trades,
+        starting_capital=DEPOSIT,
+        months_span=months_span,
+        criteria=crit,
+    )
         
     status = "PASS" if passed else f"FAIL ({', '.join(reasons)})"
     print(f"  [{label:8s}] {_fmt_curated(curated)}  ->  {status}")
@@ -968,10 +987,19 @@ def main():
     csv_path = run_dir / "opt_all_passes.csv"
     train_df.to_csv(csv_path, index=False)
 
+    print(f"\n{'='*72}\nCANDIDATE QUALIFICATION GATES (Configured via Optimize Tab)\n{'='*72}")
+    for ph in ("train", "val", "holdout"):
+        c = get_qualification_criteria(ph, CRITERIA_CFG.get(ph) if "CRITERIA_CFG" in globals() else None)
+        print(f"  [{ph.upper():7s}] Gain% >= {c['min_profit_gain_pct']:.1f}% | MaxDD <= {c['max_drawdown_pct']:.1f}% | "
+              f"PF >= {c['min_profit_factor']:.2f} | Sharpe >= {c['min_sharpe_ratio']:.2f} | "
+              f"Ret/DD >= {c['min_ret_dd_ratio']:.2f} | Trades/Mo >= {c['min_avg_trades_month']:.1f}")
+    print(f"{'='*72}")
+
     candidates = []
+    train_crit = CRITERIA_CFG.get("train") if "CRITERIA_CFG" in globals() else None
     for _, row in train_df.iterrows():
         row_dict = _normalise_opt_row(row)
-        passed, _ = check_train_criteria(row_dict)
+        passed, _ = check_train_criteria(row_dict, starting_capital=DEPOSIT, months_span=TRAIN_MONTHS, criteria=train_crit)
         if passed:
             candidates.append(row_dict)
 

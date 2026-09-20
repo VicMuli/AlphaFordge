@@ -885,15 +885,17 @@ class OptimizePanel(BasePanel):
         # Buttons
         btn_row = ctk.CTkFrame(self, fg_color="transparent")
         btn_row.grid(row=3, column=0, sticky="ew", padx=32, pady=(20, 0))
-        make_btn(btn_row, "▶  Run Full Pipeline", self._run, width=200).pack(side="left")
+        make_btn(btn_row, "▶  Run Full Pipeline", self._run, width=190).pack(side="left")
         make_btn(btn_row, "🔧  Parameters & Ranges", self._open_param_dialog,
-                 color=C["accent"], hover=C["hover"], width=200).pack(side="left", padx=(12, 0))
-        make_btn(btn_row, "⚙  Configure in Settings",
+                 color=C["accent"], hover=C["hover"], width=190).pack(side="left", padx=(10, 0))
+        make_btn(btn_row, "🎯  Qualification Gates", self._open_criteria_dialog,
+                 color=C["accent"], hover=C["hover"], width=180).pack(side="left", padx=(10, 0))
+        make_btn(btn_row, "⚙  Settings",
                  lambda: self.app.show_panel("settings"),
-                 color=C["card"], hover=C["hover"], width=190).pack(side="left", padx=(12, 0))
-        make_btn(btn_row, "📂 Open Runs Folder",
+                 color=C["card"], hover=C["hover"], width=130).pack(side="left", padx=(10, 0))
+        make_btn(btn_row, "📂 Runs Folder",
                  lambda: os.startfile(self.cfg.get("work_dir", str(SCRIPT_DIR))),
-                 color=C["card"], hover=C["hover"], width=170).pack(side="left", padx=(12, 0))
+                 color=C["card"], hover=C["hover"], width=140).pack(side="left", padx=(10, 0))
 
         # Log
         log_card = make_card(self)
@@ -1110,6 +1112,171 @@ class OptimizePanel(BasePanel):
                 status_lbl.configure(text="✘  Save failed", text_color=C["danger"])
 
         make_btn(footer, "💾 Save & Apply", _save_params, width=160).pack(side="right", padx=(8, 0))
+        make_btn(footer, "Close", dlg.destroy, color=C["card"], hover=C["hover"], width=100).pack(side="right")
+
+    def _open_criteria_dialog(self):
+        dlg = ctk.CTkToplevel(self)
+        dlg.title("Candidate Qualification Gates (Pass/Fail Thresholds)")
+        dlg.geometry("900x720")
+        dlg.configure(fg_color=C["bg"])
+        dlg.grab_set()
+
+        make_section_header(dlg, "🎯 Candidate Qualification Gates",
+            "Adjust candidate survival thresholds for Train (in-sample optimization), Validation (OOS 1), and Holdout (OOS 2)"
+        ).pack(fill="x", padx=24, pady=(20, 10))
+
+        scroll = ctk.CTkScrollableFrame(dlg, fg_color=C["panel"], corner_radius=10)
+        scroll.pack(fill="both", expand=True, padx=24, pady=10)
+
+        raw_cfg = self.app.config.get("qualification_criteria", {})
+        default_train = {
+            "min_profit_gain_pct": 30.0,
+            "max_drawdown_pct": 20.0,
+            "min_avg_trades_month": 1.0,
+            "min_sharpe_ratio": 0.50,
+            "min_ret_dd_ratio": 1.30,
+            "min_profit_factor": 1.10,
+            "min_net_profit": 0.0,
+            "min_total_trades": 0,
+            "min_win_rate_pct": 0.0,
+        }
+        default_oos = {
+            "min_profit_gain_pct": 15.0,
+            "max_drawdown_pct": 20.0,
+            "min_avg_trades_month": 1.0,
+            "min_sharpe_ratio": 0.50,
+            "min_ret_dd_ratio": 1.00,
+            "min_profit_factor": 1.00,
+            "min_net_profit": 0.0,
+            "min_total_trades": 0,
+            "min_win_rate_pct": 0.0,
+        }
+
+        train_cfg = dict(default_train)
+        train_cfg.update(raw_cfg.get("train", {}))
+        val_cfg = dict(default_oos)
+        val_cfg.update(raw_cfg.get("val", {}))
+        holdout_cfg = dict(default_oos)
+        holdout_cfg.update(raw_cfg.get("holdout", {}))
+
+        metrics = [
+            ("min_profit_gain_pct", "Net Profit Gain %", "%", "Min % return over starting capital"),
+            ("max_drawdown_pct", "Max Drawdown %", "%", "Maximum allowable drawdown % (lower is stricter)"),
+            ("min_profit_factor", "Profit Factor (PF)", "ratio", "Gross wins / gross losses (1.0 = break-even)"),
+            ("min_sharpe_ratio", "Sharpe Ratio", "ratio", "Risk-adjusted return vs volatility"),
+            ("min_ret_dd_ratio", "Return / DD Ratio", "ratio", "Recovery factor: Net profit / Max drawdown"),
+            ("min_avg_trades_month", "Avg Trades / Month", "tr/mo", "Minimum monthly trade frequency density"),
+            ("min_net_profit", "Net Profit Floor", "$", "Dollar threshold (0 = positive balance)"),
+            ("min_total_trades", "Min Total Trades", "trades", "Sample size floor (0 = disabled)"),
+            ("min_win_rate_pct", "Min Win Rate %", "%", "Win percentage threshold (0 = disabled)"),
+        ]
+
+        preset_frame = ctk.CTkFrame(scroll, fg_color="transparent")
+        preset_frame.pack(fill="x", padx=16, pady=(10, 16))
+        make_label(preset_frame, "⚡ Quick Presets:", font=FB, color=C["sub"]).pack(side="left", padx=(0, 8))
+
+        entries = {"train": {}, "val": {}, "holdout": {}}
+
+        def _apply_preset(t_gain, t_dd, t_pf, t_sharpe, t_retdd, t_tpm, v_gain, v_dd, v_pf, v_sharpe, v_retdd, v_tpm):
+            p_map = {
+                "train": {"min_profit_gain_pct": t_gain, "max_drawdown_pct": t_dd, "min_profit_factor": t_pf, "min_sharpe_ratio": t_sharpe, "min_ret_dd_ratio": t_retdd, "min_avg_trades_month": t_tpm},
+                "val": {"min_profit_gain_pct": v_gain, "max_drawdown_pct": v_dd, "min_profit_factor": v_pf, "min_sharpe_ratio": v_sharpe, "min_ret_dd_ratio": v_retdd, "min_avg_trades_month": v_tpm},
+                "holdout": {"min_profit_gain_pct": v_gain, "max_drawdown_pct": v_dd, "min_profit_factor": v_pf, "min_sharpe_ratio": v_sharpe, "min_ret_dd_ratio": v_retdd, "min_avg_trades_month": v_tpm},
+            }
+            for phase, f_dict in p_map.items():
+                for k, val in f_dict.items():
+                    if k in entries[phase]:
+                        entries[phase][k].delete(0, "end")
+                        entries[phase][k].insert(0, str(val))
+
+        make_btn(preset_frame, "Balanced", lambda: _apply_preset(30.0, 20.0, 1.10, 0.50, 1.30, 1.0, 15.0, 20.0, 1.00, 0.50, 1.00, 1.0),
+                 color=C["card"], hover=C["hover"], width=90).pack(side="left", padx=4)
+        make_btn(preset_frame, "Prop Firm (8% DD)", lambda: _apply_preset(20.0, 8.0, 1.35, 0.90, 2.50, 2.0, 10.0, 8.0, 1.20, 0.75, 1.50, 1.5),
+                 color=C["card"], hover=C["hover"], width=130).pack(side="left", padx=4)
+        make_btn(preset_frame, "High Frequency", lambda: _apply_preset(25.0, 15.0, 1.15, 0.60, 1.50, 4.0, 12.0, 15.0, 1.05, 0.50, 1.10, 3.5),
+                 color=C["card"], hover=C["hover"], width=120).pack(side="left", padx=4)
+
+        def _copy_train_to_oos():
+            for k in entries["train"]:
+                val_str = entries["train"][k].get().strip()
+                try:
+                    f_val = float(val_str)
+                    if k == "min_profit_gain_pct":
+                        decayed = round(f_val * 0.5, 1)
+                    elif k in ("min_sharpe_ratio", "min_ret_dd_ratio", "min_profit_factor"):
+                        decayed = round(max(1.0 if k == "min_profit_factor" else 0.5, f_val * 0.8), 2)
+                    elif k == "min_avg_trades_month":
+                        decayed = round(f_val * 0.8, 1)
+                    else:
+                        decayed = f_val
+                    decay_str = str(int(decayed) if decayed.is_integer() else decayed)
+                except ValueError:
+                    decay_str = val_str
+
+                for oos_phase in ("val", "holdout"):
+                    entries[oos_phase][k].delete(0, "end")
+                    entries[oos_phase][k].insert(0, decay_str)
+
+        make_btn(preset_frame, "📋 Copy Train to OOS (50% Decay)", _copy_train_to_oos,
+                 color=C["accent"], hover=C["hover"], width=190).pack(side="left", padx=(12, 4))
+
+        grid_frame = ctk.CTkFrame(scroll, fg_color="transparent")
+        grid_frame.pack(fill="x", padx=16, pady=8)
+        grid_frame.columnconfigure(0, weight=2)
+        grid_frame.columnconfigure(1, weight=1)
+        grid_frame.columnconfigure(2, weight=1)
+        grid_frame.columnconfigure(3, weight=1)
+
+        make_label(grid_frame, "Metric Name & Purpose", font=FB, color=C["sub"]).grid(row=0, column=0, sticky="w", pady=4)
+        make_label(grid_frame, "🏋️ Train (In-Sample)", font=FB, color=C["accent"]).grid(row=0, column=1, pady=4)
+        make_label(grid_frame, "🔬 Validation (OOS 1)", font=FB, color=C["success"]).grid(row=0, column=2, pady=4)
+        make_label(grid_frame, "🛡️ Holdout (OOS 2)", font=FB, color=C["sub"]).grid(row=0, column=3, pady=4)
+
+        for row_idx, (m_key, m_label, m_unit, m_desc) in enumerate(metrics, start=1):
+            rf = ctk.CTkFrame(grid_frame, fg_color="transparent")
+            rf.grid(row=row_idx, column=0, sticky="w", pady=6)
+            make_label(rf, f"{m_label} ({m_unit})", font=FB).pack(anchor="w")
+            make_label(rf, m_desc, font=FSM, color=C["sub"]).pack(anchor="w")
+
+            e_train = ctk.CTkEntry(grid_frame, width=90, justify="center")
+            e_train.insert(0, str(train_cfg.get(m_key, default_train.get(m_key, 0))))
+            e_train.grid(row=row_idx, column=1, padx=6, pady=6)
+            entries["train"][m_key] = e_train
+
+            e_val = ctk.CTkEntry(grid_frame, width=90, justify="center")
+            e_val.insert(0, str(val_cfg.get(m_key, default_oos.get(m_key, 0))))
+            e_val.grid(row=row_idx, column=2, padx=6, pady=6)
+            entries["val"][m_key] = e_val
+
+            e_holdout = ctk.CTkEntry(grid_frame, width=90, justify="center")
+            e_holdout.insert(0, str(holdout_cfg.get(m_key, default_oos.get(m_key, 0))))
+            e_holdout.grid(row=row_idx, column=3, padx=6, pady=6)
+            entries["holdout"][m_key] = e_holdout
+
+        footer = ctk.CTkFrame(dlg, fg_color="transparent")
+        footer.pack(fill="x", padx=24, pady=16)
+
+        status_lbl = make_label(footer, "", font=FB, color=C["success"])
+        status_lbl.pack(side="left", padx=8)
+
+        def _save_criteria():
+            new_criteria = {"train": {}, "val": {}, "holdout": {}}
+            for phase in ("train", "val", "holdout"):
+                for m_key in entries[phase]:
+                    val_str = entries[phase][m_key].get().strip()
+                    try:
+                        v = float(val_str)
+                        new_criteria[phase][m_key] = int(v) if v.is_integer() else v
+                    except ValueError:
+                        new_criteria[phase][m_key] = 0.0
+
+            self.app.config["qualification_criteria"] = new_criteria
+            if save_config(self.app.config):
+                status_lbl.configure(text="✔  Qualification Gates saved to config.json!", text_color=C["success"])
+            else:
+                status_lbl.configure(text="✘  Save failed", text_color=C["danger"])
+
+        make_btn(footer, "💾 Save & Apply Gates", _save_criteria, width=180).pack(side="right", padx=(8, 0))
         make_btn(footer, "Close", dlg.destroy, color=C["card"], hover=C["hover"], width=100).pack(side="right")
 
 

@@ -79,5 +79,40 @@
         20
       ]
     }
+  },
+  "qualification_criteria": {
+    "train": {
+      "min_profit_gain_pct": 30.0,
+      "max_drawdown_pct": 20.0,
+      "min_avg_trades_month": 1.0,
+      "min_sharpe_ratio": 0.50,
+      "min_ret_dd_ratio": 1.30,
+      "min_profit_factor": 1.10,
+      "min_net_profit": 0.0,
+      "min_total_trades": 0,
+      "min_win_rate_pct": 0.0
+    },
+    "val": {
+      "min_profit_gain_pct": 15.0,
+      "max_drawdown_pct": 20.0,
+      "min_avg_trades_month": 1.0,
+      "min_sharpe_ratio": 0.50,
+      "min_ret_dd_ratio": 1.00,
+      "min_profit_factor": 1.00,
+      "min_net_profit": 0.0,
+      "min_total_trades": 0,
+      "min_win_rate_pct": 0.0
+    },
+    "holdout": {
+      "min_profit_gain_pct": 15.0,
+      "max_drawdown_pct": 20.0,
+      "min_avg_trades_month": 1.0,
+      "min_sharpe_ratio": 0.50,
+      "min_ret_dd_ratio": 1.00,
+      "min_profit_factor": 1.00,
+      "min_net_profit": 0.0,
+      "min_total_trades": 0,
+      "min_win_rate_pct": 0.0
+    }
   }
 }

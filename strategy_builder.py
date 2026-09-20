@@ -139,23 +139,96 @@ def _months_between(start_str: str, end_str: str) -> float:
         return 0.0
 
 
-def check_train_criteria(row: dict, starting_capital: float = 100_000, months_span: float = 96.0) -> tuple:
+def get_qualification_criteria(phase: str = "train", custom_criteria: dict = None) -> dict:
     """
-    Applied to a single row from parse_optimization_results() — the raw
-    metrics MT5 writes into the optimization XML.
-
-    Expected keys (as MT5 names them in the XML):
-        'Profit Factor', 'Sharpe Ratio', 'Max Drawdown (%)', 'Recovery Factor', 'Profit'
-
-    Returns (passed: bool, reasons: list[str])
+    Returns the qualification criteria dict for a given phase ('train', 'val', 'holdout').
+    Reads from config.json if available, falling back to defaults.
     """
-    # If passed an evaluation result containing a 'curated' dict, extract it
-    if "curated" in row and isinstance(row["curated"], dict):
-        curated_dict = row["curated"]
-        trades = row.get("trades")
+    defaults = {
+        "train": {
+            "min_profit_gain_pct": 30.0,
+            "max_drawdown_pct": 20.0,
+            "min_avg_trades_month": 1.0,
+            "min_sharpe_ratio": 0.50,
+            "min_ret_dd_ratio": 1.30,
+            "min_profit_factor": 1.10,
+            "min_net_profit": 0.0,
+            "min_total_trades": 0,
+            "min_win_rate_pct": 0.0,
+        },
+        "val": {
+            "min_profit_gain_pct": 15.0,
+            "max_drawdown_pct": 20.0,
+            "min_avg_trades_month": 1.0,
+            "min_sharpe_ratio": 0.50,
+            "min_ret_dd_ratio": 1.00,
+            "min_profit_factor": 1.00,
+            "min_net_profit": 0.0,
+            "min_total_trades": 0,
+            "min_win_rate_pct": 0.0,
+        },
+        "holdout": {
+            "min_profit_gain_pct": 15.0,
+            "max_drawdown_pct": 20.0,
+            "min_avg_trades_month": 1.0,
+            "min_sharpe_ratio": 0.50,
+            "min_ret_dd_ratio": 1.00,
+            "min_profit_factor": 1.00,
+            "min_net_profit": 0.0,
+            "min_total_trades": 0,
+            "min_win_rate_pct": 0.0,
+        },
+    }
+    phase_key = phase.lower()
+    if phase_key in ("validation", "val"):
+        phase_key = "val"
+    elif phase_key in ("hold_out", "holdout"):
+        phase_key = "holdout"
     else:
-        curated_dict = row
-        trades = None
+        phase_key = "train"
+
+    crit = dict(defaults.get(phase_key, defaults["train"]))
+
+    # Load from config.json if present
+    cfg_file = Path(__file__).resolve().parent / "config.json"
+    if cfg_file.exists():
+        try:
+            with open(cfg_file, "r") as f:
+                cfg_data = json.load(f)
+                qc = cfg_data.get("qualification_criteria", {})
+                if qc and isinstance(qc, dict):
+                    phase_qc = qc.get(phase_key)
+                    if phase_qc and isinstance(phase_qc, dict):
+                        crit.update(phase_qc)
+        except Exception:
+            pass
+
+    if custom_criteria and isinstance(custom_criteria, dict):
+        crit.update(custom_criteria)
+
+    return crit
+
+
+def check_phase_criteria(
+    phase: str,
+    row_or_curated: dict,
+    trades: pd.DataFrame = None,
+    starting_capital: float = 100_000,
+    months_span: float = 36.0,
+    criteria: dict = None,
+) -> tuple[bool, list[str]]:
+    """
+    Evaluates candidate metrics for a specific testing phase ('train', 'val', 'holdout').
+    Supports both MT5 XML optimization pass rows and curated summary dicts.
+    """
+    crit = get_qualification_criteria(phase, criteria)
+
+    if "curated" in row_or_curated and isinstance(row_or_curated["curated"], dict):
+        curated_dict = row_or_curated["curated"]
+        trades_df = row_or_curated.get("trades", trades)
+    else:
+        curated_dict = row_or_curated
+        trades_df = trades
 
     def _f(key, default=None):
         v = curated_dict.get(key, default)
@@ -164,107 +237,97 @@ def check_train_criteria(row: dict, starting_capital: float = 100_000, months_sp
         except (TypeError, ValueError):
             return default
 
-    pf       = _f("Profit Factor")
-    sharpe   = _f("Sharpe Ratio")
-    max_dd   = _f("Max Drawdown (%)") or _f("Max Balance Drawdown (%)")
-    recovery = _f("Recovery Factor") or _f("Return/Drawdown Ratio")
-    profit   = _f("Profit") or _f("Net Profit")
-    total_trades = _f("Trades") or _f("Total Trades")
-
-    # ── Qualification thresholds (Train) ───────────────────────────────────
-    # Max Drawdown <= 20%  |  Avg Trades/Month >= 1  |  Min Gain >= 30%
-    reasons = []
-    if pf is None or pf < 1.10:
-        reasons.append(f"PF ({pf}) < 1.10")
-    if sharpe is None or sharpe < 0.50:
-        reasons.append(f"Sharpe ({sharpe}) < 0.50")
-    if max_dd is None or max_dd > 20.0:
-        reasons.append(f"MaxDD ({max_dd}%) > 20.0%")
-    if recovery is None or recovery < 1.3:
-        reasons.append(f"RecoveryFactor ({recovery}) < 1.3")
-    if profit is None or profit <= 0:
-        reasons.append(f"Net Profit ({profit}) <= 0")
-
-    # Enforce min of 1 trades per month
-    avg_tpm = 0.0
-    if trades is not None and not trades.empty:
-        avg_tpm = _avg_trades_per_month(trades)
-    elif total_trades is not None:
-        avg_tpm = total_trades / months_span
-    if avg_tpm < 1.0:
-        reasons.append(f"Avg Trades/Month ({avg_tpm:.2f}) < 1.0")
-
-    # Enforce min of 40% gain in train data
-    gain_pct = 0.0
-    if "Net Profit %" in curated_dict and curated_dict["Net Profit %"] is not None:
-        gain_pct = curated_dict["Net Profit %"]
-    elif profit is not None and starting_capital > 0:
-        gain_pct = (profit / starting_capital) * 100
-    if gain_pct < 30.0:
-        reasons.append(f"Train Gain ({gain_pct:.1f}%) < 30.0%")
-
-    return len(reasons) == 0, reasons
-
-
-def check_oos_criteria(curated: dict, trades: pd.DataFrame = None, months_span: float = 36.0, starting_capital: float = 100_000) -> tuple:
-    """
-    Applied to a curated summary dict from report_analysis.compute_curated_summary().
-    Used for both Validation and Holdout single-test reports.
-
-    Returns (passed: bool, reasons: list[str])
-    """
-    # If passed an evaluation result containing a 'curated' dict, extract it
-    if "curated" in curated and isinstance(curated["curated"], dict):
-        curated_dict = curated["curated"]
-        trades_df = curated.get("trades")
-    else:
-        curated_dict = curated
-        trades_df = trades
-
-    def _f(key):
-        v = curated_dict.get(key)
-        try:
-            return float(v) if v is not None else None
-        except (TypeError, ValueError):
-            return None
-
-    pf       = _f("Profit Factor")
-    sharpe   = _f("Sharpe Ratio")
-    max_dd   = _f("Max Balance Drawdown (%)") or _f("Max Drawdown (%)")
-    net_p    = _f("Net Profit")
+    pf = _f("Profit Factor")
+    sharpe = _f("Sharpe Ratio")
+    max_dd = _f("Max Drawdown (%)") or _f("Max Balance Drawdown (%)")
+    ret_dd = _f("Return/Drawdown Ratio") or _f("Recovery Factor")
+    profit = _f("Profit") or _f("Net Profit")
     total_trades = _f("Total Trades") or _f("Trades")
+    win_rate = _f("Win Rate %")
 
-    # ── Qualification thresholds (Val / Holdout) ────────────────────────────
-    # Max Drawdown <= 20%  |  Avg Trades/Month >= 1  |  Min Gain >= 15%
     reasons = []
-    if pf is None or pf < 1.0:
-        reasons.append(f"PF ({pf}) < 1.0")
-    if sharpe is None or sharpe < 0.50:
-        reasons.append(f"Sharpe ({sharpe}) < 0.50")
-    if max_dd is None or max_dd > 20.0:
-        reasons.append(f"MaxDD ({max_dd}%) > 20.0%")
-    if net_p is None or net_p <= 0:
-        reasons.append(f"Net Profit ({net_p}) <= 0")
 
-    # Enforce min of 1 trades per month
+    # 1. Profit Factor
+    min_pf = crit.get("min_profit_factor")
+    if min_pf is not None and float(min_pf) > 0:
+        if pf is None or pf < float(min_pf):
+            reasons.append(f"PF ({f'{pf:.2f}' if pf is not None else 'N/A'}) < {float(min_pf):.2f}")
+
+    # 2. Sharpe Ratio
+    min_sharpe = crit.get("min_sharpe_ratio")
+    if min_sharpe is not None and float(min_sharpe) > 0:
+        if sharpe is None or sharpe < float(min_sharpe):
+            reasons.append(f"Sharpe ({f'{sharpe:.2f}' if sharpe is not None else 'N/A'}) < {float(min_sharpe):.2f}")
+
+    # 3. Max Drawdown %
+    max_dd_limit = crit.get("max_drawdown_pct")
+    if max_dd_limit is not None and float(max_dd_limit) > 0:
+        if max_dd is None or max_dd > float(max_dd_limit):
+            reasons.append(f"MaxDD ({f'{max_dd:.1f}%' if max_dd is not None else 'N/A'}) > {float(max_dd_limit):.1f}%")
+
+    # 4. Return/DD Ratio (Recovery Factor)
+    min_ret_dd = crit.get("min_ret_dd_ratio")
+    if min_ret_dd is not None and float(min_ret_dd) > 0:
+        if ret_dd is None or ret_dd < float(min_ret_dd):
+            reasons.append(f"Ret/DD ({f'{ret_dd:.2f}' if ret_dd is not None else 'N/A'}) < {float(min_ret_dd):.2f}")
+
+    # 5. Net Profit
+    min_net_profit = crit.get("min_net_profit", 0.0)
+    if min_net_profit is not None:
+        if profit is None or profit <= float(min_net_profit):
+            reasons.append(f"Net Profit (${f'{profit:,.0f}' if profit is not None else '0'}) <= ${float(min_net_profit):,.0f}")
+
+    # 6. Net Profit Gain %
+    gain_pct = _f("Net Profit %")
+    if gain_pct is None and profit is not None and starting_capital > 0:
+        gain_pct = (profit / starting_capital) * 100
+    min_gain = crit.get("min_profit_gain_pct")
+    if min_gain is not None and float(min_gain) > 0:
+        if gain_pct is None or gain_pct < float(min_gain):
+            phase_name = "Train" if phase == "train" else ("Val" if phase == "val" else "Holdout")
+            reasons.append(f"{phase_name} Gain ({f'{gain_pct:.1f}%' if gain_pct is not None else '0.0%'}) < {float(min_gain):.1f}%")
+
+    # 7. Avg Trades Per Month
     avg_tpm = 0.0
     if trades_df is not None and not trades_df.empty:
         avg_tpm = _avg_trades_per_month(trades_df)
-    elif total_trades is not None and months_span is not None:
-        avg_tpm = total_trades / months_span
-    if avg_tpm < 1.0:
-        reasons.append(f"Avg Trades/Month ({avg_tpm:.2f}) < 1.0")
+    elif total_trades is not None and months_span > 0:
+        avg_tpm = total_trades / max(months_span, 0.01)
+    min_tpm = crit.get("min_avg_trades_month")
+    if min_tpm is not None and float(min_tpm) > 0:
+        if avg_tpm < float(min_tpm):
+            reasons.append(f"Avg Trades/Mo ({avg_tpm:.2f}) < {float(min_tpm):.1f}")
 
-    # Enforce min of 20% gain in val and holdout data
-    gain_pct = 0.0
-    if "Net Profit %" in curated_dict and curated_dict["Net Profit %"] is not None:
-        gain_pct = curated_dict["Net Profit %"]
-    elif net_p is not None and starting_capital > 0:
-        gain_pct = (net_p / starting_capital) * 100
-    if gain_pct < 15.0:
-        reasons.append(f"OOS Gain ({gain_pct:.1f}%) < 15.0%")
+    # 8. Total Trades (Optional)
+    min_trades = crit.get("min_total_trades")
+    if min_trades is not None and float(min_trades) > 0:
+        if total_trades is None or total_trades < float(min_trades):
+            reasons.append(f"Total Trades ({int(total_trades) if total_trades is not None else 0}) < {int(min_trades)}")
+
+    # 9. Win Rate % (Optional)
+    min_wr = crit.get("min_win_rate_pct")
+    if min_wr is not None and float(min_wr) > 0:
+        if win_rate is None or win_rate < float(min_wr):
+            reasons.append(f"Win Rate ({f'{win_rate:.1f}%' if win_rate is not None else '0.0%'}) < {float(min_wr):.1f}%")
 
     return len(reasons) == 0, reasons
+
+
+def check_train_criteria(row: dict, starting_capital: float = 100_000, months_span: float = 96.0, criteria: dict = None) -> tuple:
+    """
+    Applied to a single row from parse_optimization_results() or curated summary dict.
+    Returns (passed: bool, reasons: list[str])
+    """
+    return check_phase_criteria("train", row, None, starting_capital, months_span, criteria)
+
+
+def check_oos_criteria(curated: dict, trades: pd.DataFrame = None, months_span: float = 36.0, starting_capital: float = 100_000, criteria: dict = None, phase: str = "val") -> tuple:
+    """
+    Applied to a curated summary dict for Validation and Holdout single-test reports.
+    Returns (passed: bool, reasons: list[str])
+    """
+    return check_phase_criteria(phase, curated, trades, starting_capital, months_span, criteria)
+
 
 
 # ---------------------------------------------------------------------------
@@ -841,7 +904,7 @@ def run_mt5_strategy_search(
         holdout_deals = holdout_result.get("deals")
         holdout_trades = _deals_to_trades(holdout_deals) if holdout_deals is not None else None
         holdout_months = _months_between(holdout_from, holdout_to) or 30.0
-        passed, reasons = check_oos_criteria(curated, trades=holdout_trades, months_span=holdout_months, starting_capital=deposit)
+        passed, reasons = check_oos_criteria(curated, trades=holdout_trades, months_span=holdout_months, starting_capital=deposit, phase="holdout")
         status = "PASS" if passed else f"FAIL ({', '.join(reasons)})"
         print(f"    {_fmt_curated(curated, 'Holdout')}  ->  {status}")
 

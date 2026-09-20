@@ -102,6 +102,73 @@ async function startServer() {
     }
   });
 
+  // Candidate qualification criteria for Train, Validation, and Holdout
+  const DEFAULT_QUALIFICATION_CRITERIA = {
+    train: {
+      min_profit_gain_pct: 30.0,
+      max_drawdown_pct: 20.0,
+      min_avg_trades_month: 1.0,
+      min_sharpe_ratio: 0.50,
+      min_ret_dd_ratio: 1.30,
+      min_profit_factor: 1.10,
+      min_net_profit: 0.0,
+      min_total_trades: 0,
+      min_win_rate_pct: 0.0,
+    },
+    val: {
+      min_profit_gain_pct: 15.0,
+      max_drawdown_pct: 20.0,
+      min_avg_trades_month: 1.0,
+      min_sharpe_ratio: 0.50,
+      min_ret_dd_ratio: 1.00,
+      min_profit_factor: 1.00,
+      min_net_profit: 0.0,
+      min_total_trades: 0,
+      min_win_rate_pct: 0.0,
+    },
+    holdout: {
+      min_profit_gain_pct: 15.0,
+      max_drawdown_pct: 20.0,
+      min_avg_trades_month: 1.0,
+      min_sharpe_ratio: 0.50,
+      min_ret_dd_ratio: 1.00,
+      min_profit_factor: 1.00,
+      min_net_profit: 0.0,
+      min_total_trades: 0,
+      min_win_rate_pct: 0.0,
+    },
+  };
+
+  app.get("/api/qualification-criteria", async (req, res) => {
+    try {
+      const configPath = path.join(process.cwd(), 'config.json');
+      let cfg: any = {};
+      if (existsSync(configPath)) {
+        cfg = JSON.parse(await fs.readFile(configPath, 'utf-8'));
+      }
+      const criteria = cfg.qualification_criteria || DEFAULT_QUALIFICATION_CRITERIA;
+      res.json({ status: "ok", criteria });
+    } catch (e: any) {
+      res.status(500).json({ status: "error", message: e.message });
+    }
+  });
+
+  app.post("/api/qualification-criteria", async (req, res) => {
+    try {
+      const configPath = path.join(process.cwd(), 'config.json');
+      let cfg: any = {};
+      if (existsSync(configPath)) {
+        cfg = JSON.parse(await fs.readFile(configPath, 'utf-8'));
+      }
+      const criteria = req.body.criteria || req.body;
+      cfg.qualification_criteria = criteria;
+      await fs.writeFile(configPath, JSON.stringify(cfg, null, 2), 'utf-8');
+      res.json({ status: "ok", message: "Candidate qualification criteria saved successfully", criteria });
+    } catch (e: any) {
+      res.status(500).json({ status: "error", message: e.message });
+    }
+  });
+
   // Apply config to scripts (matches app.py _apply_scripts)
   app.post("/api/apply-scripts", async (req, res) => {
     try {
