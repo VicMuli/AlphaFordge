@@ -14,7 +14,8 @@ import {
   GitBranch,
   Laptop,
   CheckCircle2,
-  X
+  X,
+  Dices
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -22,6 +23,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import Dashboard from './components/Dashboard';
 import Research from './components/Research';
 import Optimize from './components/Optimize';
+import { MonteCarlo } from './components/MonteCarlo';
 import WalkForward from './components/WalkForward';
 import FullBacktest from './components/FullBacktest';
 import Portfolio from './components/Portfolio';
@@ -32,6 +34,7 @@ const NAV_ITEMS = [
   { id: 'dashboard', label: 'Dashboard', icon: Home, prefix: '🏠' },
   { id: 'research', label: 'Research', icon: Microscope, prefix: '🔬' },
   { id: 'optimize', label: 'Optimize', icon: SettingsIcon, prefix: '⚙' },
+  { id: 'montecarlo', label: 'Monte Carlo', icon: Dices, prefix: '🎲' },
   { id: 'walkforward', label: 'Walk Forward', icon: TrendingUp, prefix: '📈' },
   { id: 'fullbacktest', label: 'Full Backtest', icon: ClipboardList, prefix: '📋' },
   { id: 'portfolio', label: 'Portfolio', icon: Package, prefix: '📦' },
@@ -86,6 +89,7 @@ export default function App() {
       case 'dashboard': return <Dashboard config={config} />;
       case 'research': return <Research config={config} />;
       case 'optimize': return <Optimize config={config} onNavigateToSettings={() => setActiveTab('settings')} />;
+      case 'montecarlo': return <MonteCarlo />;
       case 'walkforward': return <WalkForward config={config} />;
       case 'fullbacktest': return <FullBacktest config={config} />;
       case 'portfolio': return <Portfolio config={config} />;

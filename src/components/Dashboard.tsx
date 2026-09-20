@@ -37,10 +37,10 @@ export default function Dashboard({ config }: { config: any }) {
   const openWorkDirModal = () => {
     setModalTitle("Work Directory (optimization_runs)");
     setModalItems(
-      workspace.recentRuns.length > 0
+      (workspace?.recentRuns && workspace.recentRuns.length > 0)
         ? workspace.recentRuns.map((r: any) => ({
             name: r.name,
-            subtitle: `${r.passedCandidates} passed candidates`,
+            subtitle: `${r.passedCandidates ?? 0} passed candidates`,
             details: r.candidates ? `${r.candidates.length} total candidates` : undefined,
           }))
         : [{ name: "optimization_runs/trb_usdjpy", subtitle: "Active symbol folder" }]
@@ -50,7 +50,7 @@ export default function Dashboard({ config }: { config: any }) {
   const openResearchDirModal = () => {
     setModalTitle("Researched Strategies Directory");
     setModalItems(
-      workspace.researchedStrategies.length > 0
+      (workspace?.researchedStrategies && workspace.researchedStrategies.length > 0)
         ? workspace.researchedStrategies.map((item: any) => ({
             name: item.name,
             subtitle: `${item.itemsCount || 0} items | Modified: ${item.mtime}`,

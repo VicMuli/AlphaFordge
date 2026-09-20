@@ -8,12 +8,15 @@ export function useScriptRunner() {
   const runScript = async (
     scriptName: string,
     options?: {
+      args?: string;
+      params?: Record<string, string | number | boolean>;
       envOverrides?: Record<string, string>;
       patch?: {
         patches?: Record<string, any>;
         candidates?: any[];
       };
       onStart?: () => void;
+      onDone?: (exitCode?: number) => void;
     }
   ) => {
     if (isRunning) return;
@@ -50,6 +53,16 @@ export function useScriptRunner() {
 
     // Build URL with query params
     const query = new URLSearchParams({ script: scriptName });
+    if (options?.args) {
+      query.append('args', options.args);
+    }
+    if (options?.params) {
+      for (const [k, v] of Object.entries(options.params)) {
+        if (v !== undefined && v !== null) {
+          query.append(k, String(v));
+        }
+      }
+    }
     if (options?.envOverrides) {
       for (const [k, v] of Object.entries(options.envOverrides)) {
         if (v !== undefined && v !== null && v !== '') {
@@ -71,6 +84,7 @@ export function useScriptRunner() {
           setIsRunning(false);
           es.close();
           eventSourceRef.current = null;
+          if (options?.onDone) options.onDone(data.code);
         }
       } catch (err) {
         console.error("Failed to parse SSE event", err);
@@ -82,6 +96,7 @@ export function useScriptRunner() {
       setIsRunning(false);
       es.close();
       eventSourceRef.current = null;
+      if (options?.onDone) options.onDone();
     };
   };
 

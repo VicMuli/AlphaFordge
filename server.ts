@@ -437,6 +437,207 @@ async function startServer() {
     res.json({ status: "ok", message: "No active process" });
   });
 
+  // Get detailed portfolios list with manifests, candidates, and charts
+  app.get("/api/portfolios-detailed", async (req, res) => {
+    try {
+      const cwd = process.cwd();
+      const optRunsDir = path.join(cwd, 'optimization_runs');
+      const portfolios: any[] = [];
+
+      async function scan(dir: string, depth = 0) {
+        if (depth > 6 || !existsSync(dir)) return;
+        try {
+          const entries = await fs.readdir(dir, { withFileTypes: true });
+          for (const e of entries) {
+            if (e.isDirectory()) {
+              const full = path.join(dir, e.name);
+              const manifestPath = path.join(full, 'portfolio_manifest.json');
+              const tradesPath = path.join(full, 'combined_trades.csv');
+              
+              if (existsSync(manifestPath) || existsSync(tradesPath) || e.name.toLowerCase().includes('portfolio_')) {
+                let manifest: any = null;
+                if (existsSync(manifestPath)) {
+                  try {
+                    manifest = JSON.parse(await fs.readFile(manifestPath, 'utf-8'));
+                  } catch {}
+                }
+
+                // Check for chart images and report files
+                const files = await fs.readdir(full);
+                const charts = files.filter(f => f.endsWith('.png') || f.endsWith('.jpg') || f.endsWith('.svg'));
+                const docxFiles = files.filter(f => f.endsWith('.docx'));
+
+                portfolios.push({
+                  name: e.name,
+                  path: path.relative(cwd, full),
+                  manifest,
+                  charts,
+                  docxFiles,
+                  hasTrades: existsSync(tradesPath),
+                  candidateCount: manifest?.candidates?.length || 0,
+                  tradeCount: manifest?.trade_count || 0,
+                  createdUtc: manifest?.created_utc || null,
+                  deposit: manifest?.deposit || 2500,
+                });
+              }
+              await scan(full, depth + 1);
+            }
+          }
+        } catch {}
+      }
+
+      await scan(optRunsDir);
+      res.json({ portfolios });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Get all candidates across optimization runs
+  app.get("/api/candidates", async (req, res) => {
+    try {
+      const cwd = process.cwd();
+      const optRunsDir = path.join(cwd, 'optimization_runs');
+      const candidatesMap = new Map<string, any>();
+
+      async function scanCand(dir: string, depth = 0) {
+        if (depth > 6 || !existsSync(dir)) return;
+        try {
+          const entries = await fs.readdir(dir, { withFileTypes: true });
+          for (const e of entries) {
+            if (e.isDirectory()) {
+              const full = path.join(dir, e.name);
+              if (e.name.startsWith('cand_')) {
+                const candId = e.name;
+                const mcJsonPath = path.join(full, 'monte_carlo_results.json');
+                const tradesCsv = path.join(full, 'trades.csv');
+                let hasMc = existsSync(mcJsonPath);
+                let mcSummary: any = null;
+                if (hasMc) {
+                  try {
+                    mcSummary = JSON.parse(await fs.readFile(mcJsonPath, 'utf-8'));
+                  } catch {}
+                }
+
+                if (!candidatesMap.has(candId) || hasMc) {
+                  candidatesMap.set(candId, {
+                    id: candId,
+                    dir: path.relative(cwd, full),
+                    hasTrades: existsSync(tradesCsv),
+                    hasMonteCarlo: hasMc,
+                    isCertified: mcSummary?.is_certified ?? null,
+                    passRate: mcSummary?.combined_pass_rate ?? null,
+                    p1PassRate: mcSummary?.phase1?.pass_rate ?? null,
+                    p2PassRate: mcSummary?.phase2?.pass_rate ?? null,
+                    worstMaxDD: mcSummary?.worst_breach_max_dd ?? null,
+                  });
+                }
+              }
+              await scanCand(full, depth + 1);
+            }
+          }
+        } catch {}
+      }
+
+      await scanCand(optRunsDir);
+      
+      const list = Array.from(candidatesMap.values()).sort((a, b) => a.id.localeCompare(b.id));
+      res.json({ candidates: list });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Get Monte Carlo result for candidate
+  app.get("/api/candidate-monte-carlo", async (req, res) => {
+    try {
+      const cand = req.query.candidate as string;
+      const runFolder = (req.query.run_folder || req.query.run_dir) as string;
+      const cwd = process.cwd();
+      const optRunsDir = path.join(cwd, 'optimization_runs');
+
+      // If runFolder was explicitly provided, check there first
+      if (runFolder && cand) {
+        const potentialPaths = [
+          path.isAbsolute(runFolder) ? path.join(runFolder, cand, 'monte_carlo_results.json') : path.join(cwd, runFolder, cand, 'monte_carlo_results.json'),
+          path.isAbsolute(runFolder) ? path.join(runFolder, 'passed_candidates', cand, 'monte_carlo_results.json') : path.join(cwd, runFolder, 'passed_candidates', cand, 'monte_carlo_results.json'),
+          path.join(optRunsDir, runFolder, cand, 'monte_carlo_results.json'),
+          path.join(optRunsDir, runFolder, 'passed_candidates', cand, 'monte_carlo_results.json')
+        ];
+        for (const p of potentialPaths) {
+          if (existsSync(p)) {
+            try {
+              return res.json(JSON.parse(await fs.readFile(p, 'utf-8')));
+            } catch {}
+          }
+        }
+      }
+
+      // Check root last_mc_candidate_result.json if matching
+      const rootMc = path.join(cwd, 'last_mc_candidate_result.json');
+      if (existsSync(rootMc)) {
+        try {
+          const data = JSON.parse(await fs.readFile(rootMc, 'utf-8'));
+          if (!cand || data.candidate === cand) {
+            return res.json(data);
+          }
+        } catch {}
+      }
+
+      // Look in candidate folders
+      if (cand) {
+        async function findCandFile(dir: string, depth = 0): Promise<any> {
+          if (depth > 6 || !existsSync(dir)) return null;
+          try {
+            const entries = await fs.readdir(dir, { withFileTypes: true });
+            for (const e of entries) {
+              const full = path.join(dir, e.name);
+              if (e.isDirectory()) {
+                if (e.name === cand) {
+                  const jsonFile = path.join(full, 'monte_carlo_results.json');
+                  if (existsSync(jsonFile)) {
+                    return JSON.parse(await fs.readFile(jsonFile, 'utf-8'));
+                  }
+                }
+                const found = await findCandFile(full, depth + 1);
+                if (found) return found;
+              }
+            }
+          } catch {}
+          return null;
+        }
+
+        const foundData = await findCandFile(optRunsDir);
+        if (foundData) {
+          return res.json(foundData);
+        }
+      }
+
+      res.status(404).json({ error: "No Monte Carlo results found for candidate" });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Save Monte Carlo configuration
+  app.post("/api/candidate-monte-carlo/config", async (req, res) => {
+    try {
+      const configPath = path.join(process.cwd(), 'config.json');
+      let cfg: any = {};
+      if (existsSync(configPath)) {
+        cfg = JSON.parse(await fs.readFile(configPath, 'utf-8'));
+      }
+      cfg.monte_carlo_candidate = {
+        ...(cfg.monte_carlo_candidate || {}),
+        ...req.body
+      };
+      await fs.writeFile(configPath, JSON.stringify(cfg, null, 2), 'utf-8');
+      res.json({ status: "ok", config: cfg.monte_carlo_candidate });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // Live SSE stream to execute Python scripts and stream terminal output directly to the UI
   app.get("/api/run-stream", (req, res) => {
     const script = req.query.script as string;
@@ -474,10 +675,32 @@ async function startServer() {
       'Connection': 'keep-alive',
     });
 
-    res.write(`data: ${JSON.stringify({ text: `▶ [STARTED] python -u ${script}\n   CWD: ${process.cwd()}\n────────────────────────────────────────────────────────────\n` })}\n\n`);
-
     const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
     
+    // Parse arguments
+    const scriptArgs: string[] = ['-u', script];
+    if (req.query.args && typeof req.query.args === 'string') {
+      const parsedArgs = req.query.args.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || [];
+      scriptArgs.push(...parsedArgs.map(a => a.replace(/^["']|["']$/g, '')));
+    } else if (req.query.candidate && typeof req.query.candidate === 'string') {
+      scriptArgs.push(req.query.candidate);
+      const runDir = (req.query.run_dir || req.query.run_folder) as string | undefined;
+      if (runDir) scriptArgs.push('--run-dir', runDir);
+      if (req.query.sims) scriptArgs.push('--sims', String(req.query.sims));
+      if (req.query.p1) scriptArgs.push('--p1', String(req.query.p1));
+      if (req.query.p2) scriptArgs.push('--p2', String(req.query.p2));
+      if (req.query.max_dd) scriptArgs.push('--max-dd', String(req.query.max_dd));
+      if (req.query.daily_dd) scriptArgs.push('--daily-dd', String(req.query.daily_dd));
+      if (req.query.block_size) scriptArgs.push('--block-size', String(req.query.block_size));
+      if (req.query.no_max_days === 'true' || req.query.disable_max_days === 'true') {
+        scriptArgs.push('--no-max-days');
+      } else if (req.query.max_days) {
+        scriptArgs.push('--max-days', String(req.query.max_days));
+      }
+    }
+
+    res.write(`data: ${JSON.stringify({ text: `▶ [STARTED] ${pythonCmd} ${scriptArgs.join(' ')}\n   CWD: ${process.cwd()}\n────────────────────────────────────────────────────────────\n` })}\n\n`);
+
     // Collect extra environment variables from query parameters (e.g. AF_* overrides)
     const extraEnv: Record<string, string> = {};
     for (const [k, v] of Object.entries(req.query)) {
@@ -487,9 +710,9 @@ async function startServer() {
     }
 
     // Pass unbuffered flag -u to Python so print statements stream immediately
-    const proc = spawn(pythonCmd, ['-u', script], {
+    const proc = spawn(pythonCmd, scriptArgs, {
       cwd: process.cwd(),
-      shell: true,
+      shell: process.platform === 'win32',
       env: { ...process.env, PYTHONUNBUFFERED: '1', ...extraEnv }
     });
 
