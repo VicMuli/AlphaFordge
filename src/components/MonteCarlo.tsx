@@ -782,7 +782,7 @@ export function MonteCarlo() {
               </span>
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs font-mono">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 text-xs font-mono">
               <div className="bg-[#111827] p-2.5 rounded-lg border border-[#2d3748]">
                 <span className="text-[#8b95a6] text-[10px] block">Passes / Runs</span>
                 <span className="text-white font-bold">
@@ -803,6 +803,15 @@ export function MonteCarlo() {
                   {activeCandidateData.phase1.breach_daily_rate}%
                 </span>
               </div>
+
+              {activeCandidateData.phase1.incomplete_rate !== undefined && activeCandidateData.phase1.incomplete_rate > 0 ? (
+                <div className="bg-[#111827] p-2.5 rounded-lg border border-[#2d3748]">
+                  <span className="text-[#8b95a6] text-[10px] block">Time Expired (&gt;{activeCandidateData.phase1.max_days || 250}d)</span>
+                  <span className="text-amber-400 font-bold">
+                    {activeCandidateData.phase1.incomplete_rate}% ({activeCandidateData.phase1.incomplete_count} runs)
+                  </span>
+                </div>
+              ) : null}
 
               <div className="bg-[#111827] p-2.5 rounded-lg border border-[#2d3748]">
                 <span className="text-[#8b95a6] text-[10px] block">Median Days</span>
@@ -846,7 +855,7 @@ export function MonteCarlo() {
               </span>
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs font-mono">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 text-xs font-mono">
               <div className="bg-[#111827] p-2.5 rounded-lg border border-[#2d3748]">
                 <span className="text-[#8b95a6] text-[10px] block">Passes / Runs</span>
                 <span className="text-white font-bold">
@@ -867,6 +876,15 @@ export function MonteCarlo() {
                   {activeCandidateData.phase2.breach_daily_rate}%
                 </span>
               </div>
+
+              {activeCandidateData.phase2.incomplete_rate !== undefined && activeCandidateData.phase2.incomplete_rate > 0 ? (
+                <div className="bg-[#111827] p-2.5 rounded-lg border border-[#2d3748]">
+                  <span className="text-[#8b95a6] text-[10px] block">Time Expired (&gt;{activeCandidateData.phase2.max_days || 250}d)</span>
+                  <span className="text-amber-400 font-bold">
+                    {activeCandidateData.phase2.incomplete_rate}% ({activeCandidateData.phase2.incomplete_count} runs)
+                  </span>
+                </div>
+              ) : null}
 
               <div className="bg-[#111827] p-2.5 rounded-lg border border-[#2d3748]">
                 <span className="text-[#8b95a6] text-[10px] block">Median Days</span>

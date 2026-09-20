@@ -171,9 +171,15 @@ def find_candidate_dir(base_work_dir: Path, target_candidate: str, run_dir: str 
     return None, sorted(available_candidates)
 
 
-def extract_daily_pnl_from_candidate(cand_dir: Path) -> list[float]:
-    """Scans candidate folder for report files (.csv, .htm, .html, .xml) and extracts daily P&L values."""
+def extract_daily_pnl_from_candidate(cand_dir: Path) -> tuple[list[float], float]:
+    """
+    Scans candidate folder for report files (.csv, .htm, .html, .xml) and extracts daily P&L values
+    along with the detected base backtest deposit.
+    Populates full weekday calendar (Mon-Fri) so non-trading days with 0.0 P&L accurately reflect
+    real calendar trading frequency.
+    """
     daily_pnls = []
+    base_deposit = 2500.0
     
     # 1. Search for report files in candidate folder
     report_files = []
@@ -187,6 +193,17 @@ def extract_daily_pnl_from_candidate(cand_dir: Path) -> list[float]:
         for ext in ["*.csv", "*.htm", "*.html", "*.xml"]:
             report_files.extend(list(parent_run.glob(ext)))
 
+    # Check for config.json to detect base deposit
+    cand_cfg = cand_dir / "config.json"
+    if cand_cfg.exists():
+        try:
+            with open(cand_cfg, 'r', encoding='utf-8') as f:
+                c_data = json.load(f)
+                if 'deposit' in c_data:
+                    base_deposit = float(c_data['deposit'])
+        except Exception:
+            pass
+
     # Try CSV parsing first (standard library, zero external dependency)
     csv_files = [f for f in report_files if f.suffix.lower() == '.csv']
     for file_path in csv_files:
@@ -195,18 +212,22 @@ def extract_daily_pnl_from_candidate(cand_dir: Path) -> list[float]:
                 reader = csv.DictReader(f)
                 if not reader.fieldnames:
                     continue
-                # Determine profit and time column names
+                # Determine profit, balance and time column names
                 profit_col = None
                 time_col = None
+                balance_col = None
                 for col in reader.fieldnames:
                     col_l = col.lower()
                     if 'profit' in col_l or 'netpnl' in col_l or 'pnl' in col_l:
                         profit_col = col
+                    elif 'balance' in col_l or 'equity' in col_l:
+                        balance_col = col
                     elif 'time' in col_l or 'date' in col_l:
                         time_col = col
 
                 if profit_col:
                     daily_dict = {}
+                    dates_seen = []
                     raw_profits = []
                     for row in reader:
                         p_val_str = row.get(profit_col, '').replace('$', '').replace(',', '').strip()
@@ -216,11 +237,40 @@ def extract_daily_pnl_from_candidate(cand_dir: Path) -> list[float]:
                             continue
                         
                         raw_profits.append(p_val)
+                        if balance_col and row.get(balance_col):
+                            try:
+                                b_val = float(row[balance_col].replace('$', '').replace(',', '').strip())
+                                if b_val > 0 and (b_val - p_val) > 100:
+                                    base_deposit = round(b_val - p_val, 2)
+                                    balance_col = None  # only need initial deposit
+                            except Exception:
+                                pass
+
                         if time_col and row.get(time_col):
                             d_str = row[time_col].strip().split(' ')[0].split('T')[0]
                             daily_dict[d_str] = daily_dict.get(d_str, 0.0) + p_val
+                            try:
+                                from datetime import date as dt_date
+                                dates_seen.append(dt_date.fromisoformat(d_str))
+                            except Exception:
+                                pass
 
                     if daily_dict and len(daily_dict) >= 5:
+                        if dates_seen and len(dates_seen) >= 5:
+                            # Build complete weekday business days calendar
+                            from datetime import timedelta
+                            min_d = min(dates_seen)
+                            max_d = max(dates_seen)
+                            cur = min_d
+                            calendar_pnls = []
+                            while cur <= max_d:
+                                if cur.weekday() < 5:  # Monday to Friday
+                                    ds = cur.isoformat()
+                                    calendar_pnls.append(daily_dict.get(ds, 0.0))
+                                cur += timedelta(days=1)
+                            if len(calendar_pnls) >= 10:
+                                daily_pnls = calendar_pnls
+                                break
                         daily_pnls = list(daily_dict.values())
                         break
                     elif raw_profits:
@@ -251,7 +301,13 @@ def extract_daily_pnl_from_candidate(cand_dir: Path) -> list[float]:
                                     df[profit_col] = pd.to_numeric(df[profit_col].astype(str).str.replace(',', ''), errors='coerce').fillna(0.0)
                                     if time_col:
                                         df['Date'] = pd.to_datetime(df[time_col], errors='coerce').dt.date
-                                        daily_pnls = df.groupby('Date')[profit_col].sum().tolist()
+                                        daily_grp = df.groupby('Date')[profit_col].sum()
+                                        if len(daily_grp) > 5:
+                                            # Complete business day reindex
+                                            idx = pd.bdate_range(start=daily_grp.index.min(), end=daily_grp.index.max())
+                                            daily_pnls = daily_grp.reindex(idx.date, fill_value=0.0).tolist()
+                                        else:
+                                            daily_pnls = daily_grp.tolist()
                                     else:
                                         raw_profits = df[profit_col].tolist()
                                         chunk_size = max(1, len(raw_profits) // 50)
@@ -268,20 +324,31 @@ def extract_daily_pnl_from_candidate(cand_dir: Path) -> list[float]:
         base_dist = [-45.5, -20.0, -10.0, 5.0, 12.5, 18.0, 25.0, 35.0, 48.0, 85.0, -15.0, 140.0, -80.0, 30.0]
         daily_pnls = base_dist * 15
 
-    return daily_pnls
+    return daily_pnls, base_deposit
 
 
 def run_monte_carlo_simulation(daily_pnls: list[float], starting_capital: float, target_pct: float, 
                                max_dd_pct: float, daily_dd_pct: float, num_sims: int, block_size: int, 
-                               max_days: int = 250, no_max_days: bool = False) -> dict:
-    """Executes block-bootstrap Monte Carlo simulation with optional unlimited trading days."""
+                               max_days: int = 250, no_max_days: bool = False,
+                               base_deposit: float = 2500.0) -> dict:
+    """
+    Executes block-bootstrap Monte Carlo simulation with prop firm constraints.
+    - Scales daily PnL to simulated starting capital so risk is proportional to account size.
+    - Accurately tracks peak-to-trough trailing drawdown percentage (never falsely 0%).
+    - Models realistic intraday floating adverse excursion (MAE) on losing days to stress daily DD.
+    - Correctly handles fixed vs unlimited trading days horizons.
+    """
     target_amount = starting_capital * (target_pct / 100.0)
-    max_dd_limit_amount = starting_capital * (max_dd_pct / 100.0)
+    static_floor = starting_capital * (1.0 - max_dd_pct / 100.0)
     
-    n_pnls = len(daily_pnls)
+    # Scale PnL by starting capital ratio if testing custom deposit size
+    deposit_scale = (starting_capital / base_deposit) if base_deposit and base_deposit > 0 else 1.0
+    effective_pnls = [p * deposit_scale for p in daily_pnls] if deposit_scale != 1.0 else list(daily_pnls)
+
+    n_pnls = len(effective_pnls)
     if n_pnls == 0:
-        daily_pnls = [10.0, -5.0, 15.0]
-        n_pnls = len(daily_pnls)
+        effective_pnls = [10.0, -5.0, 15.0]
+        n_pnls = len(effective_pnls)
 
     pass_count = 0
     breach_max_dd_count = 0
@@ -293,13 +360,13 @@ def run_monte_carlo_simulation(daily_pnls: list[float], starting_capital: float,
     all_simulated_daily_returns = []
     sample_equity_curves = []
 
-    # Safety ceiling for unlimited simulation (prevents infinite loop if PnL hovers at 0)
-    SAFETY_DAYS_LIMIT = 5000 if no_max_days else max_days
+    # Safety ceiling for unlimited simulation (prevents infinite loop if PnL hovers near 0)
+    SAFETY_DAYS_LIMIT = 4000 if no_max_days else max_days
 
     for sim_idx in range(num_sims):
         equity = starting_capital
         peak_equity = starting_capital
-        max_dd_reached = 0.0
+        max_dd_pct_reached = 0.0
         passed = False
         breached_max_dd = False
         breached_daily_dd = False
@@ -311,37 +378,46 @@ def run_monte_carlo_simulation(daily_pnls: list[float], starting_capital: float,
 
         while current_day < SAFETY_DAYS_LIMIT:
             start_idx = random.randint(0, n_pnls - 1)
-            block = [daily_pnls[(start_idx + i) % n_pnls] for i in range(block_size)]
+            block = [effective_pnls[(start_idx + i) % n_pnls] for i in range(block_size)]
 
             for pnl in block:
                 current_day += 1
+
+                # 1. Daily Drawdown Evaluation
+                # In live trading, intraday adverse excursion (MAE) floats lower than final EOD closed loss.
+                # Loss days sample a realistic 1.15x to 1.50x adverse excursion factor to stress intraday floors.
+                if pnl < 0:
+                    adverse_factor = random.uniform(1.15, 1.50)
+                    intraday_pnl = pnl * adverse_factor
+                else:
+                    intraday_pnl = pnl
+
+                intraday_drop = prev_day_close - (equity + intraday_pnl)
+                if intraday_drop > (prev_day_close * (daily_dd_pct / 100.0)):
+                    breached_daily_dd = True
+                    break
+
                 equity += pnl
 
-                # Track curve for first 10 runs (sample down if lengthy)
+                # 2. Static Max Drawdown Evaluation (Hard floor below starting capital)
+                if equity <= static_floor:
+                    breached_max_dd = True
+                    break
+
+                # 3. Peak-to-Trough Trailing Drawdown Tracking
+                if equity > peak_equity:
+                    peak_equity = equity
+
+                trailing_dd_pct = ((peak_equity - equity) / peak_equity * 100.0) if peak_equity > 0 else 0.0
+                if trailing_dd_pct > max_dd_pct_reached:
+                    max_dd_pct_reached = trailing_dd_pct
+
+                # Track sample equity curve for UI visualization
                 if sim_idx < 10:
                     if current_day <= 300 or (current_day % 5 == 0):
                         curve.append(round(equity, 2))
 
-                # Check Daily Drawdown (off previous day close)
-                daily_dd_amount = prev_day_close - equity
-                if daily_dd_amount > (prev_day_close * (daily_dd_pct / 100.0)):
-                    breached_daily_dd = True
-                    break
-
-                # Check Static Max Drawdown (off initial balance)
-                static_dd_amount = starting_capital - equity
-                if static_dd_amount > max_dd_limit_amount:
-                    breached_max_dd = True
-                    break
-
-                if equity > peak_equity:
-                    peak_equity = equity
-
-                current_dd = starting_capital - equity
-                if current_dd > max_dd_reached:
-                    max_dd_reached = current_dd
-
-                # Check Profit Target
+                # 4. Check Profit Target
                 if (equity - starting_capital) >= target_amount:
                     passed = True
                     days_taken = current_day
@@ -362,7 +438,6 @@ def run_monte_carlo_simulation(daily_pnls: list[float], starting_capital: float,
                 curve.append(round(equity, 2))
             sample_equity_curves.append(curve)
 
-        max_dd_pct_reached = (max_dd_reached / starting_capital) * 100.0
         max_dd_reached_list.append(max_dd_pct_reached)
 
         if passed:
@@ -375,7 +450,7 @@ def run_monte_carlo_simulation(daily_pnls: list[float], starting_capital: float,
         else:
             incomplete_count += 1
 
-        all_simulated_daily_returns.extend(daily_pnls[:min(current_day, 100)])
+        all_simulated_daily_returns.extend(effective_pnls[:min(current_day, 100)])
 
     # Calculate statistics
     pass_rate = (pass_count / num_sims) * 100.0
@@ -391,12 +466,12 @@ def run_monte_carlo_simulation(daily_pnls: list[float], starting_capital: float,
     p90_max_dd = statistics.quantiles(max_dd_reached_list, n=10)[8] if len(max_dd_reached_list) >= 10 else max(max_dd_reached_list, default=0.0)
     p99_max_dd = statistics.quantiles(max_dd_reached_list, n=100)[98] if len(max_dd_reached_list) >= 100 else max(max_dd_reached_list, default=0.0)
 
-    largest_profit_day = max(daily_pnls) if daily_pnls else 0.0
-    largest_loss_day = min(daily_pnls) if daily_pnls else 0.0
-    avg_daily = statistics.mean(daily_pnls) if daily_pnls else 0.0
+    largest_profit_day = max(effective_pnls) if effective_pnls else 0.0
+    largest_loss_day = min(effective_pnls) if effective_pnls else 0.0
+    avg_daily = statistics.mean(effective_pnls) if effective_pnls else 0.0
 
-    p95_profit_day = statistics.quantiles([x for x in daily_pnls if x > 0], n=20)[18] if len([x for x in daily_pnls if x > 0]) >= 20 else largest_profit_day
-    p95_loss_day = statistics.quantiles([x for x in daily_pnls if x < 0], n=20)[1] if len([x for x in daily_pnls if x < 0]) >= 20 else largest_loss_day
+    p95_profit_day = statistics.quantiles([x for x in effective_pnls if x > 0], n=20)[18] if len([x for x in effective_pnls if x > 0]) >= 20 else largest_profit_day
+    p95_loss_day = statistics.quantiles([x for x in effective_pnls if x < 0], n=20)[1] if len([x for x in effective_pnls if x < 0]) >= 20 else largest_loss_day
 
     return {
         "target_pct": target_pct,
@@ -630,8 +705,11 @@ def main():
 
     # 1. Extract Daily P&L
     print("\n[1/4] Extracting historical daily P&L distribution from reports...")
-    daily_pnls = extract_daily_pnl_from_candidate(target_cand_dir)
-    print(f"  Extracted {len(daily_pnls)} daily P&L data points.")
+    daily_pnls, base_deposit = extract_daily_pnl_from_candidate(target_cand_dir)
+    print(f"  Extracted {len(daily_pnls)} calendar daily P&L data points (incl. flat weekdays).")
+    print(f"  Base Backtest Deposit: ${base_deposit:,.2f}")
+    if abs(deposit_amt - base_deposit) > 1.0:
+        print(f"  Deposit Scaling Ratio: {(deposit_amt / base_deposit):.2f}x (scaled to starting capital)")
     print(f"  Mean Daily P&L:        ${statistics.mean(daily_pnls):,.2f}")
     print(f"  StDev Daily P&L:       ${statistics.stdev(daily_pnls) if len(daily_pnls) > 1 else 0.0:,.2f}")
 
@@ -646,7 +724,8 @@ def main():
         num_sims=simulations,
         block_size=block_size,
         max_days=max_days,
-        no_max_days=no_max_days
+        no_max_days=no_max_days,
+        base_deposit=base_deposit
     )
 
     print(f"  --> Phase 1 Pass Rate: {p1_results['pass_rate']}% ({p1_results['pass_count']:,}/{simulations:,})")
@@ -666,7 +745,8 @@ def main():
         num_sims=simulations,
         block_size=block_size,
         max_days=max_days,
-        no_max_days=no_max_days
+        no_max_days=no_max_days,
+        base_deposit=base_deposit
     )
 
     print(f"  --> Phase 2 Pass Rate: {p2_results['pass_rate']}% ({p2_results['pass_count']:,}/{simulations:,})")

@@ -686,6 +686,7 @@ async function startServer() {
       scriptArgs.push(req.query.candidate);
       const runDir = (req.query.run_dir || req.query.run_folder) as string | undefined;
       if (runDir) scriptArgs.push('--run-dir', runDir);
+      if (req.query.deposit) scriptArgs.push('--deposit', String(req.query.deposit));
       if (req.query.sims) scriptArgs.push('--sims', String(req.query.sims));
       if (req.query.p1) scriptArgs.push('--p1', String(req.query.p1));
       if (req.query.p2) scriptArgs.push('--p2', String(req.query.p2));
