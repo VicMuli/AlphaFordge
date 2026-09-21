@@ -1812,17 +1812,18 @@ class MonteCarloPanel(BasePanel):
             self._stat_horizon.configure(text=f"{self._maxdays_entry.get().strip()} Days")
 
     def _get_target_candidate(self) -> str:
-        custom = self._custom_cand.get().strip()
+        custom = self._custom_cand.get().strip() if hasattr(self, "_custom_cand") else ""
         if custom:
             return custom
-        cb_val = self._cand_var.get().strip()
+        cb_val = self._cand_var.get().strip() if hasattr(self, "_cand_var") else ""
         if not cb_val or cb_val in ("(none found)", "(scanning...)", "(none)"):
             return ""
-        return cb_val.split()[0]
+        parts = cb_val.split()
+        return parts[0] if parts else ""
 
     def _refresh_candidates_list(self):
         cfg = self.cfg
-        run_choice = self._run_var.get().strip()
+        run_choice = self._run_var.get().strip() if hasattr(self, "_run_var") else ""
         self._all_cands_info = get_all_candidates_summary(cfg.get("work_dir", ""), run_choice)
 
         formatted_choices = []
@@ -1841,8 +1842,10 @@ class MonteCarloPanel(BasePanel):
 
         self._cand_cb.configure(values=formatted_choices or ["(none found)"])
         if formatted_choices:
-            curr = self._cand_var.get()
-            match = next((ch for ch in formatted_choices if ch.split()[0] == curr.split()[0]), None)
+            curr = self._cand_var.get().strip() if hasattr(self, "_cand_var") else ""
+            curr_parts = curr.split() if curr else []
+            curr_id = curr_parts[0] if curr_parts else ""
+            match = next((ch for ch in formatted_choices if (ch.split()[0] if ch.split() else "") == curr_id), None) if curr_id else None
             if match:
                 self._cand_var.set(match)
             else:
