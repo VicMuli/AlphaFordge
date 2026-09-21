@@ -76,10 +76,12 @@ import os
 
 TARGET_RUN_DIR = 'run_20260911_094409'
 TARGET_CANDIDATE = 'cand_007'
+TARGET_SYMBOL = 'USDJPY'
 
 BT_START = os.environ.get("AF_BT_START", TRAIN_FROM)
 BT_END   = os.environ.get("AF_BT_END", HOLDOUT_TO)
 DEPOSIT_OVERRIDE = os.environ.get("AF_DEPOSIT", str(DEPOSIT))
+SYMBOL_OVERRIDE = os.environ.get("AF_SYMBOL", TARGET_SYMBOL if TARGET_SYMBOL else SYMBOL)
 
 # ===========================================================================
 # HTML / DATA HELPERS
@@ -1078,6 +1080,7 @@ def create_full_backtest_word_doc(
     # 1. Performance overview
     doc.add_heading("1. Performance Overview", level=1)
     rows = [
+        ("Market / Symbol", str(SYMBOL_OVERRIDE)),
         ("Profit / Loss ($)", _fmt_money(total_net_profit)),
         ("Profit / Loss (%)", _fmt_pct(profit_pct)),
         ("Max Balance Drawdown", _fmt_money(max_dd)),
@@ -1387,14 +1390,14 @@ def main():
     report_folder.mkdir(parents=True, exist_ok=True)
     report_name = f"Full_BT_{TARGET_CANDIDATE}"
 
-    print("\n  --> Launching MetaTrader 5 Full Backtest...")
+    print(f"\n  --> Launching MetaTrader 5 Full Backtest (Market: {SYMBOL_OVERRIDE})...")
     try:
         report_html = run_single_backtest(
             terminal_path=TERMINAL_PATH,
             terminal_data_dir=TERMINAL_DATA_DIR,
             expert=EXPERT,
             set_file=temp_set_name,
-            symbol=SYMBOL,
+            symbol=SYMBOL_OVERRIDE,
             period=PERIOD,
             from_date=BT_START,
             to_date=BT_END,

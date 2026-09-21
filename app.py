@@ -2381,9 +2381,22 @@ class FullBacktestPanel(BasePanel):
         self._cand_cb.grid(row=1, column=1, padx=(0,20), pady=6, sticky="w")
         self._refresh_cands(self._run_var.get())
 
+        # Market / Symbol
+        MARKETS = ["USDJPY", "EURJPY", "EURUSD", "GBPUSD", "XAUUSD"]
+        default_sym = cfg.get("symbol", "USDJPY").upper()
+        if default_sym not in MARKETS:
+            default_sym = "USDJPY"
+        self._market_var = ctk.StringVar(value=default_sym)
+        make_label(sel, "Market / Symbol", font=FB, color=C["sub"]).grid(
+            row=2, column=0, sticky="w", padx=(20,8), pady=6)
+        self._market_cb = ctk.CTkComboBox(sel, values=MARKETS, variable=self._market_var,
+                                          width=340, font=FB, fg_color=C["inp"],
+                                          border_color=C["border"], button_color=C["accent"])
+        self._market_cb.grid(row=2, column=1, padx=(0,20), pady=6, sticky="w")
+
         # Overrides
         ovr = ctk.CTkFrame(sel, fg_color="transparent")
-        ovr.grid(row=2, column=0, columnspan=2, sticky="ew", padx=20, pady=(6, 6))
+        ovr.grid(row=3, column=0, columnspan=2, sticky="ew", padx=20, pady=(6, 6))
         make_label(ovr, "From Date", font=FB, color=C["sub"]).pack(side="left", padx=(0,8))
         self._from_var = make_entry(ovr, width=100)
         self._from_var.insert(0, cfg.get("train_from", ""))
@@ -2411,7 +2424,7 @@ class FullBacktestPanel(BasePanel):
 
         # Buttons
         btn_row = ctk.CTkFrame(sel, fg_color="transparent")
-        btn_row.grid(row=3, column=0, columnspan=2, sticky="ew", padx=20, pady=(16,16))
+        btn_row.grid(row=4, column=0, columnspan=2, sticky="ew", padx=20, pady=(16,16))
         make_btn(btn_row, "▶  Run Full Backtest", self._run, width=200).pack(side="left")
         make_btn(btn_row, "📂 Open Output",
                  self._open_out, color=C["card"], hover=C["hover"], width=150).pack(side="left", padx=(12,0))
@@ -2437,16 +2450,19 @@ class FullBacktestPanel(BasePanel):
             self._cand_var.set(cands[0])
 
     def _run(self):
-        run  = self._run_var.get()
-        cand = self._cand_var.get()
+        run    = self._run_var.get()
+        cand   = self._cand_var.get()
+        market = self._market_var.get().strip() or "USDJPY"
         if not run or not cand or cand == "(none found)":
             messagebox.showwarning("Missing", "Select a run and candidate.")
             return
         patch_script(SCRIPT_DIR / "run_full_backtest.py", {
             "TARGET_RUN_DIR": run,
             "TARGET_CANDIDATE": cand,
+            "TARGET_SYMBOL": market,
         })
         env_extra = {
+            "AF_SYMBOL":   market,
             "AF_BT_START": self._from_var.get().strip() or self.cfg.get("train_from", ""),
             "AF_BT_END":   self._to_var.get().strip() or self.cfg.get("holdout_to", ""),
             "AF_DEPOSIT":  self._dep_var.get().strip() or self.cfg.get("deposit", "2500"),
@@ -2605,9 +2621,11 @@ class PortfolioPanel(BasePanel):
             messagebox.showwarning("Missing", "Enter a portfolio name.")
             return
 
+        # Sanitize portfolio name to prevent nested subdirectories like TRB_USDJPY/ or TRB_EURJPY/
+        port_name = re.sub(r"[/\\:]+", "_", port_name).strip("_")
+
         is_multi_market = (
-            "/" in port_name
-            or "multimarket" in port_name.lower()
+            "multimarket" in port_name.lower()
             or len(set(c.get("market") for c in cands if c.get("market"))) > 1
             or any("usdjpy" in f"{c.get('run_dir', '')}{c.get('candidate', '')}".lower() for c in cands) and any("eurjpy" in f"{c.get('run_dir', '')}{c.get('candidate', '')}".lower() for c in cands)
         )

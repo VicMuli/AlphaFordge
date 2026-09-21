@@ -115,6 +115,11 @@ export default function Portfolio({ config }: { config: any }) {
   };
 
   const handleBuild = () => {
+    const cleanPortName = (portfolioName || 'Quant_Portfolio_001')
+      .replace(/[/\\:]+/g, '_')
+      .replace(/_+/g, '_')
+      .replace(/^_+|_+$/g, '');
+
     const formattedCandidates = candidateRows.map(row => ({
       run_dir: row.runDir,
       candidate: row.candidate,
@@ -124,7 +129,7 @@ export default function Portfolio({ config }: { config: any }) {
     runScript('build_quant_portfolio.py', {
       patch: {
         patches: {
-          PORTFOLIO_NAME: portfolioName,
+          PORTFOLIO_NAME: cleanPortName,
           QUANT_NAME: config.quant_name || 'TRB',
         },
         candidates: formattedCandidates

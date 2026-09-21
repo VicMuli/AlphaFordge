@@ -1868,7 +1868,9 @@ def resolve_portfolio_name(
                     )
 
     if requested:
-        name = requested
+        # Sanitize to strictly a flat folder name - never create subdirectories like TRB_USDJPY/ or TRB_EURJPY/
+        name = re.sub(r"[/\\:]+", "_", requested.strip())
+        name = re.sub(r"_+", "_", name).strip("_")
 
         if (
             quant_dir / name
@@ -1876,11 +1878,11 @@ def resolve_portfolio_name(
             n = 2
 
             while (
-                quant_dir / f"{requested}_v{n}"
+                quant_dir / f"{name}_v{n}"
             ).exists():
                 n += 1
 
-            name = f"{requested}_v{n}"
+            name = f"{name}_v{n}"
 
             print(
                 f"  [INFO] '{requested}' already exists; "
@@ -3418,22 +3420,6 @@ def main():
         completed_trades=completed_trades,
         trade_methods=trade_methods,
     )
-
-    # If MultiMarket portfolio, synchronize between nested and flat formats:
-    if is_multi_market:
-        alias_dirs = [
-            MULTI_MARKET_DIR / safe_portfolio_name,
-            MULTI_MARKET_DIR / "TRB_USDJPY" / "EURJPY_Portfolio_001",
-        ]
-        for adir in alias_dirs:
-            try:
-                if adir.resolve() != portfolio_dir.resolve():
-                    adir.mkdir(parents=True, exist_ok=True)
-                    for item in portfolio_dir.iterdir():
-                        if item.is_file():
-                            shutil.copy2(item, adir / item.name)
-            except Exception as e:
-                pass
 
     print("\n" + "=" * 76)
     print(

@@ -4,11 +4,13 @@ import { Play, FolderOpen, RefreshCw, Square, Trash2 } from 'lucide-react';
 import { useScriptRunner } from '../useScriptRunner';
 
 export default function FullBacktest({ config }: { config: any }) {
+  const MARKETS = ['USDJPY', 'EURJPY', 'EURUSD', 'GBPUSD', 'XAUUSD'];
   const { logs, isRunning, runScript, stopScript, clearLogs } = useScriptRunner();
   const [runs, setRuns] = useState<any[]>([]);
   const [selectedRun, setSelectedRun] = useState<string>('');
   const [candidates, setCandidates] = useState<string[]>([]);
   const [selectedCand, setSelectedCand] = useState<string>('');
+  const [selectedMarket, setSelectedMarket] = useState<string>(config.symbol || 'USDJPY');
   const [fromDate, setFromDate] = useState<string>(config.train_from || '2013.01.01');
   const [toDate, setToDate] = useState<string>(config.holdout_to || '2026.07.03');
   const [deposit, setDeposit] = useState<string>(config.deposit || '2500');
@@ -72,9 +74,11 @@ export default function FullBacktest({ config }: { config: any }) {
         patches: {
           TARGET_RUN_DIR: selectedRun || 'latest',
           TARGET_CANDIDATE: selectedCand || 'cand_001',
+          TARGET_SYMBOL: selectedMarket || 'USDJPY',
         }
       },
       envOverrides: {
+        AF_SYMBOL: selectedMarket || 'USDJPY',
         AF_BT_START: fromDate,
         AF_BT_END: toDate,
         AF_DEPOSIT: deposit,
@@ -126,6 +130,19 @@ export default function FullBacktest({ config }: { config: any }) {
               ) : (
                 <option value="cand_001">cand_001 (default)</option>
               )}
+            </select>
+          </div>
+
+          <div className="flex items-center gap-4">
+            <label className="text-[#8b95a6] w-36 text-right text-xs font-semibold">Market / Symbol</label>
+            <select 
+              value={selectedMarket} 
+              onChange={e => setSelectedMarket(e.target.value)}
+              className="bg-[#1a2235] border border-[#2d3748] text-[#f9fafb] rounded-lg px-3 py-2 flex-1 text-sm focus:outline-none focus:border-[#f59e0b]"
+            >
+              {MARKETS.map(m => (
+                <option key={m} value={m}>{m}</option>
+              ))}
             </select>
           </div>
         </div>
