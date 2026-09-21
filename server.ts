@@ -350,6 +350,10 @@ async function startServer() {
         } catch {}
       }
       await scanPortfolios(optRunsDir);
+      const multiMarketDir = path.join(cwd, 'MultiMarket portfolio');
+      if (existsSync(multiMarketDir)) {
+        await scanPortfolios(multiMarketDir);
+      }
       portfolios.sort().reverse();
 
       const researchedItems: { name: string; isDir: boolean; itemsCount?: number; mtime: string }[] = [];
@@ -487,6 +491,10 @@ async function startServer() {
       }
 
       await scan(optRunsDir);
+      const multiMarketDir = path.join(cwd, 'MultiMarket portfolio');
+      if (existsSync(multiMarketDir)) {
+        await scan(multiMarketDir);
+      }
       res.json({ portfolios });
     } catch (e: any) {
       res.status(500).json({ error: e.message });

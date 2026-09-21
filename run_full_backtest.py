@@ -1230,28 +1230,82 @@ def create_full_backtest_word_doc(
 
 
 def resolve_candidate_dir(base_work_dir: Path, target_run: str, target_cand: str) -> Path | None:
-    if target_run and target_run.strip().lower() != "latest":
-        run_dir = base_work_dir / target_run.strip()
-        if not run_dir.exists():
-            print(f"ERROR: Specified run directory '{target_run}' does not exist.")
-            return None
-        passed_path = run_dir / "passed_candidates" / target_cand
-        if passed_path.exists():
-            return passed_path
-        direct_path = run_dir / target_cand
-        if direct_path.exists():
-            return direct_path
-        print(f"ERROR: Could not find {target_cand} under {run_dir} or {run_dir / 'passed_candidates'}.")
-        return None
+    # Candidate name variants to check (e.g. cand_001, cand_1, cand_01)
+    cand_variants = [target_cand]
+    m = re.search(r"(\d+)", target_cand)
+    if m:
+        num = int(m.group(1))
+        for fmt in (f"cand_{num:03d}", f"cand_{num:02d}", f"cand_{num}", f"cand_{num:04d}", f"c_{num:03d}"):
+            if fmt not in cand_variants:
+                cand_variants.append(fmt)
 
-    run_dirs = sorted([d for d in base_work_dir.glob("run_*") if d.is_dir()], reverse=True)
-    for run_dir in run_dirs:
-        passed_path = run_dir / "passed_candidates" / target_cand
-        if passed_path.exists():
-            return passed_path
-        direct_path = run_dir / target_cand
-        if direct_path.exists():
-            return direct_path
+    # If target_run is directly an existing path
+    if target_run and Path(target_run).exists():
+        direct_run = Path(target_run)
+        for cvar in cand_variants:
+            for p in (direct_run / "passed_candidates" / cvar, direct_run / cvar, direct_run / "full_backtest" / cvar):
+                if p.exists() and p.is_dir():
+                    return p
+            if direct_run.name == cvar or direct_run.name == target_cand:
+                return direct_run
+
+    # Collect search roots
+    roots = [base_work_dir]
+    if base_work_dir.parent.exists():
+        roots.append(base_work_dir.parent)
+        try:
+            for sibling in base_work_dir.parent.iterdir():
+                if sibling.is_dir() and sibling not in roots:
+                    roots.append(sibling)
+        except OSError:
+            pass
+    script_runs = Path(__file__).parent / "optimization_runs"
+    if script_runs.exists() and script_runs not in roots:
+        roots.append(script_runs)
+
+    # 1. If target_run specified
+    if target_run and target_run.strip().lower() not in ("latest", "", "(none)", "(auto)"):
+        clean_run = target_run.strip().replace("\\", "/").rstrip("/")
+        for root in roots:
+            for cand_run_path in (root / clean_run, root / Path(clean_run).name):
+                if cand_run_path.exists() and cand_run_path.is_dir():
+                    for cvar in cand_variants:
+                        for p in (cand_run_path / "passed_candidates" / cvar,
+                                  cand_run_path / cvar,
+                                  cand_run_path / "full_backtest" / cvar):
+                            if p.exists() and p.is_dir():
+                                return p
+
+        # Deep search for run folder by name
+        run_leaf = Path(clean_run).name
+        for root in roots:
+            try:
+                for match in root.rglob(run_leaf):
+                    if match.is_dir():
+                        for cvar in cand_variants:
+                            for p in (match / "passed_candidates" / cvar,
+                                      match / cvar,
+                                      match / "full_backtest" / cvar):
+                                if p.exists() and p.is_dir():
+                                    return p
+            except OSError:
+                pass
+
+    # 2. If target_run not found or empty / "latest", search across candidate folders
+    for root in roots:
+        for cvar in cand_variants:
+            try:
+                for pc in root.rglob("passed_candidates"):
+                    if pc.is_dir():
+                        p = pc / cvar
+                        if p.exists() and p.is_dir():
+                            return p
+                for p in root.rglob(cvar):
+                    if p.is_dir():
+                        return p
+            except OSError:
+                pass
+
     return None
 
 

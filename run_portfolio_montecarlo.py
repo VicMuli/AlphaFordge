@@ -149,10 +149,19 @@ def resolve_portfolio_dir() -> Path | None:
 
     # Fallback search across work directories
     work_path = Path(WORK_DIR)
-    search_roots = [work_path, work_path.parent, Path(__file__).parent / "optimization_runs"]
+    script_dir = Path(__file__).parent.resolve()
+    search_roots = [
+        work_path,
+        work_path.parent,
+        script_dir / "MultiMarket portfolio",
+        script_dir / "optimization_runs",
+    ]
     for root in search_roots:
         if root.exists():
             try:
+                cand = root / PORTFOLIO_NAME
+                if cand.exists() and cand.is_dir() and ((cand / "combined_trades.csv").exists() or (cand / "portfolio_manifest.json").exists()):
+                    return cand
                 for match in root.rglob(PORTFOLIO_NAME):
                     if match.is_dir() and ((match / "combined_trades.csv").exists() or (match / "portfolio_manifest.json").exists()):
                         return match
@@ -801,8 +810,9 @@ def main():
     export.to_csv(portfolio_dir / "montecarlo_results.csv", index=False)
 
     print("  --> Compiling Word report...")
+    safe_port_name = portfolio_name.replace("/", "_").replace("\\", "_")
     doc_path = create_montecarlo_word_doc(
-        doc_path=portfolio_dir / f"{portfolio_name}_MonteCarlo_Report.docx",
+        doc_path=portfolio_dir / f"{safe_port_name}_MonteCarlo_Report.docx",
         portfolio_name=portfolio_name,
         manifest=manifest,
         deposit=deposit,

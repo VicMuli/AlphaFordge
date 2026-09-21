@@ -297,122 +297,171 @@ def is_valid_portfolio_dir(d: Path) -> bool:
         return False
     name_lower = d.name.lower()
     # Exclude parent container directories
-    if name_lower in ("quant_portfolios", "portfolios") or name_lower.endswith("_quant_portfolios") or name_lower.endswith("_portfolios"):
+    if name_lower in ("quant_portfolios", "portfolios", "multimarket portfolio", "multimarket_portfolio") or name_lower.endswith("_quant_portfolios") or name_lower.endswith("_portfolios"):
         return False
     # Check for portfolio files
     if (d / "portfolio_manifest.json").exists() or (d / "combined_trades.csv").exists():
         return True
-    if any(f.is_file() and (f.name.endswith("_Report.docx") or f.name.startswith("chart_")) for f in d.iterdir()):
+    if any(f.is_file() and (f.name.endswith("_Report.docx") or f.name.startswith("chart_") or f.name == "correlation_matrix.csv") for f in d.iterdir()):
         return True
     pname = d.parent.name.lower()
-    if "quant_portfolios" in pname or pname == "quant_portfolios":
+    if "quant_portfolios" in pname or pname == "quant_portfolios" or "multimarket" in pname:
         return True
-    if "portfolio_" in name_lower:
+    if "portfolio_" in name_lower or "portfolio" in name_lower:
         return True
     return False
 
 
 def get_portfolios(work_dir: str, quant_name: str = "") -> list:
-    """Return sorted list of valid portfolio directory names found under work_dir."""
+    """Return sorted list of valid portfolio directory names found under work_dir and MultiMarket portfolio."""
     base = _resolve_work_dir(work_dir)
-    if not base.exists():
-        return []
-
     found_dirs: list[Path] = []
+    script_dir = Path(__file__).parent.resolve()
 
-    # 1. Direct standard location: base / Quant_Portfolios / {quant_name}_Quant_Portfolios
-    if quant_name:
-        direct = base / "Quant_Portfolios" / f"{quant_name}_Quant_Portfolios"
-        if direct.exists() and direct.is_dir():
-            for d in direct.iterdir():
-                if is_valid_portfolio_dir(d):
-                    found_dirs.append(d)
+    # 1. MultiMarket portfolio directories
+    mm_dirs = [
+        script_dir / "MultiMarket portfolio",
+        base / "MultiMarket portfolio",
+    ]
+    for mm in mm_dirs:
+        if mm.exists() and mm.is_dir():
+            for item in mm.iterdir():
+                if is_valid_portfolio_dir(item):
+                    found_dirs.append(item)
+                elif item.is_dir():
+                    for sub in item.iterdir():
+                        if is_valid_portfolio_dir(sub):
+                            found_dirs.append(sub)
 
-    # 2. Check 1-level subfolders (e.g. base / trb_usdjpy / Quant_Portfolios / ...)
-    try:
-        for sub in base.iterdir():
-            if sub.is_dir() and not sub.name.startswith("."):
-                qp = sub / "Quant_Portfolios"
-                if qp.exists() and qp.is_dir():
-                    if quant_name:
-                        qsub = qp / f"{quant_name}_Quant_Portfolios"
-                        if qsub.exists() and qsub.is_dir():
-                            for d in qsub.iterdir():
-                                if is_valid_portfolio_dir(d):
-                                    found_dirs.append(d)
-                    for sub2 in qp.iterdir():
-                        if is_valid_portfolio_dir(sub2):
-                            found_dirs.append(sub2)
-                        elif sub2.is_dir():
-                            for sub3 in sub2.iterdir():
-                                if is_valid_portfolio_dir(sub3):
-                                    found_dirs.append(sub3)
-    except OSError:
-        pass
+    # 2. Direct standard location: base / Quant_Portfolios / {quant_name}_Quant_Portfolios
+    if base.exists():
+        if quant_name:
+            direct = base / "Quant_Portfolios" / f"{quant_name}_Quant_Portfolios"
+            if direct.exists() and direct.is_dir():
+                for d in direct.iterdir():
+                    if is_valid_portfolio_dir(d):
+                        found_dirs.append(d)
 
-    # 3. Search via rglob for any Quant_Portfolios or portfolio_manifest.json under base
-    try:
-        for qp in base.rglob("Quant_Portfolios"):
-            if qp.is_dir():
-                for item in qp.iterdir():
-                    if is_valid_portfolio_dir(item):
-                        found_dirs.append(item)
-                    elif item.is_dir():
-                        for item2 in item.iterdir():
-                            if is_valid_portfolio_dir(item2):
-                                found_dirs.append(item2)
-    except OSError:
-        pass
+        # 3. Check 1-level subfolders (e.g. base / trb_usdjpy / Quant_Portfolios / ...)
+        try:
+            for sub in base.iterdir():
+                if sub.is_dir() and not sub.name.startswith("."):
+                    qp = sub / "Quant_Portfolios"
+                    if qp.exists() and qp.is_dir():
+                        if quant_name:
+                            qsub = qp / f"{quant_name}_Quant_Portfolios"
+                            if qsub.exists() and qsub.is_dir():
+                                for d in qsub.iterdir():
+                                    if is_valid_portfolio_dir(d):
+                                        found_dirs.append(d)
+                        for sub2 in qp.iterdir():
+                            if is_valid_portfolio_dir(sub2):
+                                found_dirs.append(sub2)
+                            elif sub2.is_dir():
+                                for sub3 in sub2.iterdir():
+                                    if is_valid_portfolio_dir(sub3):
+                                        found_dirs.append(sub3)
+        except OSError:
+            pass
 
-    try:
-        for manifest in base.rglob("portfolio_manifest.json"):
-            if is_valid_portfolio_dir(manifest.parent):
-                found_dirs.append(manifest.parent)
-        for trades in base.rglob("combined_trades.csv"):
-            if is_valid_portfolio_dir(trades.parent):
-                found_dirs.append(trades.parent)
-    except OSError:
-        pass
+        # 4. Search via rglob for any Quant_Portfolios or portfolio_manifest.json under base
+        try:
+            for qp in base.rglob("Quant_Portfolios"):
+                if qp.is_dir():
+                    for item in qp.iterdir():
+                        if is_valid_portfolio_dir(item):
+                            found_dirs.append(item)
+                        elif item.is_dir():
+                            for item2 in item.iterdir():
+                                if is_valid_portfolio_dir(item2):
+                                    found_dirs.append(item2)
+        except OSError:
+            pass
 
-    # Deduplicate by folder name
-    unique_names = {d.name: d for d in found_dirs}
+        try:
+            for manifest in base.rglob("portfolio_manifest.json"):
+                if is_valid_portfolio_dir(manifest.parent):
+                    found_dirs.append(manifest.parent)
+            for trades in base.rglob("combined_trades.csv"):
+                if is_valid_portfolio_dir(trades.parent):
+                    found_dirs.append(trades.parent)
+        except OSError:
+            pass
+
+    # Deduplicate and register names (including relative path for nested folders)
+    unique_names = {}
+    for d in found_dirs:
+        unique_names[d.name] = d
+        if d.parent.name and d.parent.name not in ("Quant_Portfolios", "MultiMarket portfolio") and not d.parent.name.endswith("_Quant_Portfolios"):
+            unique_names[f"{d.parent.name}/{d.name}"] = d
+
     return sorted(list(unique_names.keys()), reverse=True)
 
 
 def find_portfolio_path(work_dir: str, quant_name: str, port_name: str) -> Path | None:
-    """Find the exact directory Path for a given portfolio name."""
+    """Find the exact directory Path for a given portfolio name across all locations."""
     if not port_name or port_name == "(none)":
         return None
     base = _resolve_work_dir(work_dir)
-    if not base.exists():
-        return None
+    script_dir = Path(__file__).parent.resolve()
 
-    # 1. Direct standard location: base / Quant_Portfolios / {quant_name}_Quant_Portfolios / port_name
-    if quant_name:
-        cand = base / "Quant_Portfolios" / f"{quant_name}_Quant_Portfolios" / port_name
-        if cand.exists() and is_valid_portfolio_dir(cand):
-            return cand
+    # 1. MultiMarket portfolio checks
+    mm_dirs = [
+        script_dir / "MultiMarket portfolio",
+        base / "MultiMarket portfolio",
+    ]
+    for mm in mm_dirs:
+        if mm.exists() and mm.is_dir():
+            # Exact folder match
+            cand = mm / port_name
+            if cand.exists() and is_valid_portfolio_dir(cand):
+                return cand
+            # Nested path match (e.g. TRB_USDJPY/EURJPY_Portfolio_001)
+            parts = port_name.replace("\\", "/").split("/")
+            if len(parts) > 1:
+                cand_nested = mm.joinpath(*parts)
+                if cand_nested.exists() and is_valid_portfolio_dir(cand_nested):
+                    return cand_nested
+            # Scan subfolders
+            for sub in mm.iterdir():
+                if sub.is_dir():
+                    if sub.name == port_name and is_valid_portfolio_dir(sub):
+                        return sub
+                    cand_child = sub / port_name
+                    if cand_child.exists() and is_valid_portfolio_dir(cand_child):
+                        return cand_child
+                    for sub2 in sub.iterdir():
+                        if sub2.is_dir() and sub2.name == port_name and is_valid_portfolio_dir(sub2):
+                            return sub2
 
-    # 2. Check in subfolders (e.g. base / trb_usdjpy / Quant_Portfolios / ...)
-    try:
-        for sub in base.iterdir():
-            if sub.is_dir() and not sub.name.startswith("."):
-                cand = sub / "Quant_Portfolios" / f"{quant_name}_Quant_Portfolios" / port_name
-                if cand.exists() and is_valid_portfolio_dir(cand):
-                    return cand
-                cand2 = sub / "Quant_Portfolios" / port_name
-                if cand2.exists() and is_valid_portfolio_dir(cand2):
-                    return cand2
-    except OSError:
-        pass
+    # 2. Direct standard location: base / Quant_Portfolios / {quant_name}_Quant_Portfolios / port_name
+    if base.exists():
+        if quant_name:
+            cand = base / "Quant_Portfolios" / f"{quant_name}_Quant_Portfolios" / port_name
+            if cand.exists() and is_valid_portfolio_dir(cand):
+                return cand
 
-    # 3. Search via rglob
-    try:
-        for found in base.rglob(port_name):
-            if is_valid_portfolio_dir(found):
-                return found
-    except OSError:
-        pass
+        # 3. Check in subfolders (e.g. base / trb_usdjpy / Quant_Portfolios / ...)
+        try:
+            for sub in base.iterdir():
+                if sub.is_dir() and not sub.name.startswith("."):
+                    cand = sub / "Quant_Portfolios" / f"{quant_name}_Quant_Portfolios" / port_name
+                    if cand.exists() and is_valid_portfolio_dir(cand):
+                        return cand
+                    cand2 = sub / "Quant_Portfolios" / port_name
+                    if cand2.exists() and is_valid_portfolio_dir(cand2):
+                        return cand2
+        except OSError:
+            pass
+
+        # 4. Search via rglob
+        try:
+            target_leaf = Path(port_name).name
+            for found in base.rglob(target_leaf):
+                if is_valid_portfolio_dir(found):
+                    return found
+        except OSError:
+            pass
 
     return None
 
@@ -2537,7 +2586,13 @@ class PortfolioPanel(BasePanel):
             c = cand_e.get().strip()
             w = wgt_e.get().strip() or "1.0"
             if r and c:
-                cands.append({"run_dir": r, "candidate": c, "weight": float(w)})
+                item = {"run_dir": r, "candidate": c, "weight": float(w)}
+                combined_str = f"{r} {c}".lower()
+                for mkt in ("eurjpy", "usdjpy", "gbpjpy", "audusd", "eurusd", "xauusd", "btcusd"):
+                    if mkt in combined_str:
+                        item["market"] = mkt.upper()
+                        break
+                cands.append(item)
         return cands
 
     def _build_portfolio(self):
@@ -2549,14 +2604,24 @@ class PortfolioPanel(BasePanel):
         if not port_name:
             messagebox.showwarning("Missing", "Enter a portfolio name.")
             return
+
+        is_multi_market = (
+            "/" in port_name
+            or "multimarket" in port_name.lower()
+            or len(set(c.get("market") for c in cands if c.get("market"))) > 1
+            or any("usdjpy" in f"{c.get('run_dir', '')}{c.get('candidate', '')}".lower() for c in cands) and any("eurjpy" in f"{c.get('run_dir', '')}{c.get('candidate', '')}".lower() for c in cands)
+        )
+
         # Patch build_quant_portfolio.py
         cfg        = self.cfg
         cands_repr = json.dumps(cands, indent=4)
         script     = SCRIPT_DIR / "build_quant_portfolio.py"
-        patch_script(script, {
+        patches = {
             "PORTFOLIO_NAME":    port_name,
             "QUANT_NAME":        cfg.get("quant_name","TRB"),
-        })
+            "PORTFOLIO_TYPE":    "MultiMarket" if is_multi_market else "SingleMarket",
+        }
+        patch_script(script, patches)
         # Also patch the CANDIDATES list (special multi-line replacement)
         try:
             text = script.read_text(encoding="utf-8")
