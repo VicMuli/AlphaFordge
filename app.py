@@ -84,6 +84,9 @@ DEFAULT_CONFIG = {
     "mc_daily_dd":        "5.0",
     "mc_phase1_target":   "8.0",
     "mc_phase2_target":   "5.0",
+    "mc_block_size":      "10",
+    "mc_max_days":        "250",
+    "mc_no_max_days":     "false",
     "work_dir":           str(SCRIPT_DIR / "optimization_runs"),
     "quant_name":         "TRB",
     "research_dir":       str(SCRIPT_DIR / "researched_strategies"),
@@ -94,6 +97,7 @@ NAV_ITEMS = [
     ("🏠", "Dashboard",    "dashboard"),
     ("🔬", "Research",     "research"),
     ("⚙",  "Optimize",    "optimize"),
+    ("🎲", "Monte Carlo",  "montecarlo"),
     ("📈", "Walk Forward", "walkforward"),
     ("📋", "Full Backtest","fullbacktest"),
     ("📦", "Portfolio",    "portfolio"),
@@ -436,6 +440,137 @@ def patch_script(script_path: Path, patches: dict):
         return False
 
 
+def open_in_file_manager(path_obj: Path | str):
+    """Safely open file or directory in the system file manager/viewer across OSes."""
+    p = Path(path_obj) if not isinstance(path_obj, Path) else path_obj
+    p_str = str(p)
+    try:
+        if sys.platform == "win32":
+            os.startfile(p_str)
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", p_str])
+        else:
+            subprocess.Popen(["xdg-open", p_str])
+    except Exception as e:
+        print(f"Could not open path {p_str}: {e}")
+
+
+def get_all_candidates_summary(work_dir: str, run_filter: str = None) -> list[dict]:
+    """Find all candidate directories across work_dir and return metadata."""
+    base = _resolve_work_dir(work_dir)
+    if not base.exists():
+        return []
+
+    results = []
+
+    def _inspect_cand(cand_dir: Path, run_name: str = ""):
+        cid = cand_dir.name
+        if not cid.startswith("cand_"):
+            return
+        trades_file = cand_dir / "trades.csv"
+        has_trades = trades_file.exists()
+        if not has_trades:
+            try:
+                has_trades = any(
+                    f.suffix.lower() in (".csv", ".htm", ".html", ".xml") and
+                    ("report" in f.name.lower() or "backtest" in f.name.lower() or "trades" in f.name.lower())
+                    for f in cand_dir.iterdir() if f.is_file()
+                )
+            except Exception:
+                has_trades = False
+
+        mc_file = cand_dir / "monte_carlo_results.json"
+        is_cert = None
+        pass_rate = None
+        worst_dd = None
+        if mc_file.exists():
+            try:
+                with open(mc_file, "r", encoding="utf-8") as f:
+                    mc_data = json.load(f)
+                    is_cert = mc_data.get("is_certified")
+                    pass_rate = mc_data.get("combined_pass_rate")
+                    worst_dd = mc_data.get("worst_breach_max_dd")
+            except Exception:
+                pass
+
+        results.append({
+            "id": cid,
+            "dir": cand_dir,
+            "run": run_name,
+            "has_trades": bool(has_trades),
+            "has_mc": mc_file.exists(),
+            "is_certified": is_cert,
+            "pass_rate": pass_rate,
+            "worst_dd": worst_dd
+        })
+
+    # If run_filter is specified and not Auto
+    if run_filter and run_filter not in ("(Auto-detect across workspace)", "(none)", "latest", ""):
+        rpath = find_run_path(work_dir, run_filter)
+        if rpath and rpath.exists():
+            pc = rpath / "passed_candidates"
+            if pc.exists() and pc.is_dir():
+                for d in sorted(pc.iterdir()):
+                    if d.is_dir() and d.name.startswith("cand_"):
+                        _inspect_cand(d, run_filter)
+            for d in sorted(rpath.iterdir()):
+                if d.is_dir() and d.name.startswith("cand_"):
+                    if not any(r["id"] == d.name for r in results):
+                        _inspect_cand(d, run_filter)
+            return results
+
+    # Otherwise scan recursively
+    try:
+        for p in base.rglob("passed_candidates"):
+            if p.is_dir():
+                run_name = p.parent.name
+                for d in sorted(p.iterdir()):
+                    if d.is_dir() and d.name.startswith("cand_"):
+                        _inspect_cand(d, run_name)
+        for d in base.rglob("cand_*"):
+            if d.is_dir() and not any(r["dir"] == d for r in results):
+                run_name = d.parent.name if d.parent.name != "passed_candidates" else d.parent.parent.name
+                _inspect_cand(d, run_name)
+    except Exception:
+        pass
+
+    results.sort(key=lambda x: x["id"])
+    return results
+
+
+def find_candidate_path(work_dir: str, candidate_name: str, run_dir: str = None) -> Path | None:
+    """Resolve candidate directory path given candidate ID and optional run_dir."""
+    if not candidate_name:
+        return None
+    base = _resolve_work_dir(work_dir)
+    if not base.exists():
+        return None
+
+    if run_dir and run_dir not in ("(Auto-detect across workspace)", "(none)", "latest", ""):
+        rpath = find_run_path(work_dir, run_dir)
+        if rpath:
+            p1 = rpath / "passed_candidates" / candidate_name
+            if p1.exists() and p1.is_dir():
+                return p1
+            p2 = rpath / candidate_name
+            if p2.exists() and p2.is_dir():
+                return p2
+
+    # Check passed_candidates across base
+    for pc in base.rglob("passed_candidates"):
+        if pc.is_dir():
+            target = pc / candidate_name
+            if target.exists() and target.is_dir():
+                return target
+
+    # Check directly
+    for d in base.rglob(candidate_name):
+        if d.is_dir() and d.name == candidate_name:
+            return d
+
+    return None
+
+
 import tkinter as tk
 
 def _add_context_menu(widget, is_text=False):
@@ -565,6 +700,10 @@ class SubprocessMixin:
 
         cmd = [sys.executable, str(script_path)] + (args or [])
 
+        # Notify app status if available
+        if hasattr(self, "app") and hasattr(self.app, "set_process_status"):
+            self.app.set_process_status(script_name)
+
         def _worker():
             self.log_append(log_widget,
                 f"▶  {datetime.now().strftime('%H:%M:%S')}  {script_name}\n"
@@ -582,10 +721,14 @@ class SubprocessMixin:
                 self.log_append(log_widget,
                     f"\n{'─'*60}\n✔  Finished  (code {proc.returncode})  "
                     f"{datetime.now().strftime('%H:%M:%S')}\n")
+                if hasattr(self, "app") and hasattr(self.app, "set_process_status"):
+                    self.app.after(0, lambda: self.app.set_process_status(None))
                 if on_done:
                     log_widget.after(0, on_done)
             except Exception as exc:
                 self.log_append(log_widget, f"\n[ERROR] {exc}\n")
+                if hasattr(self, "app") and hasattr(self.app, "set_process_status"):
+                    self.app.after(0, lambda: self.app.set_process_status(None))
 
         threading.Thread(target=_worker, daemon=True).start()
 
@@ -1278,6 +1421,742 @@ class OptimizePanel(BasePanel):
 
         make_btn(footer, "💾 Save & Apply Gates", _save_criteria, width=180).pack(side="right", padx=(8, 0))
         make_btn(footer, "Close", dlg.destroy, color=C["card"], hover=C["hover"], width=100).pack(side="right")
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Monte Carlo Panel
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class MonteCarloPanel(BasePanel):
+    """Monte Carlo Block-Bootstrap Risk Simulation & Prop Firm Certification Panel."""
+
+    def __init__(self, parent, app):
+        super().__init__(parent, app)
+        self.columnconfigure(0, weight=1)
+        self._all_cands_info = []
+        self._build()
+
+    def _build(self):
+        pad = dict(padx=32, pady=(24, 0))
+        make_section_header(
+            self, "🎲  Monte Carlo Risk Engine",
+            "Block-bootstrap Monte Carlo simulations & Prop Firm Certification (Phase 1 & Phase 2)"
+        ).grid(row=0, column=0, sticky="ew", **pad)
+
+        cfg = self.cfg
+
+        # ── 3-Column Parameter Configuration Cards ───────────────────────────
+        grid_frame = ctk.CTkFrame(self, fg_color="transparent")
+        grid_frame.grid(row=1, column=0, sticky="ew", padx=32, pady=(16, 0))
+        grid_frame.columnconfigure((0, 1, 2), weight=1)
+
+        # ── Card 1: Target Scope & Candidate ─────────────────────────────────
+        c1 = make_card(grid_frame)
+        c1.grid(row=0, column=0, sticky="nsew", padx=(0, 8), pady=0)
+        c1.columnconfigure(0, weight=1)
+
+        c1_hdr = ctk.CTkFrame(c1, fg_color="transparent")
+        c1_hdr.pack(fill="x", padx=16, pady=(12, 6))
+        make_label(c1_hdr, "🎯 Candidate & Scope", font=FH3, color=C["accent"]).pack(side="left")
+
+        # Run directory selector
+        make_label(c1, "Scope / Run Folder", font=FSM, color=C["sub"]).pack(anchor="w", padx=16, pady=(4, 2))
+        run_dirs = ["(Auto-detect across workspace)"] + get_run_dirs(cfg.get("work_dir", ""))
+        self._run_var = ctk.StringVar(value=run_dirs[0])
+        self._run_cb = ctk.CTkComboBox(c1, values=run_dirs, variable=self._run_var,
+                                       height=32, font=FB, fg_color=C["inp"],
+                                       border_color=C["border"], button_color=C["accent"],
+                                       command=lambda r: self._on_run_changed(r))
+        self._run_cb.pack(fill="x", padx=16, pady=(0, 6))
+
+        # Candidate selector with refresh
+        cand_lbl_frame = ctk.CTkFrame(c1, fg_color="transparent")
+        cand_lbl_frame.pack(fill="x", padx=16, pady=(2, 2))
+        make_label(cand_lbl_frame, "Candidate", font=FSM, color=C["sub"]).pack(side="left")
+        ctk.CTkButton(cand_lbl_frame, text="⟳ Refresh", width=65, height=20, font=FSM,
+                      fg_color=C["hover"], hover_color="#2f3d5c",
+                      command=self._refresh_candidates_list).pack(side="right")
+
+        self._cand_var = ctk.StringVar()
+        self._cand_cb = ctk.CTkComboBox(c1, values=["(scanning...)"], variable=self._cand_var,
+                                        height=32, font=FB, fg_color=C["inp"],
+                                        border_color=C["border"], button_color=C["accent"],
+                                        command=lambda c: self._on_cand_changed(c))
+        self._cand_cb.pack(fill="x", padx=16, pady=(0, 6))
+
+        # Custom Candidate Override
+        make_label(c1, "Or Custom Candidate ID", font=FSM, color=C["sub"]).pack(anchor="w", padx=16, pady=(2, 2))
+        self._custom_cand = make_entry(c1, placeholder="e.g. cand_014", height=30)
+        self._custom_cand.pack(fill="x", padx=16, pady=(0, 8))
+        self._custom_cand.bind("<KeyRelease>", lambda e: self._on_custom_cand_changed())
+
+        # Candidate Info Mini-Card
+        self._cand_info_frame = ctk.CTkFrame(c1, fg_color="#141b2d", corner_radius=8,
+                                             border_width=1, border_color=C["border"])
+        self._cand_info_frame.pack(fill="x", padx=16, pady=(2, 14))
+
+        self._cand_status_lbl = make_label(self._cand_info_frame, "Status: Ready for Monte Carlo",
+                                           font=FSM, color=C["sub"])
+        self._cand_status_lbl.pack(anchor="w", padx=10, pady=(6, 2))
+
+        self._cand_dir_lbl = make_label(self._cand_info_frame, "Path: Auto-scan workspace",
+                                        font=FSM, color="#64748b")
+        self._cand_dir_lbl.pack(anchor="w", padx=10, pady=(0, 2))
+
+        self._cand_trades_lbl = make_label(self._cand_info_frame, "Trades: Checking...",
+                                           font=FSM, color="#64748b")
+        self._cand_trades_lbl.pack(anchor="w", padx=10, pady=(0, 6))
+
+        # ── Card 2: Simulation Horizons ──────────────────────────────────────
+        c2 = make_card(grid_frame)
+        c2.grid(row=0, column=1, sticky="nsew", padx=8, pady=0)
+        c2.columnconfigure(0, weight=1)
+
+        c2_hdr = ctk.CTkFrame(c2, fg_color="transparent")
+        c2_hdr.pack(fill="x", padx=16, pady=(12, 6))
+        make_label(c2_hdr, "⚡ Simulation Horizons", font=FH3, color=C["blue"]).pack(side="left")
+        make_label(c2_hdr, "Block-Bootstrap", font=FSM, color=C["blue"]).pack(side="right")
+
+        # Iterations / Sims count
+        sims_f = ctk.CTkFrame(c2, fg_color="transparent")
+        sims_f.pack(fill="x", padx=16, pady=(4, 2))
+        make_label(sims_f, "Iterations (Runs):", font=FSM, color=C["sub"]).pack(side="left")
+        self._sims_entry = make_entry(sims_f, width=100, height=28)
+        self._sims_entry.insert(0, cfg.get("mc_simulations", "5000"))
+        self._sims_entry.pack(side="right")
+
+        # Quick preset buttons for simulations
+        presets_f = ctk.CTkFrame(c2, fg_color="transparent")
+        presets_f.pack(fill="x", padx=16, pady=(0, 8))
+        for num, label in [(1000, "1k"), (2500, "2.5k"), (5000, "5k"), (10000, "10k")]:
+            ctk.CTkButton(
+                presets_f, text=label, width=42, height=22, font=FSM,
+                fg_color="#141b2d", hover_color=C["hover"],
+                border_width=1, border_color=C["border"],
+                command=lambda n=num: self._set_sims(n)
+            ).pack(side="left", expand=True, padx=2)
+
+        # Deposit / Capital
+        dep_f = ctk.CTkFrame(c2, fg_color="transparent")
+        dep_f.pack(fill="x", padx=16, pady=(0, 8))
+        make_label(dep_f, "Deposit / Capital ($):", font=FSM, color=C["sub"]).pack(side="left")
+        self._dep_entry = make_entry(dep_f, width=100, height=28)
+        self._dep_entry.insert(0, cfg.get("deposit", "2500"))
+        self._dep_entry.pack(side="right")
+        self._dep_entry.bind("<KeyRelease>", lambda e: self._update_calc_preview())
+
+        # Block size
+        block_f = ctk.CTkFrame(c2, fg_color="transparent")
+        block_f.pack(fill="x", padx=16, pady=(0, 4))
+        make_label(block_f, "Resample Block (Days):", font=FSM, color=C["sub"]).pack(side="left")
+        self._block_entry = make_entry(block_f, width=100, height=28)
+        self._block_entry.insert(0, cfg.get("mc_block_size", "10"))
+        self._block_entry.pack(side="right")
+        make_label(c2, "Preserves volatility clusters & streaks", font=ctk.CTkFont("Segoe UI", 9),
+                   color="#64748b").pack(anchor="w", padx=16, pady=(0, 8))
+
+        # Max Trading Days
+        days_f = ctk.CTkFrame(c2, fg_color="transparent")
+        days_f.pack(fill="x", padx=16, pady=(0, 6))
+        make_label(days_f, "Max Trading Days:", font=FSM, color=C["sub"]).pack(side="left")
+        self._maxdays_entry = make_entry(days_f, width=100, height=28)
+        self._maxdays_entry.insert(0, cfg.get("mc_max_days", "250"))
+        self._maxdays_entry.pack(side="right")
+
+        # Unlimited horizon toggle switch
+        self._no_max_days_var = ctk.BooleanVar(value=cfg.get("mc_no_max_days", "false").lower() == "true")
+        self._no_max_switch = ctk.CTkSwitch(
+            c2, text="Unlimited Trading Days (No Cap)",
+            variable=self._no_max_days_var,
+            font=FSM, text_color=C["sub"],
+            progress_color=C["accent"], button_color="#ffffff",
+            command=self._on_no_max_toggle
+        )
+        self._no_max_switch.pack(anchor="w", padx=16, pady=(4, 14))
+
+        # ── Card 3: Prop Firm Gates ──────────────────────────────────────────
+        c3 = make_card(grid_frame)
+        c3.grid(row=0, column=2, sticky="nsew", padx=(8, 0), pady=0)
+        c3.columnconfigure(0, weight=1)
+
+        c3_hdr = ctk.CTkFrame(c3, fg_color="transparent")
+        c3_hdr.pack(fill="x", padx=16, pady=(12, 6))
+        make_label(c3_hdr, "🛡 Prop Firm Gate Limits", font=FH3, color=C["success"]).pack(side="left")
+        make_label(c3_hdr, "Two-Phase", font=FSM, color=C["success"]).pack(side="right")
+
+        # Phase 1 Target %
+        p1_f = ctk.CTkFrame(c3, fg_color="transparent")
+        p1_f.pack(fill="x", padx=16, pady=(4, 2))
+        make_label(p1_f, "Phase 1 Target (%):", font=FSM, color=C["sub"]).pack(side="left")
+        self._p1_entry = make_entry(p1_f, width=80, height=28)
+        self._p1_entry.insert(0, cfg.get("mc_phase1_target", "8.0"))
+        self._p1_entry.pack(side="right")
+        self._p1_entry.bind("<KeyRelease>", lambda e: self._update_calc_preview())
+
+        self._p1_dollar_lbl = make_label(c3, "+$200.00 profit required", font=ctk.CTkFont("Segoe UI", 9),
+                                         color=C["success"])
+        self._p1_dollar_lbl.pack(anchor="e", padx=16, pady=(0, 6))
+
+        # Phase 2 Target %
+        p2_f = ctk.CTkFrame(c3, fg_color="transparent")
+        p2_f.pack(fill="x", padx=16, pady=(0, 2))
+        make_label(p2_f, "Phase 2 Target (%):", font=FSM, color=C["sub"]).pack(side="left")
+        self._p2_entry = make_entry(p2_f, width=80, height=28)
+        self._p2_entry.insert(0, cfg.get("mc_phase2_target", "5.0"))
+        self._p2_entry.pack(side="right")
+        self._p2_entry.bind("<KeyRelease>", lambda e: self._update_calc_preview())
+
+        self._p2_dollar_lbl = make_label(c3, "+$125.00 profit required", font=ctk.CTkFont("Segoe UI", 9),
+                                         color=C["blue"])
+        self._p2_dollar_lbl.pack(anchor="e", padx=16, pady=(0, 6))
+
+        # Max Static DD %
+        maxdd_f = ctk.CTkFrame(c3, fg_color="transparent")
+        maxdd_f.pack(fill="x", padx=16, pady=(0, 2))
+        make_label(maxdd_f, "Max Static DD (%):", font=FSM, color=C["sub"]).pack(side="left")
+        self._maxdd_entry = make_entry(maxdd_f, width=80, height=28)
+        self._maxdd_entry.insert(0, cfg.get("mc_max_dd", "10.0"))
+        self._maxdd_entry.pack(side="right")
+        self._maxdd_entry.bind("<KeyRelease>", lambda e: self._update_calc_preview())
+
+        self._maxdd_dollar_lbl = make_label(c3, "-$250.00 drawdown ceiling", font=ctk.CTkFont("Segoe UI", 9),
+                                            color=C["danger"])
+        self._maxdd_dollar_lbl.pack(anchor="e", padx=16, pady=(0, 6))
+
+        # Daily DD Limit %
+        dailydd_f = ctk.CTkFrame(c3, fg_color="transparent")
+        dailydd_f.pack(fill="x", padx=16, pady=(0, 2))
+        make_label(dailydd_f, "Daily DD Limit (%):", font=FSM, color=C["sub"]).pack(side="left")
+        self._dailydd_entry = make_entry(dailydd_f, width=80, height=28)
+        self._dailydd_entry.insert(0, cfg.get("mc_daily_dd", "5.0"))
+        self._dailydd_entry.pack(side="right")
+        self._dailydd_entry.bind("<KeyRelease>", lambda e: self._update_calc_preview())
+
+        self._dailydd_dollar_lbl = make_label(c3, "-$125.00 daily loss ceiling", font=ctk.CTkFont("Segoe UI", 9),
+                                              color=C["danger"])
+        self._dailydd_dollar_lbl.pack(anchor="e", padx=16, pady=(0, 10))
+
+        # Initial preview calculation
+        self._update_calc_preview()
+
+        # ── Action Buttons Row ───────────────────────────────────────────────
+        btn_row = ctk.CTkFrame(self, fg_color="transparent")
+        btn_row.grid(row=2, column=0, sticky="ew", padx=32, pady=(16, 0))
+
+        make_btn(btn_row, "▶  Run Candidate Monte Carlo", self._run_candidate_mc,
+                 width=220).pack(side="left")
+
+        make_btn(btn_row, "🎲 Run Portfolio MC", self._run_portfolio_mc,
+                 color=C["blue"], hover="#2563eb", width=180).pack(side="left", padx=(10, 0))
+
+        make_btn(btn_row, "📄 Open Word Report", self._open_word_report,
+                 color=C["card"], hover=C["hover"], width=170).pack(side="left", padx=(10, 0))
+
+        make_btn(btn_row, "📂 Open Folder", self._open_cand_folder,
+                 color=C["card"], hover=C["hover"], width=130).pack(side="left", padx=(10, 0))
+
+        make_btn(btn_row, "💾 Save Defaults", self._save_settings,
+                 color=C["card"], hover=C["hover"], width=130).pack(side="left", padx=(10, 0))
+
+        make_btn(btn_row, "🗑 Clear Output", lambda: self.log_clear(self._log),
+                 color=C["card"], hover=C["hover"], width=120).pack(side="left", padx=(10, 0))
+
+        # ── Certification & Phase Metrics Dashboard Card ─────────────────────
+        self._results_card = make_card(self)
+        self._results_card.grid(row=3, column=0, sticky="ew", padx=32, pady=(16, 0))
+        self._results_card.columnconfigure(0, weight=1)
+
+        # Big Certification Status Banner
+        self._cert_banner = ctk.CTkFrame(self._results_card, fg_color="#141b2d", corner_radius=8,
+                                         border_width=1, border_color=C["border"])
+        self._cert_banner.pack(fill="x", padx=16, pady=(14, 10))
+
+        self._cert_title = make_label(
+            self._cert_banner,
+            "⚪ READY  —  Select a candidate and run Monte Carlo simulation",
+            font=FH2, color=C["sub"]
+        )
+        self._cert_title.pack(anchor="center", pady=10)
+
+        # Overview Stats Row
+        self._stats_row = ctk.CTkFrame(self._results_card, fg_color="transparent")
+        self._stats_row.pack(fill="x", padx=16, pady=(0, 10))
+        self._stats_row.columnconfigure((0, 1, 2, 3), weight=1)
+
+        self._stat_combined_pass = self._make_stat_box(self._stats_row, 0, "Combined Pass Rate", "— %", C["accent"])
+        self._stat_worst_dd      = self._make_stat_box(self._stats_row, 1, "Worst Max DD Breach", "— %", C["danger"])
+        self._stat_horizon       = self._make_stat_box(self._stats_row, 2, "Simulation Horizon", "250 Days", C["text"])
+        self._stat_pnl_count     = self._make_stat_box(self._stats_row, 3, "Historical P&L Days", "—", C["sub"])
+
+        # Phase 1 and Phase 2 Comparison Split
+        phases_frame = ctk.CTkFrame(self._results_card, fg_color="transparent")
+        phases_frame.pack(fill="x", padx=16, pady=(0, 14))
+        phases_frame.columnconfigure((0, 1), weight=1)
+
+        # Phase 1 Sub-card
+        p1_box = ctk.CTkFrame(phases_frame, fg_color="#141b2d", corner_radius=8,
+                              border_width=1, border_color=C["border"])
+        p1_box.grid(row=0, column=0, sticky="nsew", padx=(0, 6), pady=0)
+        p1_box.columnconfigure(0, weight=1)
+
+        p1_title_f = ctk.CTkFrame(p1_box, fg_color="transparent")
+        p1_title_f.pack(fill="x", padx=12, pady=(10, 6))
+        make_label(p1_title_f, "Phase 1: Challenge Target", font=FH3, color=C["success"]).pack(side="left")
+        self._p1_badge_lbl = make_label(p1_title_f, "Target: 8.0%", font=FSM, color=C["sub"])
+        self._p1_badge_lbl.pack(side="right")
+
+        self._p1_metrics_lbl = make_label(
+            p1_box,
+            "Pass Rate:             —%\n"
+            "Passes / Runs:         — / —\n"
+            "Max DD Breach:         —%\n"
+            "Daily DD Breach:       —%\n"
+            "Time Expired (>250d):  —%\n"
+            "Median Days to Pass:   —\n"
+            "Median Max DD:         —%",
+            font=FMO, color=C["text"], justify="left"
+        )
+        self._p1_metrics_lbl.pack(anchor="w", padx=12, pady=(0, 10))
+
+        # Phase 2 Sub-card
+        p2_box = ctk.CTkFrame(phases_frame, fg_color="#141b2d", corner_radius=8,
+                              border_width=1, border_color=C["border"])
+        p2_box.grid(row=0, column=1, sticky="nsew", padx=(6, 0), pady=0)
+        p2_box.columnconfigure(0, weight=1)
+
+        p2_title_f = ctk.CTkFrame(p2_box, fg_color="transparent")
+        p2_title_f.pack(fill="x", padx=12, pady=(10, 6))
+        make_label(p2_title_f, "Phase 2: Verification Target", font=FH3, color=C["blue"]).pack(side="left")
+        self._p2_badge_lbl = make_label(p2_title_f, "Target: 5.0%", font=FSM, color=C["sub"])
+        self._p2_badge_lbl.pack(side="right")
+
+        self._p2_metrics_lbl = make_label(
+            p2_box,
+            "Pass Rate:             —%\n"
+            "Passes / Runs:         — / —\n"
+            "Max DD Breach:         —%\n"
+            "Daily DD Breach:       —%\n"
+            "Time Expired (>250d):  —%\n"
+            "Median Days to Pass:   —\n"
+            "Median Max DD:         —%",
+            font=FMO, color=C["text"], justify="left"
+        )
+        self._p2_metrics_lbl.pack(anchor="w", padx=12, pady=(0, 10))
+
+        # ── Output Log ───────────────────────────────────────────────────────
+        log_card = make_card(self)
+        log_card.grid(row=4, column=0, sticky="nsew", padx=32, pady=(16, 24))
+        log_card.columnconfigure(0, weight=1)
+        self.rowconfigure(4, weight=1)
+
+        log_hdr = ctk.CTkFrame(log_card, fg_color="transparent")
+        log_hdr.grid(row=0, column=0, sticky="ew", padx=16, pady=(10, 4))
+        make_label(log_hdr, "Live Monte Carlo Simulation Output", font=FH3, color=C["sub"]).pack(side="left")
+
+        self._log = make_log(log_card, height=220)
+        self._log.grid(row=1, column=0, sticky="nsew", padx=16, pady=(0, 14))
+
+        # Populate initial list of candidates
+        self._refresh_candidates_list()
+
+    def _make_stat_box(self, parent, col, title, value, color):
+        f = ctk.CTkFrame(parent, fg_color="#141b2d", corner_radius=8,
+                         border_width=1, border_color=C["border"])
+        f.grid(row=0, column=col, sticky="nsew", padx=4, pady=0)
+        make_label(f, title, font=ctk.CTkFont("Segoe UI", 10), color=C["sub"]).pack(anchor="w", padx=10, pady=(6, 0))
+        val_lbl = make_label(f, value, font=ctk.CTkFont("Segoe UI", 14, "bold"), color=color)
+        val_lbl.pack(anchor="w", padx=10, pady=(2, 6))
+        return val_lbl
+
+    def _set_sims(self, n: int):
+        self._sims_entry.delete(0, "end")
+        self._sims_entry.insert(0, str(n))
+
+    def _update_calc_preview(self):
+        try:
+            dep = float(self._dep_entry.get().strip())
+        except Exception:
+            dep = 2500.0
+
+        try:
+            p1 = float(self._p1_entry.get().strip())
+            self._p1_dollar_lbl.configure(text=f"+${(dep * p1 / 100.0):,.2f} profit required")
+        except Exception:
+            pass
+
+        try:
+            p2 = float(self._p2_entry.get().strip())
+            self._p2_dollar_lbl.configure(text=f"+${(dep * p2 / 100.0):,.2f} profit required")
+        except Exception:
+            pass
+
+        try:
+            maxdd = float(self._maxdd_entry.get().strip())
+            self._maxdd_dollar_lbl.configure(text=f"-${(dep * maxdd / 100.0):,.2f} drawdown ceiling")
+        except Exception:
+            pass
+
+        try:
+            dailydd = float(self._dailydd_entry.get().strip())
+            self._dailydd_dollar_lbl.configure(text=f"-${(dep * dailydd / 100.0):,.2f} daily loss ceiling")
+        except Exception:
+            pass
+
+    def _on_no_max_toggle(self):
+        is_unlimited = self._no_max_days_var.get()
+        if is_unlimited:
+            self._maxdays_entry.configure(state="disabled")
+            self._stat_horizon.configure(text="Unlimited")
+        else:
+            self._maxdays_entry.configure(state="normal")
+            self._stat_horizon.configure(text=f"{self._maxdays_entry.get().strip()} Days")
+
+    def _get_target_candidate(self) -> str:
+        custom = self._custom_cand.get().strip()
+        if custom:
+            return custom
+        cb_val = self._cand_var.get().strip()
+        if not cb_val or cb_val in ("(none found)", "(scanning...)", "(none)"):
+            return ""
+        return cb_val.split()[0]
+
+    def _refresh_candidates_list(self):
+        cfg = self.cfg
+        run_choice = self._run_var.get().strip()
+        self._all_cands_info = get_all_candidates_summary(cfg.get("work_dir", ""), run_choice)
+
+        formatted_choices = []
+        for c in self._all_cands_info:
+            cid = c["id"]
+            if c.get("is_certified") is True:
+                pr = c.get("pass_rate")
+                tag = f" [CERTIFIED {pr:.1f}%]" if pr is not None else " [CERTIFIED]"
+            elif c.get("is_certified") is False:
+                tag = " [NOT CERTIFIED]"
+            elif c.get("has_trades"):
+                tag = " [Ready]"
+            else:
+                tag = ""
+            formatted_choices.append(f"{cid}{tag}")
+
+        self._cand_cb.configure(values=formatted_choices or ["(none found)"])
+        if formatted_choices:
+            curr = self._cand_var.get()
+            match = next((ch for ch in formatted_choices if ch.split()[0] == curr.split()[0]), None)
+            if match:
+                self._cand_var.set(match)
+            else:
+                self._cand_var.set(formatted_choices[0])
+        else:
+            self._cand_var.set("(none found)")
+
+        self._update_cand_details()
+        self._load_active_result()
+
+    def _on_run_changed(self, run_val):
+        self._refresh_candidates_list()
+
+    def _on_cand_changed(self, cand_val):
+        self._update_cand_details()
+        self._load_active_result()
+
+    def _on_custom_cand_changed(self):
+        self._update_cand_details()
+        self._load_active_result()
+
+    def _update_cand_details(self):
+        target = self._get_target_candidate()
+        if not target:
+            self._cand_status_lbl.configure(text="Status: No candidate selected", text_color=C["sub"])
+            self._cand_dir_lbl.configure(text="Path: —", text_color="#64748b")
+            self._cand_trades_lbl.configure(text="Trades: —", text_color="#64748b")
+            return
+
+        cand_info = next((c for c in self._all_cands_info if c["id"] == target), None)
+        target_path = find_candidate_path(self.cfg.get("work_dir", ""), target, self._run_var.get().strip())
+
+        if cand_info and cand_info.get("is_certified") is True:
+            self._cand_status_lbl.configure(text="Status: ✔ CERTIFIED", text_color=C["success"])
+        elif cand_info and cand_info.get("is_certified") is False:
+            self._cand_status_lbl.configure(text="Status: ✘ NOT CERTIFIED", text_color=C["danger"])
+        else:
+            self._cand_status_lbl.configure(text="Status: Ready for Monte Carlo", text_color=C["sub"])
+
+        if target_path and target_path.exists():
+            rel = str(target_path)
+            if len(rel) > 42:
+                rel = "..." + rel[-39:]
+            self._cand_dir_lbl.configure(text=f"Path: {rel}", text_color="#94a3b8")
+            has_trades = cand_info.get("has_trades") if cand_info else (target_path / "trades.csv").exists()
+            self._cand_trades_lbl.configure(
+                text="Trades: ✓ trades.csv detected" if has_trades else "Trades: ~ Report calibration available",
+                text_color=C["success"] if has_trades else C["accent"]
+            )
+        else:
+            self._cand_dir_lbl.configure(text="Path: Auto-scan workspace", text_color="#64748b")
+            self._cand_trades_lbl.configure(text="Trades: Searching upon launch...", text_color="#64748b")
+
+    def _load_active_result(self):
+        target = self._get_target_candidate()
+        if not target:
+            self._reset_results_display()
+            return
+
+        target_path = find_candidate_path(self.cfg.get("work_dir", ""), target, self._run_var.get().strip())
+        res_file = None
+        if target_path and (target_path / "monte_carlo_results.json").exists():
+            res_file = target_path / "monte_carlo_results.json"
+        elif (SCRIPT_DIR / "last_mc_candidate_result.json").exists():
+            try:
+                with open(SCRIPT_DIR / "last_mc_candidate_result.json", "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if data.get("candidate") == target:
+                        res_file = SCRIPT_DIR / "last_mc_candidate_result.json"
+            except Exception:
+                pass
+
+        if not res_file or not res_file.exists():
+            self._reset_results_display()
+            return
+
+        try:
+            with open(res_file, "r", encoding="utf-8") as f:
+                d = json.load(f)
+
+            is_cert = d.get("is_certified", False)
+            comb_pass = d.get("combined_pass_rate", 0.0)
+            worst_dd  = d.get("worst_breach_max_dd", 0.0)
+            p1 = d.get("phase1", {})
+            p2 = d.get("phase2", {})
+
+            if is_cert:
+                self._cert_banner.configure(fg_color="#064e3b", border_color="#10b981")
+                self._cert_title.configure(
+                    text=f"✔ CERTIFIED  —  Meets all Prop Firm Monte Carlo survival gates! ({comb_pass:.1f}%)",
+                    text_color="#34d399"
+                )
+            else:
+                self._cert_banner.configure(fg_color="#450a0a", border_color="#ef4444")
+                self._cert_title.configure(
+                    text=f"✘ NOT CERTIFIED  —  Did not satisfy survival threshold ({comb_pass:.1f}% pass, {worst_dd:.1f}% DD breach)",
+                    text_color="#f87171"
+                )
+
+            self._stat_combined_pass.configure(
+                text=f"{comb_pass:.1f}%",
+                text_color=C["success"] if comb_pass >= 80 else (C["accent"] if comb_pass >= 60 else C["danger"])
+            )
+            self._stat_worst_dd.configure(
+                text=f"{worst_dd:.1f}%",
+                text_color=C["danger"] if worst_dd > 10 else C["success"]
+            )
+
+            no_max = d.get("no_max_days", False)
+            max_d = d.get("max_days")
+            horizon_text = "Unlimited" if no_max else (f"{max_d} Days" if max_d else "250 Days")
+            self._stat_horizon.configure(text=horizon_text)
+            self._stat_pnl_count.configure(text=f"{d.get('historical_pnl_count', '—')} days")
+
+            # Phase 1 text
+            p1_tgt = p1.get("target_pct", 8.0)
+            self._p1_badge_lbl.configure(text=f"Target: {p1_tgt:.1f}%")
+            self._p1_metrics_lbl.configure(
+                text=(
+                    f"Pass Rate:             {p1.get('pass_rate', 0.0):.1f}%\n"
+                    f"Passes / Runs:         {p1.get('pass_count', 0):,} / {d.get('simulations', 5000):,}\n"
+                    f"Max DD Breach:         {p1.get('breach_max_rate', 0.0):.1f}%\n"
+                    f"Daily DD Breach:       {p1.get('breach_daily_rate', 0.0):.1f}%\n"
+                    f"Time Expired (>250d):  {p1.get('incomplete_rate', 0.0):.1f}%\n"
+                    f"Median Days to Pass:   {p1.get('median_days', 0):.0f}d  (P10: {p1.get('p10_days', 0):.0f}d / P90: {p1.get('p90_days', 0):.0f}d)\n"
+                    f"Median Max DD:         {p1.get('median_max_dd', 0.0):.2f}%  (P90: {p1.get('p90_max_dd', 0.0):.2f}% / P99: {p1.get('p99_max_dd', 0.0):.2f}%)"
+                )
+            )
+
+            # Phase 2 text
+            p2_tgt = p2.get("target_pct", 5.0)
+            self._p2_badge_lbl.configure(text=f"Target: {p2_tgt:.1f}%")
+            self._p2_metrics_lbl.configure(
+                text=(
+                    f"Pass Rate:             {p2.get('pass_rate', 0.0):.1f}%\n"
+                    f"Passes / Runs:         {p2.get('pass_count', 0):,} / {d.get('simulations', 5000):,}\n"
+                    f"Max DD Breach:         {p2.get('breach_max_rate', 0.0):.1f}%\n"
+                    f"Daily DD Breach:       {p2.get('breach_daily_rate', 0.0):.1f}%\n"
+                    f"Time Expired (>250d):  {p2.get('incomplete_rate', 0.0):.1f}%\n"
+                    f"Median Days to Pass:   {p2.get('median_days', 0):.0f}d  (P10: {p2.get('p10_days', 0):.0f}d / P90: {p2.get('p90_days', 0):.0f}d)\n"
+                    f"Median Max DD:         {p2.get('median_max_dd', 0.0):.2f}%  (P90: {p2.get('p90_max_dd', 0.0):.2f}% / P99: {p2.get('p99_max_dd', 0.0):.2f}%)"
+                )
+            )
+
+        except Exception as e:
+            print(f"Error loading MC result: {e}")
+            self._reset_results_display()
+
+    def _reset_results_display(self):
+        self._cert_banner.configure(fg_color="#141b2d", border_color=C["border"])
+        self._cert_title.configure(
+            text="⚪ READY  —  Select a candidate and run Monte Carlo simulation",
+            text_color=C["sub"]
+        )
+        self._stat_combined_pass.configure(text="— %", text_color=C["accent"])
+        self._stat_worst_dd.configure(text="— %", text_color=C["danger"])
+        self._stat_horizon.configure(text="250 Days" if not self._no_max_days_var.get() else "Unlimited")
+        self._stat_pnl_count.configure(text="—")
+        self._p1_metrics_lbl.configure(
+            text="Pass Rate:             —%\nPasses / Runs:         — / —\nMax DD Breach:         —%\nDaily DD Breach:       —%\nTime Expired (>250d):  —%\nMedian Days to Pass:   —\nMedian Max DD:         —%"
+        )
+        self._p2_metrics_lbl.configure(
+            text="Pass Rate:             —%\nPasses / Runs:         — / —\nMax DD Breach:         —%\nDaily DD Breach:       —%\nTime Expired (>250d):  —%\nMedian Days to Pass:   —\nMedian Max DD:         —%"
+        )
+
+    def _run_candidate_mc(self):
+        cand = self._get_target_candidate()
+        if not cand:
+            messagebox.showwarning("Missing", "Please select or enter a candidate name.")
+            return
+
+        run_dir = self._run_var.get().strip()
+        if run_dir in ("(Auto-detect across workspace)", "latest", ""):
+            run_dir = ""
+
+        try:
+            sims = int(self._sims_entry.get().strip())
+        except ValueError:
+            sims = 5000
+        try:
+            deposit = float(self._dep_entry.get().strip())
+        except ValueError:
+            deposit = 2500.0
+        try:
+            block = int(self._block_entry.get().strip())
+        except ValueError:
+            block = 10
+        try:
+            p1 = float(self._p1_entry.get().strip())
+        except ValueError:
+            p1 = 8.0
+        try:
+            p2 = float(self._p2_entry.get().strip())
+        except ValueError:
+            p2 = 5.0
+        try:
+            max_dd = float(self._maxdd_entry.get().strip())
+        except ValueError:
+            max_dd = 10.0
+        try:
+            daily_dd = float(self._dailydd_entry.get().strip())
+        except ValueError:
+            daily_dd = 5.0
+        try:
+            max_days = int(self._maxdays_entry.get().strip())
+        except ValueError:
+            max_days = 250
+
+        no_max = bool(self._no_max_days_var.get())
+
+        args = [cand, "--sims", str(sims), "--p1", str(p1), "--p2", str(p2),
+                "--max-dd", str(max_dd), "--daily-dd", str(daily_dd),
+                "--block-size", str(block), "--deposit", str(deposit)]
+
+        if run_dir:
+            args.extend(["--run-dir", run_dir])
+        if no_max:
+            args.append("--no-max-days")
+        else:
+            args.extend(["--max-days", str(max_days)])
+
+        self.log_clear(self._log)
+        self.log_append(self._log, f"▶ Launching Candidate Monte Carlo: {cand}  (sims={sims}, block={block}d, p1={p1}%, p2={p2}%)\n")
+        self.run_script("run_can_monte_carlo.py", self._log, args=args, on_done=self._on_sim_done)
+
+    def _on_sim_done(self):
+        self._refresh_candidates_list()
+        self._load_active_result()
+
+    def _run_portfolio_mc(self):
+        portfolios = get_portfolios(self.cfg.get("work_dir", ""), self.cfg.get("quant_name", "TRB"))
+        if not portfolios:
+            messagebox.showinfo("Portfolio", "No built portfolio found under optimization_runs.\nBuild a portfolio first in the Portfolio tab.")
+            return
+        port = portfolios[0]
+        port_path = find_portfolio_path(self.cfg.get("work_dir", ""), self.cfg.get("quant_name", "TRB"), port)
+        patches = {
+            "PORTFOLIO_NAME": port,
+            "QUANT_NAME": self.cfg.get("quant_name", "TRB"),
+        }
+        if port_path and port_path.exists():
+            patches["PORTFOLIO_DIR"] = str(port_path)
+        patch_script(SCRIPT_DIR / "run_portfolio_montecarlo.py", patches)
+        self.log_clear(self._log)
+        self.log_append(self._log, f"▶ Launching Portfolio Monte Carlo on {port}...\n")
+        self.run_script("run_portfolio_montecarlo.py", self._log)
+
+    def _open_word_report(self):
+        target = self._get_target_candidate()
+        target_path = find_candidate_path(self.cfg.get("work_dir", ""), target, self._run_var.get().strip()) if target else None
+
+        doc_found = None
+        if target_path and target_path.exists():
+            docs = list(target_path.glob("*.docx"))
+            if docs:
+                doc_found = docs[0]
+
+        if not doc_found and target_path:
+            j = target_path / "monte_carlo_results.json"
+            if j.exists():
+                try:
+                    with open(j, "r", encoding="utf-8") as jf:
+                        jd = json.load(jf)
+                        dp = jd.get("doc_path")
+                        if dp and Path(dp).exists():
+                            doc_found = Path(dp)
+                except Exception:
+                    pass
+
+        if not doc_found:
+            root_mc = SCRIPT_DIR / "last_mc_candidate_result.json"
+            if root_mc.exists():
+                try:
+                    with open(root_mc, "r", encoding="utf-8") as jf:
+                        jd = json.load(jf)
+                        dp = jd.get("doc_path")
+                        if dp and Path(dp).exists():
+                            doc_found = Path(dp)
+                except Exception:
+                    pass
+
+        if doc_found and doc_found.exists():
+            open_in_file_manager(doc_found)
+        else:
+            messagebox.showinfo("Report Not Found", "No Word report (.docx) found for this candidate.\nRun a Monte Carlo simulation first.")
+
+    def _open_cand_folder(self):
+        target = self._get_target_candidate()
+        target_path = find_candidate_path(self.cfg.get("work_dir", ""), target, self._run_var.get().strip()) if target else None
+        if target_path and target_path.exists():
+            open_in_file_manager(target_path)
+        else:
+            wdir = _resolve_work_dir(self.cfg.get("work_dir", ""))
+            open_in_file_manager(wdir)
+
+    def _save_settings(self):
+        cfg = self.cfg
+        try:
+            cfg["mc_simulations"]   = self._sims_entry.get().strip()
+            cfg["deposit"]          = self._dep_entry.get().strip()
+            cfg["mc_block_size"]    = self._block_entry.get().strip()
+            cfg["mc_max_days"]      = self._maxdays_entry.get().strip()
+            cfg["mc_no_max_days"]   = "true" if self._no_max_days_var.get() else "false"
+            cfg["mc_phase1_target"] = self._p1_entry.get().strip()
+            cfg["mc_phase2_target"] = self._p2_entry.get().strip()
+            cfg["mc_max_dd"]        = self._maxdd_entry.get().strip()
+            cfg["mc_daily_dd"]      = self._dailydd_entry.get().strip()
+            save_config(cfg)
+            messagebox.showinfo("Saved", "Monte Carlo settings saved to config.json.")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to save settings: {e}")
+
+    def refresh(self):
+        self._refresh_candidates_list()
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1987,6 +2866,7 @@ class SettingsPanel(BasePanel):
     def _save(self):
         vals = self._collect()
         self.app.config.update(vals)
+        self.app.update_topbar_meta()
         ok   = save_config(self.app.config)
         self._status_lbl.configure(text="✔  Saved." if ok else "✘  Save failed.",
                                    text_color=C["success"] if ok else C["danger"])
@@ -1995,6 +2875,7 @@ class SettingsPanel(BasePanel):
     def _apply_scripts(self):
         vals = self._collect()
         self.app.config.update(vals)
+        self.app.update_topbar_meta()
         save_config(self.app.config)
 
         SCRIPT_PATCHES = {
@@ -2082,49 +2963,142 @@ class AlphaForgeApp(ctk.CTk):
     # ── Sidebar ──────────────────────────────────────────────────────────────
 
     def _build_sidebar(self):
-        sb = ctk.CTkFrame(self, width=220, fg_color=C["sidebar"], corner_radius=0)
+        sb = ctk.CTkFrame(self, width=230, fg_color=C["sidebar"], corner_radius=0)
         sb.grid(row=0, column=0, sticky="nsew")
         sb.grid_propagate(False)
         sb.columnconfigure(0, weight=1)
 
-        # Logo area
-        logo_f = ctk.CTkFrame(sb, fg_color="transparent", height=110)
-        logo_f.grid(row=0, column=0, sticky="ew")
-        logo_f.grid_propagate(False)
-        ctk.CTkLabel(logo_f, text="⚡", font=ctk.CTkFont("Segoe UI", 38)).pack(pady=(22, 0))
-        ctk.CTkLabel(logo_f, text="AlphaForge",
-                     font=ctk.CTkFont("Segoe UI", 16, "bold"),
-                     text_color=C["accent"]).pack()
+        # Brand header matching cloud app
+        logo_f = ctk.CTkFrame(sb, fg_color="transparent")
+        logo_f.grid(row=0, column=0, sticky="ew", padx=16, pady=(18, 12))
+
+        brand_row = ctk.CTkFrame(logo_f, fg_color="transparent")
+        brand_row.pack(anchor="w")
+
+        ctk.CTkLabel(brand_row, text="⚡", font=ctk.CTkFont("Segoe UI", 22),
+                     text_color=C["accent"]).pack(side="left", padx=(0, 6))
+        ctk.CTkLabel(brand_row, text="AlphaForge",
+                     font=ctk.CTkFont("Segoe UI", 17, "bold"),
+                     text_color=C["text"]).pack(side="left")
+
         ctk.CTkLabel(logo_f, text="MT5 Quant Platform",
-                     font=ctk.CTkFont("Segoe UI", 9),
-                     text_color=C["sub"]).pack()
+                     font=ctk.CTkFont("Segoe UI", 10, "bold"),
+                     text_color=C["sub"]).pack(anchor="w", padx=(30, 0), pady=(0, 6))
+
+        # Version Pill Badge matching web app
+        ver_badge = ctk.CTkFrame(logo_f, fg_color=C["card"], corner_radius=4)
+        ver_badge.pack(anchor="w", padx=(30, 0))
+        ctk.CTkLabel(ver_badge, text="v1.0 | MT5 Desktop",
+                     font=ctk.CTkFont("Consolas", 10),
+                     text_color=C["sub"]).pack(padx=8, pady=2)
 
         sep = ctk.CTkFrame(sb, height=1, fg_color=C["border"])
-        sep.grid(row=1, column=0, sticky="ew", padx=16, pady=(8, 4))
+        sep.grid(row=1, column=0, sticky="ew", padx=14, pady=(6, 8))
 
         # Nav buttons placeholder frame
         self._nav_frame = ctk.CTkFrame(sb, fg_color="transparent")
-        self._nav_frame.grid(row=2, column=0, sticky="nsew", pady=(4, 0))
+        self._nav_frame.grid(row=2, column=0, sticky="nsew", pady=(2, 0))
         self._nav_frame.columnconfigure(0, weight=1)
         sb.rowconfigure(2, weight=1)
 
-        # Bottom version
-        ctk.CTkLabel(sb, text="v1.0  |  AlphaForge",
-                     font=ctk.CTkFont("Segoe UI", 9),
-                     text_color=C["sub"]).grid(row=3, column=0, pady=(0, 16))
+        # Bottom Local MT5 & Sync Card
+        bot_card = ctk.CTkFrame(sb, fg_color="#0b101d", corner_radius=8,
+                                border_width=1, border_color=C["border"])
+        bot_card.grid(row=3, column=0, sticky="ew", padx=12, pady=(0, 14))
+
+        bot_inner = ctk.CTkFrame(bot_card, fg_color="transparent")
+        bot_inner.pack(fill="x", padx=10, pady=8)
+        ctk.CTkLabel(bot_inner, text="💻 Local MT5 Ready",
+                     font=ctk.CTkFont("Segoe UI", 11, "bold"),
+                     text_color=C["text"]).pack(anchor="w")
+        ctk.CTkLabel(bot_inner, text="Run: python app.py",
+                     font=ctk.CTkFont("Consolas", 10),
+                     text_color=C["sub"]).pack(anchor="w", pady=(2, 0))
 
     def _build_content(self):
-        self._content = ctk.CTkFrame(self, fg_color=C["panel"], corner_radius=0)
-        self._content.grid(row=0, column=1, sticky="nsew")
+        # Main Right Container
+        self._main_container = ctk.CTkFrame(self, fg_color=C["bg"], corner_radius=0)
+        self._main_container.grid(row=0, column=1, sticky="nsew")
+        self._main_container.columnconfigure(0, weight=1)
+        self._main_container.rowconfigure(1, weight=1)
+
+        # ── Top Bar matching cloud web app ──────────────────────────────────
+        self._topbar = ctk.CTkFrame(self._main_container, height=48, fg_color=C["sidebar"], corner_radius=0)
+        self._topbar.grid(row=0, column=0, sticky="ew")
+        self._topbar.grid_propagate(False)
+        self._topbar.columnconfigure(0, weight=1)
+
+        # Left meta pills: Active EA | Symbol | Period
+        tb_left = ctk.CTkFrame(self._topbar, fg_color="transparent")
+        tb_left.pack(side="left", padx=24, fill="y")
+
+        cfg = self.config
+        ctk.CTkLabel(tb_left, text="Active EA:", font=ctk.CTkFont("Segoe UI", 11), text_color=C["sub"]).pack(side="left")
+        self._top_ea_val = ctk.CTkLabel(tb_left, text=f" {cfg.get('active_ea', 'TRB')} ",
+                                       font=ctk.CTkFont("Segoe UI", 11, "bold"), text_color=C["accent"])
+        self._top_ea_val.pack(side="left")
+
+        ctk.CTkLabel(tb_left, text="  |   Symbol:", font=ctk.CTkFont("Segoe UI", 11), text_color=C["sub"]).pack(side="left")
+        self._top_sym_val = ctk.CTkLabel(tb_left, text=f" {cfg.get('symbol', 'USDJPY Dukascopy')} ",
+                                        font=ctk.CTkFont("Segoe UI", 11, "bold"), text_color=C["text"])
+        self._top_sym_val.pack(side="left")
+
+        ctk.CTkLabel(tb_left, text="  |   Period:", font=ctk.CTkFont("Segoe UI", 11), text_color=C["sub"]).pack(side="left")
+        self._top_per_val = ctk.CTkLabel(tb_left, text=f" {cfg.get('period', 'M15')} ",
+                                        font=ctk.CTkFont("Segoe UI", 11, "bold"), text_color=C["text"])
+        self._top_per_val.pack(side="left")
+
+        # Right status badge
+        tb_right = ctk.CTkFrame(self._topbar, fg_color="transparent")
+        tb_right.pack(side="right", padx=24, fill="y")
+
+        self._status_badge = ctk.CTkLabel(
+            tb_right,
+            text="● Engine Ready",
+            font=ctk.CTkFont("Segoe UI", 11, "bold"),
+            text_color=C["success"],
+        )
+        self._status_badge.pack(side="left", padx=(0, 16))
+
+        # Bottom subtle separator line under topbar
+        tb_sep = ctk.CTkFrame(self._topbar, height=1, fg_color=C["border"])
+        tb_sep.place(relx=0, rely=1.0, relwidth=1.0, anchor="sw")
+
+        # Main dynamic panel container
+        self._content = ctk.CTkFrame(self._main_container, fg_color=C["panel"], corner_radius=0)
+        self._content.grid(row=1, column=0, sticky="nsew")
         self._content.columnconfigure(0, weight=1)
         self._content.rowconfigure(0, weight=1)
         self._panels: dict[str, BasePanel] = {}
+
+    def set_process_status(self, script_name: str | None):
+        if hasattr(self, "_status_badge"):
+            if script_name:
+                self._status_badge.configure(
+                    text=f"⚡ Running: {script_name}",
+                    text_color=C["accent"]
+                )
+            else:
+                self._status_badge.configure(
+                    text="● Engine Ready",
+                    text_color=C["success"]
+                )
+
+    def update_topbar_meta(self):
+        cfg = self.config
+        if hasattr(self, "_top_ea_val"):
+            self._top_ea_val.configure(text=f" {cfg.get('active_ea', 'TRB')} ")
+        if hasattr(self, "_top_sym_val"):
+            self._top_sym_val.configure(text=f" {cfg.get('symbol', 'USDJPY Dukascopy')} ")
+        if hasattr(self, "_top_per_val"):
+            self._top_per_val.configure(text=f" {cfg.get('period', 'M15')} ")
 
     def _build_nav_buttons(self):
         PANEL_CLASSES = {
             "dashboard":   DashboardPanel,
             "research":    ResearchPanel,
             "optimize":    OptimizePanel,
+            "montecarlo":  MonteCarloPanel,
             "walkforward": WalkForwardPanel,
             "fullbacktest":FullBacktestPanel,
             "portfolio":   PortfolioPanel,
@@ -2136,12 +3110,13 @@ class AlphaForgeApp(ctk.CTk):
                 self._nav_frame,
                 text=f"  {icon}  {label}",
                 anchor="w",
-                height=46,
+                height=42,
                 fg_color="transparent",
                 hover_color=C["hover"],
                 text_color=C["sub"],
                 font=ctk.CTkFont("Segoe UI", 13),
                 corner_radius=8,
+                border_width=0,
                 command=lambda k=key: self.show_panel(k),
             )
             btn.grid(row=i, column=0, sticky="ew", padx=10, pady=2)
@@ -2161,20 +3136,24 @@ class AlphaForgeApp(ctk.CTk):
         if self._active_panel:
             self._panels[self._active_panel].grid_remove()
             self._nav_buttons[self._active_panel].configure(
-                fg_color="transparent", text_color=C["sub"])
+                fg_color="transparent",
+                text_color=C["sub"],
+                border_width=0
+            )
 
         panel = self._panels.get(key)
         if panel:
             panel.grid()
             # Refresh dynamic panels
-            if key == "dashboard" and hasattr(panel, "refresh"):
-                panel.refresh()
-            if key == "strategies" and hasattr(panel, "refresh"):
+            if key in ("dashboard", "strategies", "montecarlo") and hasattr(panel, "refresh"):
                 panel.refresh()
 
         self._nav_buttons[key].configure(
             fg_color=C["nav_act"],
-            text_color=C["accent"])
+            text_color=C["accent"],
+            border_width=1,
+            border_color="#314264"
+        )
         self._active_panel = key
 
 
