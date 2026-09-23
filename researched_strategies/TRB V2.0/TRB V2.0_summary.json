@@ -1,0 +1,22 @@
+{
+  "ea_name": "TRB V2.0",
+  "expert": "TRB V2.0.ex5",
+  "symbol": "USDJPY Dukascopy",
+  "period": "M15",
+  "date_range": "2013.01.01 -> 2026.07.03",
+  "deposit": 2500.0,
+  "strategy_doc": null,
+  "mql5_code": "TRB V2.0.mq5",
+  "word_report": "TRB V2.0_Research_Report.docx",
+  "html_report": "TRB V2.0_default.htm",
+  "metrics": {
+    "net_profit": 681.77,
+    "profit_pct": 27.2708,
+    "profit_factor": 1.26,
+    "sharpe_ratio": 3.35,
+    "max_drawdown_pct": 8.46,
+    "total_trades": 247,
+    "win_rate_pct": 52.23
+  },
+  "timestamp_utc": "2026-09-23 08:34:40 UTC"
+}

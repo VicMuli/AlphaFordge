@@ -1,0 +1,22 @@
+{
+  "ea_name": "HA V1.0",
+  "expert": "HA V1.0.ex5",
+  "symbol": "XAUUSD Dukascopy",
+  "period": "M15",
+  "date_range": "2013.01.01 -> 2026.07.03",
+  "deposit": 2500.0,
+  "strategy_doc": "HA V1.0 Setup.docx",
+  "mql5_code": "HA V1.0.mq5",
+  "word_report": "HA V1.0_Research_Report.docx",
+  "html_report": "HA V1.0_default.htm",
+  "metrics": {
+    "net_profit": 20901.14,
+    "profit_pct": 836.0455999999999,
+    "profit_factor": 1.17,
+    "sharpe_ratio": 0.41,
+    "max_drawdown_pct": 20.15,
+    "total_trades": 1363,
+    "win_rate_pct": 40.28
+  },
+  "timestamp_utc": "2026-09-23 08:05:46 UTC"
+}

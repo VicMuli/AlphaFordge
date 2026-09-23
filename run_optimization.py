@@ -76,22 +76,22 @@ if _CONFIG_FILE.exists():
 
 from mt5_optimizer import sync_ea_to_mt5
 
-TERMINAL_PATH     = _CFG.get("terminal_path", r'C:\Users\HP\AppData\Roaming\MetaTrader\terminal64.exe')
-TERMINAL_DATA_DIR = _CFG.get("terminal_data_dir", r'C:\Users\HP\AppData\Roaming\MetaQuotes\Terminal\CDE1ED2F37049DA2E508A3C44B675D09')
-PERIOD            = _CFG.get("period", 'M15')
+TERMINAL_PATH     = 'C:\\Users\\HP\\AppData\\Roaming\\MetaTrader\\terminal64.exe'
+TERMINAL_DATA_DIR = 'C:\\Users\\HP\\AppData\\Roaming\\MetaQuotes\\Terminal\\CDE1ED2F37049DA2E508A3C44B675D09'
+PERIOD            = 'M15'
 
-LOGIN    = int(_CFG.get("login", 52909674))
-PASSWORD = str(_CFG.get("password", '3F!@4rwo7wc02f'))
-SERVER   = str(_CFG.get("server", 'ICMarketsKE-Demo'))
+LOGIN    = 52909674
+PASSWORD = '3F!@4rwo7wc02f'
+SERVER   = 'ICMarketsKE-Demo'
 
-DEPOSIT  = float(_CFG.get("deposit", 2500))
-CURRENCY = _CFG.get("currency", 'USD')
-LEVERAGE = _CFG.get("leverage", '1:100')
+DEPOSIT  = 2500
+CURRENCY = 'USD'
+LEVERAGE = '1:100'
 
 # -- MULTI-EA SWITCHBOARD ---------------------------------------------------
 # Change ACTIVE_EA to run the pipeline against a different Expert Advisor.
 # Loads active_ea from config.json (or defaults to 'TRB').
-ACTIVE_EA = _CFG.get("active_ea", "TRB").strip()
+ACTIVE_EA = 'HA V1.0'
 
 # Shared across EAs -- just the MT5 symbol name and its pip size. Anything
 # EA-specific (which parameters get optimized, over what range) lives in
@@ -116,8 +116,8 @@ TARGET_SYMBOL = _cfg_sym_key if _cfg_sym_key in SYMBOL_CONFIGS else "USDJPY"
 
 # Resolve active symbol parameters
 _active_cfg = SYMBOL_CONFIGS.get(TARGET_SYMBOL, {"symbol_mt5": _CFG.get("symbol", "USDJPY Dukascopy"), "pip_size": 0.01})
-SYMBOL      = _CFG.get("symbol") or _active_cfg.get("symbol_mt5", "USDJPY Dukascopy")
-SYMBOL_KEY  = TARGET_SYMBOL
+SYMBOL      = 'XAUUSD Dukascopy'
+SYMBOL_KEY  = 'XAUUSD'
 PIP_SIZE    = float(_CFG.get("pip_size", _active_cfg.get("pip_size", 0.01)))
 
 
@@ -485,17 +485,17 @@ _ea_cfg = EA_CONFIGS[ACTIVE_EA]
 if TARGET_SYMBOL not in _ea_cfg["valid_symbols"] and TARGET_SYMBOL not in SYMBOL_CONFIGS:
     print(f"  [INFO] Target symbol '{TARGET_SYMBOL}' will be used for '{ACTIVE_EA}'.")
 
-EXPERT = _CFG.get("expert") or _ea_cfg.get("expert", f"{ACTIVE_EA}.ex5")
+EXPERT = 'HA V1.0.ex5'
 # Ensure the compiled EA binary is copied into MT5 Experts directory
-EXPERT = sync_ea_to_mt5(EXPERT, TERMINAL_DATA_DIR, TERMINAL_PATH)
+EXPERT = 'HA V1.0.ex5'
 
 # -- Date windows ---------------------------------------------------------
-TRAIN_FROM   = _CFG.get("train_from", '2013.01.01')
-TRAIN_TO     = _CFG.get("train_to", '2022.01.01')
-VAL_FROM     = _CFG.get("val_from", '2022.01.01')
-VAL_TO       = _CFG.get("val_to", '2024.01.01')
-HOLDOUT_FROM = _CFG.get("holdout_from", '2024.01.01')
-HOLDOUT_TO   = _CFG.get("holdout_to", '2026.07.03')
+TRAIN_FROM   = '2013.01.01'
+TRAIN_TO     = '2022.01.01'
+VAL_FROM     = '2022.01.01'
+VAL_TO       = '2024.01.01'
+HOLDOUT_FROM = '2024.01.01'
+HOLDOUT_TO   = '2026.07.03'
 
 
 def _months_between(from_str: str, to_str: str) -> float:
@@ -620,14 +620,14 @@ if "_cfg" in locals() and _cfg:
 CRITERIA_CFG = _cfg.get("qualification_criteria", {}) if "_cfg" in locals() and _cfg else {}
 
 # -- Pipeline settings -----------------------------------------------------
-TOP_N_TRAIN         = int(_CFG.get("top_n_train", 20))
+TOP_N_TRAIN         = 20
 OPTIMIZATION_MODE   = int(_CFG.get("optimization_mode", 2))
-OPT_TIMEOUT         = int(_CFG.get("opt_timeout", 21600))
-SINGLE_TEST_TIMEOUT = int(_CFG.get("single_test_timeout", 100))
+OPT_TIMEOUT         = 21600
+SINGLE_TEST_TIMEOUT = 100
 
 # -- Walk Forward ----------------------------------------------------------
-WF_WINDOW_MONTHS  = int(_CFG.get("wf_window_months", 12))
-WF_STEP_MONTHS    = int(_CFG.get("wf_step_months", 6))
+WF_WINDOW_MONTHS  = 12
+WF_STEP_MONTHS    = 6
 WF_MIN_PASS_RATE  = float(_CFG.get("wf_min_pass_rate", 70.0))
 
 # -- Monte Carlo -----------------------------------------------------------

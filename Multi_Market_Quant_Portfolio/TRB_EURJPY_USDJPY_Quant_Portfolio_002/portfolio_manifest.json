@@ -1,0 +1,38 @@
+{
+  "portfolio_name": "TRB_EURJPY_USDJPY_Quant_Portfolio_002",
+  "created_utc": "2026-09-21T14:19:58.905471+00:00",
+  "deposit": 2500.0,
+  "currency": "USD",
+  "backtest_range": [
+    "2013.01.01",
+    "2026.07.03"
+  ],
+  "trade_count": 669,
+  "trade_count_definition": "Completed positions grouped by MT5 Position ID where available; otherwise deal-row fallback.",
+  "candidates": [
+    {
+      "candidate": "cand_003",
+      "candidate_label": "cand_003 (USDJPY)",
+      "market": "USDJPY",
+      "run_dir": "run_20260909_101955",
+      "weight": 1.0,
+      "candidate_dir": "C:\\Users\\HP\\Desktop\\AlphaFordge\\optimization_runs\\trb_usdjpy\\run_20260909_101955\\passed_candidates\\cand_003",
+      "mt5_report": "C:\\Users\\HP\\Desktop\\AlphaFordge\\optimization_runs\\trb_usdjpy\\run_20260909_101955\\passed_candidates\\cand_003\\full_backtest_report\\Full_BT_cand_003.htm",
+      "raw_activity_rows": 2250,
+      "completed_trade_count": 1760,
+      "trade_count_method": "mt5_official_summary"
+    },
+    {
+      "candidate": "cand_002",
+      "candidate_label": "cand_002 (EURJPY)",
+      "market": "EURJPY",
+      "run_dir": "run_20260920_155723",
+      "weight": 1.0,
+      "candidate_dir": "C:\\Users\\HP\\Desktop\\AlphaFordge\\optimization_runs\\trb_eurjpy\\run_20260920_155723\\passed_candidates\\cand_002",
+      "mt5_report": "C:\\Users\\HP\\Desktop\\AlphaFordge\\optimization_runs\\trb_eurjpy\\run_20260920_155723\\passed_candidates\\cand_002\\full_backtest_report\\Full_BT_cand_002.htm",
+      "raw_activity_rows": 956,
+      "completed_trade_count": 775,
+      "trade_count_method": "mt5_official_summary"
+    }
+  ]
+}
