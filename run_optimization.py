@@ -78,7 +78,7 @@ from mt5_optimizer import sync_ea_to_mt5
 
 TERMINAL_PATH     = 'C:\\Users\\HP\\AppData\\Roaming\\MetaTrader\\terminal64.exe'
 TERMINAL_DATA_DIR = 'C:\\Users\\HP\\AppData\\Roaming\\MetaQuotes\\Terminal\\CDE1ED2F37049DA2E508A3C44B675D09'
-PERIOD            = 'M15'
+PERIOD            = 'H4'
 
 LOGIN    = 52909674
 PASSWORD = '3F!@4rwo7wc02f'
@@ -524,6 +524,67 @@ if _CONFIG_FILE.exists():
     except Exception:
         pass
 
+# ---------------------------------------------------------------------------
+# MT5 ENUM_TIMEFRAMES integer IDs (NOT period-in-minutes).
+# MT5 uses its own internal enum values in .set files.  Writing the wrong
+# number (e.g. 240 = minutes for H4 in MT4) causes MT5 to silently fall
+# back to PERIOD_CURRENT.  Human-readable names like "H4" or "PERIOD_H4"
+# are also invalid unless mapped here first.
+# ---------------------------------------------------------------------------
+MT5_TIMEFRAME_IDS: dict[str, int] = {
+    # canonical PERIOD_xxx names
+    "PERIOD_CURRENT": 0,
+    "PERIOD_M1":  1,   "PERIOD_M2":  2,   "PERIOD_M3":  3,
+    "PERIOD_M4":  4,   "PERIOD_M5":  5,   "PERIOD_M6":  6,
+    "PERIOD_M10": 10,  "PERIOD_M12": 12,  "PERIOD_M15": 15,
+    "PERIOD_M20": 20,  "PERIOD_M30": 30,
+    "PERIOD_H1":  16385, "PERIOD_H2":  16386, "PERIOD_H3":  16387,
+    "PERIOD_H4":  16388, "PERIOD_H6":  16390, "PERIOD_H8":  16392,
+    "PERIOD_H12": 16396,
+    "PERIOD_D1":  16408,
+    "PERIOD_W1":  32769,
+    "PERIOD_MN1": 49153,
+    # short names (case-insensitive after .upper())
+    "CURRENT": 0,
+    "M1":  1,   "M2":  2,   "M3":  3,   "M4":  4,   "M5":  5,
+    "M6":  6,   "M10": 10,  "M12": 12,  "M15": 15,  "M20": 20,
+    "M30": 30,
+    "H1":  16385, "H2":  16386, "H3":  16387, "H4":  16388,
+    "H6":  16390, "H8":  16392, "H12": 16396,
+    "D1":  16408,
+    "W1":  32769,
+    "MN1": 49153, "MN": 49153,
+}
+
+# Set of parameter names that are ENUM_TIMEFRAMES inputs
+_TIMEFRAME_PARAM_NAMES = {"InpTimeframe", "Timeframe", "WorkingTimeframe", "TF"}
+
+
+def _coerce_param_value(name: str, val):
+    """Convert a config value to the correct Python type for a .set file.
+    ENUM_TIMEFRAMES params: resolve string names (e.g. 'H4', 'PERIOD_H4')
+    to their MT5 internal integer IDs so MT5 doesn't fall back to
+    PERIOD_CURRENT when it receives an unrecognised string.
+    All other params: standard numeric coercion (int or float).
+    """
+    if isinstance(val, str):
+        # Check if this is a timeframe parameter by name OR by value shape
+        key = val.strip().upper()
+        if name in _TIMEFRAME_PARAM_NAMES or key in MT5_TIMEFRAME_IDS:
+            resolved = MT5_TIMEFRAME_IDS.get(key)
+            if resolved is not None:
+                return resolved
+            # value looks like a period name but wasn't found — warn and fall through
+            print(f"  [WARN] '{val}' is not a recognised MT5 timeframe name for param "
+                  f"'{name}'. Attempting numeric parse.")
+        # Generic numeric coercion
+        try:
+            return float(val) if "." in val else int(val)
+        except ValueError:
+            return val  # leave as string — MT5 may handle it for non-numeric inputs
+    return val
+
+
 def _apply_optimization_config_overrides(fixed: dict, ranges: dict, cfg: dict, active_ea: str) -> tuple[dict, dict]:
     """
     Applies user-configured fixed parameters and optimization ranges from config.json.
@@ -558,12 +619,7 @@ def _apply_optimization_config_overrides(fixed: dict, ranges: dict, cfg: dict, a
             if mode == "fixed":
                 ranges.pop(name, None)
                 val = p.get("value", p.get("fixedValue", fixed.get(name, 0)))
-                try:
-                    if isinstance(val, str):
-                        val = float(val) if "." in val else int(val)
-                except ValueError:
-                    pass
-                fixed[name] = val
+                fixed[name] = _coerce_param_value(name, val)
             elif mode == "optimize":
                 fixed.pop(name, None)
                 rng = p.get("range", {})
@@ -586,12 +642,7 @@ def _apply_optimization_config_overrides(fixed: dict, ranges: dict, cfg: dict, a
     if "fixed_params" in ea_cfg and isinstance(ea_cfg["fixed_params"], dict):
         for k, v in ea_cfg["fixed_params"].items():
             ranges.pop(k, None)
-            try:
-                if isinstance(v, str):
-                    v = float(v) if "." in v else int(v)
-            except ValueError:
-                pass
-            fixed[k] = v
+            fixed[k] = _coerce_param_value(k, v)
 
     # 4. Direct opt_ranges overrides
     if "opt_ranges" in ea_cfg and isinstance(ea_cfg["opt_ranges"], dict):

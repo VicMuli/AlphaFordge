@@ -5,7 +5,7 @@
   "expert": "HA V1.0.ex5",
   "symbol": "XAUUSD Dukascopy",
   "symbol_key": "XAUUSD",
-  "period": "M15",
+  "period": "H4",
   "pip_size": "0.1",
   "train_from": "2013.01.01",
   "train_to": "2022.01.01",
@@ -67,7 +67,7 @@
       "InpUseTrendFilter": 1
     },
     "fixed_params": {
-      "InpTimeframe": 240,
+      "InpTimeframe": "H4",
       "InpBodyIndex": 0.1,
       "InpATRLength": 20,
       "InpATRStop": 6.0,
@@ -100,7 +100,7 @@
         "InpUseTrendFilter": 1
       },
       "fixed_params": {
-        "InpTimeframe": 240,
+        "InpTimeframe": "H4",
         "InpBodyIndex": 0.1,
         "InpATRLength": 20,
         "InpATRStop": 6.0,
