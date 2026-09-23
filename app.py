@@ -1434,9 +1434,15 @@ class OptimizePanel(BasePanel):
         return eas
 
     def _get_mql5_status_text(self, ea: str) -> str:
-        base = SCRIPT_DIR / "researched_strategies" / ea
+        base = SCRIPT_DIR / "researched_strategies"
+        target_folder = None
         if base.exists():
-            mq5s = list(base.glob("*.mq5"))
+            for d in base.iterdir():
+                if d.is_dir() and d.name.lower() == ea.lower():
+                    target_folder = d
+                    break
+        if target_folder and target_folder.exists():
+            mq5s = list(target_folder.glob("*.mq5"))
             if mq5s:
                 try:
                     import mql5_parser
@@ -1449,15 +1455,52 @@ class OptimizePanel(BasePanel):
         return f"MQL5: researched_strategies/{ea}/{ea}.mq5"
 
     def _on_ea_selected(self, new_ea: str):
-        self.active_ea = new_ea.strip().upper()
+        self.active_ea = new_ea.strip()
         self.cfg["active_ea"] = self.active_ea
         self.cfg["quant_name"] = self.active_ea
-        ea_folder = SCRIPT_DIR / "researched_strategies" / self.active_ea
-        if ea_folder.exists():
-            ex5s = list(ea_folder.glob("*.ex5"))
-            if ex5s:
-                self.cfg["expert"] = ex5s[0].name
+
+        # Search case-insensitively in researched_strategies / strategies
+        search_dirs = [
+            SCRIPT_DIR / "researched_strategies",
+            SCRIPT_DIR / "strategies",
+        ]
+        if self.cfg.get("research_dir"):
+            search_dirs.insert(0, Path(self.cfg["research_dir"]))
+
+        found_ex5 = None
+        for sdir in search_dirs:
+            if not sdir.exists():
+                continue
+            for sub in sdir.iterdir():
+                if sub.is_dir() and sub.name.lower() == self.active_ea.lower():
+                    ex5s = list(sub.glob("*.ex5"))
+                    if ex5s:
+                        found_ex5 = ex5s[0].name
+                        break
+                    mq5s = list(sub.glob("*.mq5"))
+                    if mq5s:
+                        found_ex5 = mq5s[0].stem + ".ex5"
+                        break
+            if found_ex5:
+                break
+
+        if found_ex5:
+            self.cfg["expert"] = found_ex5
+        else:
+            self.cfg["expert"] = f"{self.active_ea}.ex5"
+
         save_config(self.cfg)
+
+        # Synchronize EA binary to MT5 Experts directory
+        try:
+            from mt5_optimizer import sync_ea_to_mt5
+            tdir = self.cfg.get("terminal_data_dir")
+            tpath = self.cfg.get("terminal_path")
+            if tdir:
+                sync_ea_to_mt5(self.cfg["expert"], tdir, tpath)
+        except Exception:
+            pass
+
         if hasattr(self, "_mql5_badge"):
             self._mql5_badge.configure(text=self._get_mql5_status_text(self.active_ea))
         if hasattr(self, "_ea_info_val"):

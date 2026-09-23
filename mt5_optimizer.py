@@ -55,13 +55,136 @@ Usage:
     print(results_df.sort_values("Result", ascending=False).head(20))
 """
 
+import os
+import sys
+import shutil
 import re
 import time
 import subprocess
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+# Prevent Windows console UnicodeEncodeError
+try:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 import pandas as pd
+
+
+# ---------------------------------------------------------------------------
+# EA & Parameter Synchronization
+# ---------------------------------------------------------------------------
+
+def sync_ea_to_mt5(expert: str, terminal_data_dir: str, terminal_path: str = None) -> str:
+    """
+    Ensures that the requested EA (.ex5) exists in <terminal_data_dir>/MQL5/Experts/.
+    If not found in MT5 Experts, searches researched_strategies/, strategies/, or workspace.
+    If only .mq5 exists, attempts to compile it with metaeditor64.exe if available.
+    Returns the resolved filename inside MQL5/Experts.
+    """
+    clean_expert = Path(expert).name
+    if not clean_expert.lower().endswith(".ex5"):
+        clean_expert += ".ex5"
+    ea_stem = clean_expert[:-4]
+
+    mt5_experts_dir = Path(terminal_data_dir) / "MQL5" / "Experts"
+    mt5_experts_dir.mkdir(parents=True, exist_ok=True)
+    target_path = mt5_experts_dir / clean_expert
+
+    # If already present in MT5 Experts and non-empty, return
+    if target_path.is_file() and target_path.stat().st_size > 0:
+        return clean_expert
+
+    # Search for matching .ex5 in workspace folders
+    workspace_dir = Path(__file__).resolve().parent
+    search_dirs = [
+        workspace_dir / "researched_strategies",
+        workspace_dir / "strategies",
+        workspace_dir,
+    ]
+
+    found_ex5 = None
+    found_mq5 = None
+
+    for sdir in search_dirs:
+        if not sdir.exists():
+            continue
+        for sub in sdir.rglob("*"):
+            if sub.is_file():
+                if sub.name.lower() == clean_expert.lower():
+                    found_ex5 = sub
+                    break
+                elif sub.name.lower() == f"{ea_stem.lower()}.mq5":
+                    found_mq5 = sub
+        if found_ex5:
+            break
+
+    if found_ex5:
+        try:
+            shutil.copy2(found_ex5, target_path)
+            print(f"  [OK] Synchronized EA binary to MT5 Experts: {clean_expert} (from {found_ex5.parent.name})")
+            return clean_expert
+        except Exception as e:
+            print(f"  [WARN] Failed to copy {found_ex5} to {target_path}: {e}")
+
+    # If no .ex5, try compiling .mq5 with MetaEditor
+    if found_mq5 and terminal_path:
+        metaeditor_path = Path(terminal_path).parent / "metaeditor64.exe"
+        if metaeditor_path.exists():
+            print(f"  [>] Compiling {found_mq5.name} with MetaEditor...")
+            compile_log = mt5_experts_dir / "compile.log"
+            cmd_comp = [str(metaeditor_path), f"/compile:{found_mq5}", f"/log:{compile_log}"]
+            try:
+                subprocess.run(cmd_comp, capture_output=True, text=True, timeout=60)
+                expected_ex5 = found_mq5.with_suffix(".ex5")
+                if expected_ex5.exists():
+                    shutil.copy2(expected_ex5, target_path)
+                    print(f"  [OK] Compiled and synchronized {clean_expert} to MT5 Experts!")
+                    return clean_expert
+            except Exception as ce:
+                print(f"  [WARN] MetaEditor compilation failed: {ce}")
+
+    if not target_path.exists() or target_path.stat().st_size == 0:
+        print(f"  [WARN] EA binary '{clean_expert}' not found in MT5 Experts directory ({mt5_experts_dir}).")
+
+    return clean_expert
+
+
+def _read_latest_mt5_tester_log(terminal_data_dir: str) -> str:
+    """Reads the most recent MT5 tester log to extract termination / error details."""
+    tester_logs_dir = Path(terminal_data_dir) / "Tester" / "logs"
+    mql5_logs_dir = Path(terminal_data_dir) / "MQL5" / "Logs"
+
+    candidate_files = []
+    for ldir in (tester_logs_dir, mql5_logs_dir):
+        if ldir.exists():
+            candidate_files.extend(list(ldir.glob("*.log")))
+
+    if not candidate_files:
+        return "(No MT5 log files found in Tester/logs or MQL5/Logs)"
+
+    candidate_files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+    newest_log = candidate_files[0]
+
+    try:
+        content = ""
+        for enc in ("utf-16", "utf-16-le", "utf-8", "cp1252", "latin-1"):
+            try:
+                content = newest_log.read_text(encoding=enc, errors="replace")
+                break
+            except Exception:
+                continue
+
+        lines = [line.strip() for line in content.splitlines() if line.strip()]
+        tail = lines[-25:] if len(lines) > 25 else lines
+        return f"Log file ({newest_log.name}):\n" + "\n".join(f"    {ln}" for ln in tail)
+    except Exception as e:
+        return f"(Could not read {newest_log}: {e})"
 
 
 # ---------------------------------------------------------------------------
@@ -149,7 +272,7 @@ def run_optimization(terminal_path: str, terminal_data_dir: str, expert: str, se
                       symbol: str, period: str, from_date: str, to_date: str, work_dir: str,
                       login: str, password: str, server: str, report_name: str = "opt_report",
                       deposit: float = 100_000, currency: str = "USD", leverage: str = "1:100",
-                      optimization_mode: int = 2, timeout: int = 21600, poll: int = 10) -> Path:
+                      optimization_mode: int = 2, timeout: int = 21600, poll: int = 5) -> Path:
     """
     optimization_mode: 2 = fast genetic algorithm (recommended for large
         parameter spaces — MT5's own genetic search, separate from and in
@@ -172,12 +295,40 @@ def run_optimization(terminal_path: str, terminal_data_dir: str, expert: str, se
     work_dir = Path(work_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
 
-    # set_file must be just the filename — strip any path component
+    # 1. Synchronize compiled EA (.ex5) to MT5 Experts directory if needed
+    expert_filename = sync_ea_to_mt5(expert, terminal_data_dir, terminal_path)
+
+    # 2. Validate .set file in Profiles/Tester/ and ensure at least one parameter is varied
     set_file_name = Path(set_file).name
+    profiles_tester_dir = Path(terminal_data_dir) / "MQL5" / "Profiles" / "Tester"
+    set_path = profiles_tester_dir / set_file_name
+
+    if set_path.exists():
+        try:
+            set_txt = ""
+            for enc in ("utf-16", "utf-16-le", "utf-8", "cp1252"):
+                try:
+                    set_txt = set_path.read_text(encoding=enc)
+                    break
+                except Exception:
+                    continue
+            has_opt = any("||Y" in line or "||y" in line for line in set_txt.splitlines())
+            if not has_opt:
+                raise ValueError(
+                    f"Parameter file '{set_file_name}' contains NO parameters enabled for optimization (no lines with '||Y').\n"
+                    f"MT5 Strategy Tester will immediately open and close if no parameters are varied.\n"
+                    f"Please enable at least one parameter for optimization in the Optimize tab."
+                )
+        except ValueError:
+            raise
+        except Exception as ex:
+            print(f"  [INFO] Parameter check: {ex}")
+    else:
+        print(f"  [WARN] Parameter file '{set_file_name}' not yet found in {profiles_tester_dir}")
 
     ini_content = OPTIMIZATION_INI_TEMPLATE.format(
         login=login, password=password, server=server,
-        expert=expert, set_file=set_file_name, symbol=symbol, period=period,
+        expert=expert_filename, set_file=set_file_name, symbol=symbol, period=period,
         from_date=from_date, to_date=to_date, deposit=int(deposit),
         currency=currency, leverage=leverage,
         optimization_mode=optimization_mode, report_name=report_name,
@@ -197,20 +348,23 @@ def run_optimization(terminal_path: str, terminal_data_dir: str, expert: str, se
             c.unlink()
 
     cmd = [terminal_path, f"/config:{ini_path}"]
-    print(f"Launching optimization: {cmd}")
-    print(f"  .ini : {ini_path}")
-    print(f"  .set : {set_file_name}  (in terminal Profiles/Tester/)")
-    print(f"  report will appear at: {report_xml}")
-    print("This uses MT5's local agents automatically (your PC's CPU cores) — "
-          "no separate agent setup needed. This can take a long time; the "
-          "terminal will close itself when done (ShutdownTerminal=1).")
-    subprocess.Popen(cmd)
+    print(f"\nLaunching optimization:")
+    print(f"  Command  : {cmd}")
+    print(f"  Expert   : {expert_filename}")
+    print(f"  Symbol   : {symbol}  |  Period: {period}")
+    print(f"  Dates    : {from_date} -> {to_date}")
+    print(f"  .ini     : {ini_path}")
+    print(f"  .set     : {set_file_name}  (in Profiles/Tester/)")
+    print(f"  Report   : {report_xml}")
+    print("MT5 terminal launched. Monitoring optimization progress...")
+    proc = subprocess.Popen(cmd)
 
-    found = _wait_for_stable_file(candidates, timeout=timeout, poll=poll)
+    found = _wait_for_stable_file(candidates, timeout=timeout, poll=poll, proc=proc, terminal_data_dir=terminal_data_dir)
     return found
 
 
-def _wait_for_stable_file(candidate_paths: list, timeout: int, poll: int) -> Path:
+def _wait_for_stable_file(candidate_paths: list, timeout: int, poll: int,
+                          proc: subprocess.Popen = None, terminal_data_dir: str = None) -> Path:
     print(f"Waiting for optimization report at one of: {[str(p) for p in candidate_paths]}")
     start = time.time()
     last_size = -1
@@ -236,7 +390,30 @@ def _wait_for_stable_file(candidate_paths: list, timeout: int, poll: int) -> Pat
                 stable_checks = 0
             last_size = size
         else:
-            print(f"  [{elapsed}s] not found yet")
+            # Check if MT5 process exited prematurely!
+            if proc is not None and proc.poll() is not None:
+                # MT5 terminal process has closed!
+                time.sleep(2)
+                existing = [p for p in candidate_paths if p.exists()]
+                if existing and existing[0].stat().st_size > 0:
+                    return existing[0]
+
+                # MT5 closed without generating any report
+                log_info = _read_latest_mt5_tester_log(terminal_data_dir) if terminal_data_dir else ""
+                error_msg = (
+                    f"\n[ERROR] MT5 terminal closed immediately without generating an optimization report! (Exit code: {proc.returncode})\n"
+                    f"Possible causes:\n"
+                    f"  1. The EA (.ex5) binary failed to load or is not compiled\n"
+                    f"  2. No parameters were enabled for optimization in the .set file (must contain ||Y)\n"
+                    f"  3. Symbol '{candidate_paths[0].stem}' or chart data is missing from Market Watch\n"
+                    f"  4. MT5 account login failed\n\n"
+                    f"--- MT5 Strategy Tester Log ---\n{log_info}\n"
+                    f"-------------------------------\n"
+                )
+                print(error_msg)
+                raise RuntimeError(error_msg)
+
+            print(f"  [{elapsed}s] optimization in progress (terminal running)...")
         time.sleep(poll)
 
     raise TimeoutError(f"Optimization report never appeared or stabilized within {timeout}s. "

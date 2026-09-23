@@ -32,9 +32,21 @@ Usage:
 """
 
 import os
+import sys
 import time
 import subprocess
 from pathlib import Path
+
+# Prevent Windows console UnicodeEncodeError
+try:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
+from mt5_optimizer import sync_ea_to_mt5, _read_latest_mt5_tester_log
 
 TEMPLATE_PATH = Path(__file__).parent / "tester_template.ini"
 
@@ -50,7 +62,8 @@ def _generate_ini(work_dir: Path, **kwargs) -> Path:
 
 
 def _wait_for_report(report_path_options, timeout: int = 1800, poll: int = 3,
-                      open_check_timeout: int = None) -> Path:
+                      open_check_timeout: int = None, proc: subprocess.Popen = None,
+                      terminal_data_dir: str = None) -> Path:
     """
     report_path_options: list of candidate Paths (e.g. .htm and .html variants).
     Waits until one of them appears and stabilizes in size, returns that Path.
@@ -83,6 +96,18 @@ def _wait_for_report(report_path_options, timeout: int = 1800, poll: int = 3,
                     stable_checks = 0
                 last_size = size
             else:
+                # Check if process terminated prematurely
+                if proc is not None and proc.poll() is not None:
+                    time.sleep(2)
+                    existing = [p for p in report_path_options if p.exists()]
+                    if existing and existing[0].stat().st_size > 0:
+                        return existing[0]
+                    log_info = _read_latest_mt5_tester_log(terminal_data_dir) if terminal_data_dir else ""
+                    raise RuntimeError(
+                        f"MT5 terminal closed immediately without generating a test report. (Exit code: {proc.returncode})\n"
+                        f"MT5 Strategy Tester Log:\n{log_info}"
+                    )
+
                 print(f"  [{elapsed}s] not found yet")
                 # Early-abort: terminal never opened within the check window
                 if (not file_appeared
@@ -129,6 +154,9 @@ def run_single_backtest(
     work_dir = Path(work_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
 
+    # Synchronize compiled EA (.ex5) to MT5 Experts directory if needed
+    expert_filename = sync_ea_to_mt5(expert, terminal_data_dir, terminal_path)
+
     # Where MT5 will actually write the report — extension varies (.htm or .html)
     # depending on build, so we watch both candidates rather than assuming one.
     report_html = Path(terminal_data_dir) / f"{report_name}.html"
@@ -140,8 +168,8 @@ def run_single_backtest(
         login=login,
         password=password,
         server=server,
-        expert=expert,
-        set_file=set_file,
+        expert=expert_filename,
+        set_file=Path(set_file).name,
         symbol=symbol,
         period=period,
         from_date=from_date,
@@ -159,10 +187,11 @@ def run_single_backtest(
 
     cmd = [terminal_path, f"/config:{ini_path}"]
     print(f"Launching: {cmd}")
-    subprocess.Popen(cmd)
+    proc = subprocess.Popen(cmd)
 
     found_report = _wait_for_report(candidates, timeout=timeout,
-                                     open_check_timeout=open_check_timeout)
+                                     open_check_timeout=open_check_timeout,
+                                     proc=proc, terminal_data_dir=terminal_data_dir)
 
     # Copy the report into work_dir too, so each run's results are archived
     # alongside their trades.csv rather than getting overwritten next run

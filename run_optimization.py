@@ -64,20 +64,6 @@ from strategy_builder import (
 #  USER CONFIGURATION - edit everything in this block before running
 # ===========================================================================
 
-TERMINAL_PATH     = r'C:\Users\HP\AppData\Roaming\MetaTrader\terminal64.exe'
-TERMINAL_DATA_DIR = r'C:\Users\HP\AppData\Roaming\MetaQuotes\Terminal\CDE1ED2F37049DA2E508A3C44B675D09'
-
-EXPERT     = 'TRB V2.0.ex5'
-PERIOD     = 'M15'
-
-LOGIN    = 52909674
-PASSWORD = '3F!@4rwo7wc02f'
-SERVER   = 'ICMarketsKE-Demo'
-
-DEPOSIT  = 2500
-CURRENCY = 'USD'
-LEVERAGE = '1:100'
-
 _SCRIPT_DIR = Path(__file__).resolve().parent
 _CONFIG_FILE = _SCRIPT_DIR / "config.json"
 _CFG = {}
@@ -88,17 +74,24 @@ if _CONFIG_FILE.exists():
     except Exception:
         pass
 
+from mt5_optimizer import sync_ea_to_mt5
+
+TERMINAL_PATH     = _CFG.get("terminal_path", r'C:\Users\HP\AppData\Roaming\MetaTrader\terminal64.exe')
+TERMINAL_DATA_DIR = _CFG.get("terminal_data_dir", r'C:\Users\HP\AppData\Roaming\MetaQuotes\Terminal\CDE1ED2F37049DA2E508A3C44B675D09')
+PERIOD            = _CFG.get("period", 'M15')
+
+LOGIN    = int(_CFG.get("login", 52909674))
+PASSWORD = str(_CFG.get("password", '3F!@4rwo7wc02f'))
+SERVER   = str(_CFG.get("server", 'ICMarketsKE-Demo'))
+
+DEPOSIT  = float(_CFG.get("deposit", 2500))
+CURRENCY = _CFG.get("currency", 'USD')
+LEVERAGE = _CFG.get("leverage", '1:100')
+
 # -- MULTI-EA SWITCHBOARD ---------------------------------------------------
 # Change ACTIVE_EA to run the pipeline against a different Expert Advisor.
 # Loads active_ea from config.json (or defaults to 'TRB').
-ACTIVE_EA = _CFG.get("active_ea", "TRB").upper()
-
-# -- MULTI-SYMBOL SWITCHBOARD ----------------------------------------------
-# Change TARGET_SYMBOL to run optimization for different Forex markets.
-_cfg_sym = _CFG.get("symbol_key") or _CFG.get("symbol", "USDJPY")
-if " " in _cfg_sym:
-    _cfg_sym = _cfg_sym.split()[0].upper()
-TARGET_SYMBOL = _cfg_sym if _cfg_sym in ["EURUSD", "GBPUSD", "USDJPY", "EURJPY", "XAUUSD"] else "USDJPY"
+ACTIVE_EA = _CFG.get("active_ea", "TRB").strip()
 
 # Shared across EAs -- just the MT5 symbol name and its pip size. Anything
 # EA-specific (which parameters get optimized, over what range) lives in
@@ -112,11 +105,20 @@ SYMBOL_CONFIGS = {
     "XAUUSD": {"symbol_mt5": "XAUUSD dukascopy", "pip_size": 0.10},
 }
 
+# -- MULTI-SYMBOL SWITCHBOARD ----------------------------------------------
+# Change TARGET_SYMBOL to run optimization for different Forex markets.
+_cfg_sym = _CFG.get("symbol_key") or _CFG.get("symbol", "USDJPY")
+if " " in _cfg_sym:
+    _cfg_sym_key = _cfg_sym.split()[0].upper()
+else:
+    _cfg_sym_key = _cfg_sym.upper()
+TARGET_SYMBOL = _cfg_sym_key if _cfg_sym_key in SYMBOL_CONFIGS else "USDJPY"
+
 # Resolve active symbol parameters
-_active_cfg = SYMBOL_CONFIGS[TARGET_SYMBOL]
-SYMBOL      = 'USDJPY Dukascopy'
-SYMBOL_KEY  = 'USDPY'
-PIP_SIZE    = _active_cfg["pip_size"]
+_active_cfg = SYMBOL_CONFIGS.get(TARGET_SYMBOL, {"symbol_mt5": _CFG.get("symbol", "USDJPY Dukascopy"), "pip_size": 0.01})
+SYMBOL      = _CFG.get("symbol") or _active_cfg.get("symbol_mt5", "USDJPY Dukascopy")
+SYMBOL_KEY  = TARGET_SYMBOL
+PIP_SIZE    = float(_CFG.get("pip_size", _active_cfg.get("pip_size", 0.01)))
 
 
 # -- Core (non-indicator) fixed params, ORB -------------------------------
@@ -419,54 +421,81 @@ EA_CONFIGS = {
 }
 
 if ACTIVE_EA not in EA_CONFIGS:
-    ea_folder = _SCRIPT_DIR / "researched_strategies" / ACTIVE_EA
-    if ea_folder.exists():
-        ex5_files = list(ea_folder.glob("*.ex5"))
-        expert_file = ex5_files[0].name if ex5_files else f"{ACTIVE_EA}.ex5"
+    # Look for folder matching ACTIVE_EA case-insensitively
+    search_dirs = [
+        _SCRIPT_DIR / "researched_strategies",
+        _SCRIPT_DIR / "strategies",
+        _SCRIPT_DIR,
+    ]
+    if _CFG.get("research_dir"):
+        search_dirs.insert(0, Path(_CFG["research_dir"]))
 
-        def _build_dynamic_mql5(symbol_key: str, pip_size: float) -> tuple[dict, dict]:
-            try:
-                import mql5_parser
-                parsed = mql5_parser.get_strategy_mql5_config(ACTIVE_EA)
-                fixed = {}
-                ranges = {}
-                for ind in parsed.get("indicators", []):
-                    fixed[ind["toggleParam"]] = 1 if ind.get("enabled") else 0
+    found_folder = None
+    for sdir in search_dirs:
+        if not sdir.exists():
+            continue
+        for d in sdir.iterdir():
+            if d.is_dir() and d.name.lower() == ACTIVE_EA.lower():
+                found_folder = d
+                break
+        if found_folder:
+            break
+
+    ea_folder = found_folder if found_folder else (_SCRIPT_DIR / "researched_strategies" / ACTIVE_EA)
+    ex5_files = list(ea_folder.glob("*.ex5")) if ea_folder.exists() else []
+    expert_file = ex5_files[0].name if ex5_files else f"{ACTIVE_EA}.ex5"
+
+    def _build_dynamic_mql5(symbol_key: str, pip_size: float) -> tuple[dict, dict]:
+        try:
+            import mql5_parser
+            parsed = mql5_parser.get_strategy_mql5_config(ACTIVE_EA)
+            fixed = {}
+            ranges = {}
+            for ind in parsed.get("indicators", []):
+                fixed[ind["toggleParam"]] = 1 if ind.get("enabled") else 0
+            for p in parsed.get("params", []):
+                if p.get("mode") == "optimize":
+                    rng = p.get("range", {})
+                    ranges[p["name"]] = (rng.get("start", 0), rng.get("step", 1), rng.get("stop", 10))
+                else:
+                    fixed[p["name"]] = p.get("fixedValue", 0)
+
+            # Safety fallback: if ranges is still empty, auto-select numeric params
+            if not ranges and parsed.get("params"):
                 for p in parsed.get("params", []):
-                    if p.get("mode") == "optimize":
-                        rng = p.get("range", {})
-                        ranges[p["name"]] = (rng.get("start", 0), rng.get("step", 1), rng.get("stop", 10))
-                    else:
-                        fixed[p["name"]] = p.get("fixedValue", 0)
-                return fixed, ranges
-            except Exception:
-                return {}, {}
+                    p_name = p.get("name", "")
+                    rng = p.get("range", {})
+                    st, sp, so = rng.get("start", 0), rng.get("step", 1), rng.get("stop", 10)
+                    if so > st and sp > 0 and not any(ign in p_name.lower() for ign in ["magic", "slip", "comment", "color", "use"]):
+                        ranges[p_name] = (st, sp, so)
+                        if len(ranges) >= 5:
+                            break
+            return fixed, ranges
+        except Exception as e:
+            print(f"  [WARN] Parameter extraction fallback for {ACTIVE_EA}: {e}")
+            return {}, {}
 
-        EA_CONFIGS[ACTIVE_EA] = {
-            "expert": expert_file,
-            "valid_symbols": list(SYMBOL_CONFIGS.keys()),
-            "build": _build_dynamic_mql5,
-        }
-    else:
-        raise SystemExit(f"Unknown ACTIVE_EA '{ACTIVE_EA}'. Choices: {list(EA_CONFIGS)} or any folder in researched_strategies")
+    EA_CONFIGS[ACTIVE_EA] = {
+        "expert": expert_file,
+        "valid_symbols": list(SYMBOL_CONFIGS.keys()) + [TARGET_SYMBOL, SYMBOL_KEY],
+        "build": _build_dynamic_mql5,
+    }
 
 _ea_cfg = EA_CONFIGS[ACTIVE_EA]
-if TARGET_SYMBOL not in _ea_cfg["valid_symbols"]:
-    raise SystemExit(
-        f"TARGET_SYMBOL '{TARGET_SYMBOL}' is not valid for ACTIVE_EA '{ACTIVE_EA}'.\n"
-        f"{ACTIVE_EA} is only set up for: {_ea_cfg['valid_symbols']}\n"
-        f"Either change TARGET_SYMBOL, or switch ACTIVE_EA."
-    )
+if TARGET_SYMBOL not in _ea_cfg["valid_symbols"] and TARGET_SYMBOL not in SYMBOL_CONFIGS:
+    print(f"  [INFO] Target symbol '{TARGET_SYMBOL}' will be used for '{ACTIVE_EA}'.")
 
 EXPERT = _CFG.get("expert") or _ea_cfg.get("expert", f"{ACTIVE_EA}.ex5")
+# Ensure the compiled EA binary is copied into MT5 Experts directory
+EXPERT = sync_ea_to_mt5(EXPERT, TERMINAL_DATA_DIR, TERMINAL_PATH)
 
 # -- Date windows ---------------------------------------------------------
-TRAIN_FROM   = '2013.01.01'
-TRAIN_TO     = '2022.01.01'
-VAL_FROM     = '2022.01.01'
-VAL_TO       = '2024.01.01'
-HOLDOUT_FROM = '2024.01.01'
-HOLDOUT_TO   = '2026.07.03'
+TRAIN_FROM   = _CFG.get("train_from", '2013.01.01')
+TRAIN_TO     = _CFG.get("train_to", '2022.01.01')
+VAL_FROM     = _CFG.get("val_from", '2022.01.01')
+VAL_TO       = _CFG.get("val_to", '2024.01.01')
+HOLDOUT_FROM = _CFG.get("holdout_from", '2024.01.01')
+HOLDOUT_TO   = _CFG.get("holdout_to", '2026.07.03')
 
 
 def _months_between(from_str: str, to_str: str) -> float:
@@ -591,22 +620,22 @@ if "_cfg" in locals() and _cfg:
 CRITERIA_CFG = _cfg.get("qualification_criteria", {}) if "_cfg" in locals() and _cfg else {}
 
 # -- Pipeline settings -----------------------------------------------------
-TOP_N_TRAIN         = 20
-OPTIMIZATION_MODE   = 2
-OPT_TIMEOUT         = 21600
-SINGLE_TEST_TIMEOUT = 100
+TOP_N_TRAIN         = int(_CFG.get("top_n_train", 20))
+OPTIMIZATION_MODE   = int(_CFG.get("optimization_mode", 2))
+OPT_TIMEOUT         = int(_CFG.get("opt_timeout", 21600))
+SINGLE_TEST_TIMEOUT = int(_CFG.get("single_test_timeout", 100))
 
 # -- Walk Forward ----------------------------------------------------------
-WF_WINDOW_MONTHS  = 12
-WF_STEP_MONTHS    = 6
-WF_MIN_PASS_RATE  = 70.0
+WF_WINDOW_MONTHS  = int(_CFG.get("wf_window_months", 12))
+WF_STEP_MONTHS    = int(_CFG.get("wf_step_months", 6))
+WF_MIN_PASS_RATE  = float(_CFG.get("wf_min_pass_rate", 70.0))
 
 # -- Monte Carlo -----------------------------------------------------------
-MC_NUM_SIMULATIONS   = 5_000
-MC_MAX_DD_PCT        = 10.0
-MC_DAILY_DD_PCT      = 5.0
-MC_PHASE1_TARGET_PCT = 8.0
-MC_PHASE2_TARGET_PCT = 5.0
+MC_NUM_SIMULATIONS   = int(_CFG.get("mc_simulations", 5_000))
+MC_MAX_DD_PCT        = float(_CFG.get("mc_max_dd", 10.0))
+MC_DAILY_DD_PCT      = float(_CFG.get("mc_daily_dd", 5.0))
+MC_PHASE1_TARGET_PCT = float(_CFG.get("mc_phase1_target", 8.0))
+MC_PHASE2_TARGET_PCT = float(_CFG.get("mc_phase2_target", 5.0))
 
 # -- Terminal-launch reliability ------------------------------------------
 RETRY_COUNT                     = 3
@@ -986,6 +1015,37 @@ def main():
     print("-" * 72)
 
     opt_set_path = profiles_tester_dir / "run_opt_strategy.set"
+
+    # Safety check: MT5 will immediately open and close if no parameters are varied
+    if not OPT_RANGES:
+        print("\n  [WARN] No optimization ranges were defined! Auto-selecting tunable parameters...")
+        for p_name, p_val in list(FIXED_PARAMS.items()):
+            p_low = p_name.lower()
+            if any(ign in p_low for ign in ["magic", "slip", "comment", "color", "use", "filter", "timer", "digits"]):
+                continue
+            if isinstance(p_val, (int, float)) and p_val > 0:
+                if isinstance(p_val, int):
+                    start = max(1, int(p_val * 0.5))
+                    step = 1 if p_val < 15 else 2
+                    stop = int(p_val * 1.8)
+                    if stop > start:
+                        OPT_RANGES[p_name] = (start, step, stop)
+                        del FIXED_PARAMS[p_name]
+                elif isinstance(p_val, float):
+                    start = round(p_val * 0.5, 2)
+                    step = round(p_val * 0.25, 2) if p_val >= 1.0 else 0.1
+                    stop = round(p_val * 2.0, 2)
+                    if stop > start and step > 0:
+                        OPT_RANGES[p_name] = (start, step, stop)
+                        del FIXED_PARAMS[p_name]
+            if len(OPT_RANGES) >= 5:
+                break
+
+    if not OPT_RANGES:
+        print(f"\n[ERROR] Optimization aborted: NO parameters are enabled for optimization for {ACTIVE_EA}!")
+        print("MT5 Strategy Tester requires at least one parameter marked with '||Y' to run optimization.")
+        print("Please configure parameters in the Optimize tab or ensure the EA has tunable inputs.")
+        return
 
     print("=" * 72)
     print(f"  STRATEGY OPTIMIZATION PARAMETERS ({ACTIVE_EA} | {SYMBOL_KEY})")

@@ -314,7 +314,23 @@ def parse_mql5_file(mq5_path: Path, ea_name: str = "") -> Dict[str, Any]:
             rng_tuple = _generate_range_for_val(v_val)
 
         # Mode determination (Fixed vs Optimize)
-        is_opt = v_name in preset_opt
+        if preset_opt:
+            is_opt = v_name in preset_opt
+        else:
+            # Smart auto-detection for non-preset EAs:
+            # Mark the top numeric parameters (periods, multipliers, buffers, thresholds) as optimizable
+            low_name = v_name.lower()
+            is_ignored = any(ign in low_name for ign in ["magic", "slip", "comment", "color", "timer", "digits", "dev", "font"])
+            is_numeric = v_type in ("int", "float", "double", "short", "long", "uint", "ushort", "ulong")
+            has_valid_range = rng_tuple[2] > rng_tuple[0] and rng_tuple[1] > 0
+            
+            # Prioritize strategy tunables: period, mult, ratio, buffer, tp, sl, threshold, range
+            is_tunable_keyword = any(kw in low_name for kw in [
+                "period", "mult", "ratio", "buffer", "offset", "tp", "sl", 
+                "threshold", "range", "level", "step", "fast", "slow", "signal",
+                "filter", "min", "max", "pips"
+            ])
+            is_opt = is_numeric and not is_ignored and has_valid_range and (is_tunable_keyword or len([p for p in params if p.get("mode") == "optimize"]) < 4)
 
         params.append({
             "name": v_name,
