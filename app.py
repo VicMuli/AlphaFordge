@@ -320,7 +320,9 @@ def get_portfolios(work_dir: str, quant_name: str = "") -> list:
 
     # 1. MultiMarket portfolio directories
     mm_dirs = [
+        script_dir / "Multi_Market_Quant_Portfolio",
         script_dir / "MultiMarket portfolio",
+        base / "Multi_Market_Quant_Portfolio",
         base / "MultiMarket portfolio",
     ]
     for mm in mm_dirs:
@@ -407,7 +409,9 @@ def find_portfolio_path(work_dir: str, quant_name: str, port_name: str) -> Path 
 
     # 1. MultiMarket portfolio checks
     mm_dirs = [
+        script_dir / "Multi_Market_Quant_Portfolio",
         script_dir / "MultiMarket portfolio",
+        base / "Multi_Market_Quant_Portfolio",
         base / "MultiMarket portfolio",
     ]
     for mm in mm_dirs:
@@ -923,37 +927,140 @@ class ResearchPanel(BasePanel):
     def __init__(self, parent, app):
         super().__init__(parent, app)
         self.columnconfigure(0, weight=1)
+        self._ea_data = {}
         self._build()
 
     def _set(self, entry, val):
         entry.delete(0, "end")
         entry.insert(0, str(val))
 
+    def _get_research_base(self) -> Path:
+        custom = self.cfg.get("research_dir", "")
+        if custom and Path(custom).exists():
+            return Path(custom)
+        base = SCRIPT_DIR / "researched_strategies"
+        base.mkdir(parents=True, exist_ok=True)
+        return base
+
+    def _scan_researched_folders(self):
+        base = self._get_research_base()
+        ea_dict = {}
+        if base.exists():
+            for d in sorted(base.iterdir()):
+                if d.is_dir():
+                    docs = list(d.glob("*.docx")) + list(d.glob("*.doc"))
+                    mq5s = list(d.glob("*.mq5"))
+                    ex5s = list(d.glob("*.ex5"))
+                    sets = list(d.glob("*.set"))
+                    htmls = list(d.glob("*_default.html")) + list(d.glob("*.html")) + list(d.glob("*.htm"))
+                    word_reports = [f for f in docs if "report" in f.name.lower()]
+                    logic_docs = [f for f in docs if "report" not in f.name.lower()]
+
+                    summary_file = d / f"{d.name}_summary.json"
+                    summary_data = None
+                    if summary_file.exists():
+                        try:
+                            with open(summary_file, "r", encoding="utf-8") as f:
+                                summary_data = json.load(f)
+                        except Exception:
+                            pass
+
+                    ea_dict[d.name] = {
+                        "path": d,
+                        "logic_doc": logic_docs[0] if logic_docs else (docs[0] if docs else None),
+                        "mq5": mq5s[0] if mq5s else None,
+                        "ex5": ex5s[0] if ex5s else None,
+                        "sets": sets,
+                        "html_report": htmls[0] if htmls else None,
+                        "word_report": word_reports[0] if word_reports else None,
+                        "summary": summary_data,
+                    }
+        self._ea_data = ea_dict
+        folder_names = list(ea_dict.keys())
+        default_ea = self.cfg.get("active_ea", "TRB")
+        if not folder_names:
+            folder_names = [default_ea]
+        return folder_names
+
     def _build(self):
-        pad = dict(padx=32, pady=(28, 0))
+        pad = dict(padx=32, pady=(24, 0))
         make_section_header(self, "🔬  Research Backtest",
-            "Run a default (un-optimised) backtest for a newly researched strategy"
+            "Manage researched strategies in researched_strategies/<EA>/ and run default baseline backtests"
         ).grid(row=0, column=0, sticky="ew", **pad)
 
-        # Form
+        ea_list = self._scan_researched_folders()
+        default_selected = ea_list[0] if ea_list else self.cfg.get("active_ea", "TRB")
+
+        # ── 1. Strategy Assets & Overview Card ─────────────────────────────────
+        assets_card = make_card(self)
+        assets_card.grid(row=1, column=0, sticky="ew", padx=32, pady=(16, 0))
+        assets_card.columnconfigure(1, weight=1)
+
+        # EA selector row
+        sel_row = ctk.CTkFrame(assets_card, fg_color="transparent")
+        sel_row.grid(row=0, column=0, columnspan=2, sticky="ew", padx=20, pady=(16, 10))
+        ctk.CTkLabel(sel_row, text="Select Researched EA:", font=FB, text_color=C["sub"]).pack(side="left", padx=(0, 10))
+
+        self._ea_combo = ctk.CTkComboBox(
+            sel_row, values=ea_list, width=240,
+            command=self._on_ea_selected
+        )
+        self._ea_combo.set(default_selected)
+        self._ea_combo.pack(side="left", padx=(0, 10))
+
+        make_btn(sel_row, "🔄 Refresh Folders", self._refresh_folders,
+                 color=C["card"], hover=C["hover"], width=130).pack(side="left", padx=(0, 8))
+        make_btn(sel_row, "📂 Open EA Folder", self._open_output,
+                 color=C["card"], hover=C["hover"], width=130).pack(side="left")
+
+        # Asset details row
+        self._asset_frame = ctk.CTkFrame(assets_card, fg_color="#1a202c", corner_radius=8)
+        self._asset_frame.grid(row=1, column=0, columnspan=2, sticky="ew", padx=20, pady=(4, 16))
+        self._asset_frame.columnconfigure((0, 1, 2), weight=1)
+
+        self._lbl_logic_doc = ctk.CTkLabel(self._asset_frame, text="📄 Logic Doc: Checking...", font=FB, text_color=C["sub"], anchor="w")
+        self._lbl_logic_doc.grid(row=0, column=0, sticky="w", padx=14, pady=8)
+        self._btn_open_doc = make_btn(self._asset_frame, "Open Word Doc", self._open_logic_doc,
+                                      color=C["card"], hover=C["hover"], width=110)
+        self._btn_open_doc.grid(row=0, column=1, sticky="w", padx=4, pady=8)
+
+        self._lbl_mq5 = ctk.CTkLabel(self._asset_frame, text="💻 MQL5 Code: Checking...", font=FB, text_color=C["sub"], anchor="w")
+        self._lbl_mq5.grid(row=1, column=0, sticky="w", padx=14, pady=8)
+        self._btn_open_mq5 = make_btn(self._asset_frame, "Open MQL5", self._open_mq5_code,
+                                      color=C["card"], hover=C["hover"], width=110)
+        self._btn_open_mq5.grid(row=1, column=1, sticky="w", padx=4, pady=8)
+
+        self._lbl_bt_status = ctk.CTkLabel(self._asset_frame, text="📊 Default Backtest: Checking...", font=FB, text_color=C["sub"], anchor="w")
+        self._lbl_bt_status.grid(row=2, column=0, sticky="w", padx=14, pady=8)
+        btn_box = ctk.CTkFrame(self._asset_frame, fg_color="transparent")
+        btn_box.grid(row=2, column=1, columnspan=2, sticky="w", padx=4, pady=8)
+        self._btn_open_html = make_btn(btn_box, "HTML Report", self._open_html_report,
+                                       color=C["card"], hover=C["hover"], width=105)
+        self._btn_open_html.pack(side="left", padx=(0, 6))
+        self._btn_open_rep_doc = make_btn(btn_box, "Word Report", self._open_word_report,
+                                          color=C["card"], hover=C["hover"], width=105)
+        self._btn_open_rep_doc.pack(side="left")
+
+        # ── 2. Backtest Parameters Form Card ──────────────────────────────────
         form = make_card(self)
-        form.grid(row=1, column=0, sticky="ew", padx=32, pady=(24, 0))
+        form.grid(row=2, column=0, sticky="ew", padx=32, pady=(16, 0))
 
         cfg = self.cfg
+        default_expert = cfg.get("expert", f"{default_selected} V2.0.ex5")
         fields = [
-            ("Strategy Name",  "My_Strategy_v1",           "name"),
-            ("Expert (.ex5)",  cfg.get("expert",""),        "expert"),
-            ("Set File",       "my_strategy.set",           "set_file"),
-            ("Symbol",         cfg.get("symbol",""),        "symbol"),
-            ("Period",         cfg.get("period",""),        "period"),
-            ("From Date",      cfg.get("train_from",""),    "from_date"),
-            ("To Date",        cfg.get("holdout_to",""),    "to_date"),
-            ("Deposit ($)",    cfg.get("deposit","2500"),   "deposit"),
+            ("Strategy / EA Name", default_selected,          "name"),
+            ("Expert (.ex5)",      default_expert,            "expert"),
+            ("Set File",           "(Default EA Inputs)",     "set_file"),
+            ("Symbol",             cfg.get("symbol",""),      "symbol"),
+            ("Period",             cfg.get("period",""),      "period"),
+            ("From Date",          cfg.get("train_from",""),  "from_date"),
+            ("To Date",            cfg.get("holdout_to",""),  "to_date"),
+            ("Deposit ($)",        cfg.get("deposit","2500"), "deposit"),
         ]
         self._entries = {}
         for i, (label, default, key) in enumerate(fields):
             row_f = ctk.CTkFrame(form, fg_color="transparent")
-            row_f.grid(row=i, column=0, sticky="ew", padx=20, pady=6)
+            row_f.grid(row=i, column=0, sticky="ew", padx=20, pady=5)
             ctk.CTkLabel(row_f, text=label, font=FB, text_color=C["sub"],
                          width=150, anchor="e").pack(side="left", padx=(0,12))
             e = make_entry(row_f, placeholder=default, width=360)
@@ -961,25 +1068,144 @@ class ResearchPanel(BasePanel):
             e.pack(side="left")
             self._entries[key] = e
             if key == "set_file":
-                make_btn(row_f, "Browse .set", lambda: self._browse_set(),
+                make_btn(row_f, "Browse .set", self._browse_set,
                          color=C["card"], hover=C["hover"], width=110).pack(side="left", padx=(8,0))
+                make_btn(row_f, "Use Defaults", lambda: self._set(self._entries["set_file"], "(Default EA Inputs)"),
+                         color=C["card"], hover=C["hover"], width=100).pack(side="left", padx=(6,0))
 
-        # Buttons
+        # Run Buttons Row
         btn_row = ctk.CTkFrame(form, fg_color="transparent")
-        btn_row.grid(row=len(fields), column=0, sticky="ew", padx=20, pady=(16, 16))
+        btn_row.grid(row=len(fields), column=0, sticky="ew", padx=20, pady=(14, 16))
         make_btn(btn_row, "▶  Run Research Backtest", self._run, width=230).pack(side="left")
-        make_btn(btn_row, "📂 Open Output Folder",
-                 self._open_output, color=C["card"], hover=C["hover"], width=180).pack(side="left", padx=(12,0))
+        make_btn(btn_row, "📂 Open EA Folder",
+                 self._open_output, color=C["card"], hover=C["hover"], width=160).pack(side="left", padx=(12,0))
 
-        # Log
+        # ── 3. Live Output Log ────────────────────────────────────────────────
         log_card = make_card(self)
-        log_card.grid(row=2, column=0, sticky="nsew", padx=32, pady=(20, 28))
+        log_card.grid(row=3, column=0, sticky="nsew", padx=32, pady=(16, 24))
         log_card.columnconfigure(0, weight=1)
-        self.rowconfigure(2, weight=1)
+        self.rowconfigure(3, weight=1)
         make_label(log_card, "Live Output", font=FH3, color=C["sub"]).grid(
             row=0, column=0, sticky="w", padx=16, pady=(12, 4))
-        self._log = make_log(log_card, height=260)
+        self._log = make_log(log_card, height=220)
         self._log.grid(row=1, column=0, sticky="nsew", padx=16, pady=(0, 16))
+
+        # Initial populate
+        self._update_asset_view(default_selected)
+
+    def _refresh_folders(self):
+        ea_list = self._scan_researched_folders()
+        self._ea_combo.configure(values=ea_list)
+        current = self._ea_combo.get()
+        if current not in ea_list and ea_list:
+            current = ea_list[0]
+            self._ea_combo.set(current)
+        self._update_asset_view(current)
+
+    def _on_ea_selected(self, choice):
+        self._update_asset_view(choice)
+
+    def _update_asset_view(self, ea_name):
+        ea_info = self._ea_data.get(ea_name, {})
+        self._set(self._entries["name"], ea_name)
+
+        # Update expert input
+        if ea_info.get("ex5"):
+            self._set(self._entries["expert"], ea_info["ex5"].name)
+        else:
+            expert_val = self._entries["expert"].get()
+            if not expert_val or ea_name.lower() in expert_val.lower():
+                self._set(self._entries["expert"], f"{ea_name} V2.0.ex5")
+
+        # Update set file
+        if ea_info.get("sets"):
+            self._set(self._entries["set_file"], ea_info["sets"][0].name)
+        else:
+            self._set(self._entries["set_file"], "(Default EA Inputs)")
+
+        # Logic doc status
+        if ea_info.get("logic_doc"):
+            doc_name = ea_info["logic_doc"].name
+            self._lbl_logic_doc.configure(text=f"📄 Strategy Logic: {doc_name}", text_color=C["text"])
+            self._btn_open_doc.configure(state="normal")
+        else:
+            self._lbl_logic_doc.configure(text="📄 Strategy Logic: None found in folder", text_color=C["sub"])
+            self._btn_open_doc.configure(state="disabled")
+
+        # MQL5 code status
+        if ea_info.get("mq5"):
+            mq5_name = ea_info["mq5"].name
+            self._lbl_mq5.configure(text=f"💻 MQL5 Code: {mq5_name}", text_color=C["text"])
+            self._btn_open_mq5.configure(state="normal")
+        else:
+            self._lbl_mq5.configure(text="💻 MQL5 Code: None found in folder", text_color=C["sub"])
+            self._btn_open_mq5.configure(state="disabled")
+
+        # Backtest status
+        has_html = ea_info.get("html_report")
+        has_word = ea_info.get("word_report")
+        summary = ea_info.get("summary")
+
+        if has_html or summary:
+            if summary and "metrics" in summary:
+                m = summary["metrics"]
+                status_txt = f"📊 Backtest: ✔ Completed (Profit: ${m.get('net_profit', 0):,.2f} | PF: {m.get('profit_factor', 0):.2f} | DD: {m.get('max_drawdown_pct', 0):.1f}%)"
+            else:
+                status_txt = "📊 Backtest: ✔ Completed (Report available)"
+            self._lbl_bt_status.configure(text=status_txt, text_color="#10b981")
+            self._btn_open_html.configure(state="normal" if has_html else "disabled")
+            self._btn_open_rep_doc.configure(state="normal" if has_word else "disabled")
+        else:
+            self._lbl_bt_status.configure(text="📊 Backtest: Not run yet for this EA", text_color=C["sub"])
+            self._btn_open_html.configure(state="disabled")
+            self._btn_open_rep_doc.configure(state="disabled")
+
+    def _open_file_safely(self, target_path):
+        if not target_path or not Path(target_path).exists():
+            messagebox.showinfo("Not Found", f"File not found: {target_path}")
+            return
+        p_str = str(Path(target_path).resolve())
+        try:
+            if sys.platform == "win32":
+                os.startfile(p_str)
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", p_str])
+            else:
+                subprocess.Popen(["xdg-open", p_str])
+        except Exception as e:
+            messagebox.showerror("Open Error", f"Could not open file:\n{e}")
+
+    def _open_logic_doc(self):
+        ea_name = self._ea_combo.get().strip()
+        info = self._ea_data.get(ea_name, {})
+        if info.get("logic_doc"):
+            self._open_file_safely(info["logic_doc"])
+        else:
+            messagebox.showinfo("No Document", "No strategy logic document found in this EA folder.")
+
+    def _open_mq5_code(self):
+        ea_name = self._ea_combo.get().strip()
+        info = self._ea_data.get(ea_name, {})
+        if info.get("mq5"):
+            self._open_file_safely(info["mq5"])
+        else:
+            messagebox.showinfo("No MQL5 Code", "No .mq5 file found in this EA folder.")
+
+    def _open_html_report(self):
+        ea_name = self._ea_combo.get().strip()
+        info = self._ea_data.get(ea_name, {})
+        if info.get("html_report"):
+            self._open_file_safely(info["html_report"])
+        else:
+            messagebox.showinfo("No Report", "No backtest HTML report found. Run the research backtest first.")
+
+    def _open_word_report(self):
+        ea_name = self._ea_combo.get().strip()
+        info = self._ea_data.get(ea_name, {})
+        if info.get("word_report"):
+            self._open_file_safely(info["word_report"])
+        else:
+            messagebox.showinfo("No Report", "No Word backtest report found. Run the research backtest first.")
 
     def _browse_set(self):
         f = filedialog.askopenfilename(
@@ -995,29 +1221,50 @@ class ResearchPanel(BasePanel):
 
     def _run(self):
         v = self._get_vals()
-        if not v["name"]:
-            messagebox.showwarning("Missing", "Strategy Name is required.")
+        ea_name = v.get("name", "").strip()
+        if not ea_name:
+            messagebox.showwarning("Missing", "Strategy / EA Name is required.")
             return
+
+        expert_val = v.get("expert", "").strip()
+        if not expert_val.lower().endswith(".ex5"):
+            expert_val += ".ex5"
+
+        set_val = v.get("set_file", "").strip()
+        if set_val in ("(Default EA Inputs)", "(none)", "default"):
+            set_val = ""
+
         self.log_clear(self._log)
+
+        base_dir = self._get_research_base()
+        target_ea_dir = base_dir / ea_name
+        target_ea_dir.mkdir(parents=True, exist_ok=True)
+
         env_extra = {
-            "AF_STRATEGY_NAME": v["name"],
-            "AF_SET_FILE":      v["set_file"],
-            "AF_EXPERT":        v["expert"],
+            "AF_STRATEGY_NAME": ea_name,
+            "AF_EA_NAME":       ea_name,
+            "AF_EXPERT":        expert_val,
+            "AF_SET_FILE":      set_val,
             "AF_SYMBOL":        v["symbol"],
             "AF_PERIOD":        v["period"],
             "AF_FROM_DATE":     v["from_date"],
             "AF_TO_DATE":       v["to_date"],
             "AF_DEPOSIT":       v["deposit"],
+            "AF_RESEARCH_DIR":  str(base_dir),
         }
-        self.run_script("run_research_backtest.py", self._log, env_extra=env_extra)
+
+        def on_done():
+            self._refresh_folders()
+
+        self.run_script("run_research_backtest.py", self._log, env_extra=env_extra, on_done=on_done)
 
     def _open_output(self):
-        v        = self._get_vals()
-        name     = v.get("name", "").strip() or "My_Strategy_v1"
-        out_dir  = Path(self.cfg.get("research_dir",
-                         str(SCRIPT_DIR / "researched_strategies"))) / name
+        v = self._get_vals()
+        name = v.get("name", "").strip() or self._ea_combo.get().strip() or "TRB"
+        base_dir = self._get_research_base()
+        out_dir = base_dir / name
         out_dir.mkdir(parents=True, exist_ok=True)
-        os.startfile(str(out_dir))
+        self._open_file_safely(out_dir)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1028,28 +1275,108 @@ class OptimizePanel(BasePanel):
     def __init__(self, parent, app):
         super().__init__(parent, app)
         self.columnconfigure(0, weight=1)
+        self.active_ea = self.cfg.get("active_ea", "TRB").upper()
         self._build()
 
+    def _get_researched_eas(self) -> list[str]:
+        base = SCRIPT_DIR / "researched_strategies"
+        eas = []
+        if base.exists():
+            for d in sorted(base.iterdir()):
+                if d.is_dir() and not d.name.startswith("."):
+                    eas.append(d.name)
+        if not eas:
+            eas = ["TRB", "ORB"]
+        elif "TRB" not in eas:
+            eas.append("TRB")
+        return eas
+
+    def _get_mql5_status_text(self, ea: str) -> str:
+        base = SCRIPT_DIR / "researched_strategies" / ea
+        if base.exists():
+            mq5s = list(base.glob("*.mq5"))
+            if mq5s:
+                try:
+                    import mql5_parser
+                    cfg = mql5_parser.get_strategy_mql5_config(ea)
+                    inds = len(cfg.get("indicators", []))
+                    params = len(cfg.get("params", []))
+                    return f"MQL5: {mq5s[0].name} ({inds} filters, {params} params)"
+                except Exception:
+                    return f"MQL5: {mq5s[0].name}"
+        return f"MQL5: researched_strategies/{ea}/{ea}.mq5"
+
+    def _on_ea_selected(self, new_ea: str):
+        self.active_ea = new_ea.strip().upper()
+        self.cfg["active_ea"] = self.active_ea
+        self.cfg["quant_name"] = self.active_ea
+        ea_folder = SCRIPT_DIR / "researched_strategies" / self.active_ea
+        if ea_folder.exists():
+            ex5s = list(ea_folder.glob("*.ex5"))
+            if ex5s:
+                self.cfg["expert"] = ex5s[0].name
+        save_config(self.cfg)
+        if hasattr(self, "_mql5_badge"):
+            self._mql5_badge.configure(text=self._get_mql5_status_text(self.active_ea))
+        if hasattr(self, "_ea_info_val"):
+            self._ea_info_val.configure(text=f"{self.active_ea}  –  {self.cfg.get('expert','')}")
+
     def _build(self):
-        pad = dict(padx=32, pady=(28, 0))
+        pad = dict(padx=32, pady=(24, 0))
         make_section_header(self, "⚙  Optimization Pipeline",
-            "Train → Validation → Holdout → Monte Carlo certification"
+            "Select strategy, configure indicator filter switchboard and parameter ranges from MQL5"
         ).grid(row=0, column=0, sticky="ew", **pad)
 
         cfg = self.cfg
 
+        # Strategy selector card
+        strat_card = make_card(self)
+        strat_card.grid(row=1, column=0, sticky="ew", padx=32, pady=(16, 0))
+        strat_card.columnconfigure(1, weight=1)
+
+        make_label(strat_card, "Strategy To Optimize:", font=FB, color=C["text"]).grid(row=0, column=0, padx=16, pady=12, sticky="w")
+
+        available_eas = self._get_researched_eas()
+        if self.active_ea not in available_eas:
+            available_eas.insert(0, self.active_ea)
+
+        self._ea_var = ctk.StringVar(value=self.active_ea)
+        self._ea_combo = ctk.CTkComboBox(
+            strat_card,
+            values=available_eas,
+            variable=self._ea_var,
+            width=200,
+            command=self._on_ea_selected
+        )
+        self._ea_combo.grid(row=0, column=1, padx=8, pady=12, sticky="w")
+
+        def _refresh_eas():
+            eas = self._get_researched_eas()
+            self._ea_combo.configure(values=eas)
+            self._mql5_badge.configure(text=self._get_mql5_status_text(self.active_ea))
+
+        make_btn(strat_card, "🔄 Scan Strategies", _refresh_eas, color=C["hover"], width=130).grid(row=0, column=2, padx=8, pady=12, sticky="w")
+
+        self._mql5_badge = make_label(strat_card, self._get_mql5_status_text(self.active_ea), font=FSM, color=C["success"])
+        self._mql5_badge.grid(row=0, column=3, padx=16, pady=12, sticky="e")
+
         # Config overview cards
         info = make_card(self)
-        info.grid(row=1, column=0, sticky="ew", padx=32, pady=(24, 0))
+        info.grid(row=2, column=0, sticky="ew", padx=32, pady=(16, 0))
         info.columnconfigure((0,1,2,3), weight=1)
 
+        f_ea = ctk.CTkFrame(info, fg_color="transparent")
+        f_ea.grid(row=0, column=0, padx=16, pady=14, sticky="nsew")
+        make_label(f_ea, "EA / Expert", font=FSM, color=C["sub"]).pack(anchor="w")
+        self._ea_info_val = make_label(f_ea, cfg.get("active_ea","?") + "  –  " + cfg.get("expert",""), font=FH3, color=C["text"])
+        self._ea_info_val.pack(anchor="w")
+
         info_data = [
-            ("EA / Expert",    cfg.get("active_ea","?") + "  –  " + cfg.get("expert","")),
             ("Symbol",         cfg.get("symbol","") + "  " + cfg.get("period","")),
             ("Date Range",     cfg.get("train_from","") + " → " + cfg.get("holdout_to","")),
             ("Deposit",        f"${float(cfg.get('deposit',2500)):,.0f}  {cfg.get('currency','USD')}"),
         ]
-        for i, (lbl, val) in enumerate(info_data):
+        for i, (lbl, val) in enumerate(info_data, start=1):
             f = ctk.CTkFrame(info, fg_color="transparent")
             f.grid(row=0, column=i, padx=16, pady=14, sticky="nsew")
             make_label(f, lbl, font=FSM, color=C["sub"]).pack(anchor="w")
@@ -1057,7 +1384,7 @@ class OptimizePanel(BasePanel):
 
         # Phase progress indicators
         prog_card = make_card(self)
-        prog_card.grid(row=2, column=0, sticky="ew", padx=32, pady=(16, 0))
+        prog_card.grid(row=3, column=0, sticky="ew", padx=32, pady=(16, 0))
         prog_card.columnconfigure((0,1,2,3), weight=1)
         self._phase_labels = {}
         for i, (phase, icon) in enumerate([
@@ -1076,7 +1403,7 @@ class OptimizePanel(BasePanel):
 
         # Buttons
         btn_row = ctk.CTkFrame(self, fg_color="transparent")
-        btn_row.grid(row=3, column=0, sticky="ew", padx=32, pady=(20, 0))
+        btn_row.grid(row=4, column=0, sticky="ew", padx=32, pady=(20, 0))
         make_btn(btn_row, "▶  Run Full Pipeline", self._run, width=190).pack(side="left")
         make_btn(btn_row, "🔧  Parameters & Ranges", self._open_param_dialog,
                  color=C["accent"], hover=C["hover"], width=190).pack(side="left", padx=(10, 0))
@@ -1091,9 +1418,9 @@ class OptimizePanel(BasePanel):
 
         # Log
         log_card = make_card(self)
-        log_card.grid(row=4, column=0, sticky="nsew", padx=32, pady=(20, 28))
+        log_card.grid(row=5, column=0, sticky="nsew", padx=32, pady=(20, 28))
         log_card.columnconfigure(0, weight=1)
-        self.rowconfigure(4, weight=1)
+        self.rowconfigure(5, weight=1)
         make_label(log_card, "Live Pipeline Output", font=FH3, color=C["sub"]).grid(
             row=0, column=0, sticky="w", padx=16, pady=(12,4))
         self._log = make_log(log_card, height=300)
@@ -1104,15 +1431,15 @@ class OptimizePanel(BasePanel):
         self.run_script("run_optimization.py", self._log)
 
     def _open_param_dialog(self):
-        ea = self.cfg.get("active_ea", "TRB").upper()
+        ea = getattr(self, "active_ea", self.cfg.get("active_ea", "TRB")).upper()
         dlg = ctk.CTkToplevel(self)
         dlg.title(f"Optimization Parameters & Ranges — {ea}")
-        dlg.geometry("780x640")
+        dlg.geometry("820x680")
         dlg.configure(fg_color=C["bg"])
         dlg.grab_set()
 
         make_section_header(dlg, f"🔧 {ea} Parameters & Indicator Ranges",
-            "Configure which parameters are fixed and the search ranges for optimization"
+            f"Configured directly from {ea}'s MQL5 code in researched_strategies/{ea}/"
         ).pack(fill="x", padx=24, pady=(20, 10))
 
         scroll = ctk.CTkScrollableFrame(dlg, fg_color=C["panel"], corner_radius=10)
@@ -1124,8 +1451,24 @@ class OptimizePanel(BasePanel):
         ranges_dict = dict(opt_params.get("opt_ranges", {}))
         toggles_dict = dict(opt_params.get("indicator_toggles", {}))
 
-        # Default fallback indicators & params if not yet in config
-        if ea == "ORB":
+        # Parse from MQL5 file in researched_strategies/<EA>/
+        parsed_config = None
+        try:
+            import mql5_parser
+            parsed_config = mql5_parser.get_strategy_mql5_config(ea)
+        except Exception:
+            pass
+
+        if parsed_config and parsed_config.get("indicators"):
+            default_indicators = []
+            for ind in parsed_config["indicators"]:
+                def_toggle = 1 if ind.get("enabled", True) else 0
+                default_indicators.append((
+                    ind["toggleParam"],
+                    ind["name"],
+                    toggles_dict.get(ind["toggleParam"], def_toggle)
+                ))
+        elif ea == "ORB":
             default_indicators = [
                 ("InpUseEmaFilter", "EMA Filter", toggles_dict.get("InpUseEmaFilter", 1)),
                 ("InpUseRsiFilter", "RSI Filter", toggles_dict.get("InpUseRsiFilter", 0)),
@@ -1134,6 +1477,27 @@ class OptimizePanel(BasePanel):
                 ("InpUseMacdFilter", "MACD Filter", toggles_dict.get("InpUseMacdFilter", 1)),
                 ("InpUseHtfFilter", "HTF Filter", toggles_dict.get("InpUseHtfFilter", 0)),
             ]
+        else:
+            default_indicators = [
+                ("UseTrendFilter", "EMA Trend Filter", toggles_dict.get("UseTrendFilter", 1)),
+                ("UseAdxFilter", "ADX Volatility Filter", toggles_dict.get("UseAdxFilter", 1)),
+                ("UseAtrFilter", "ATR Range Filter", toggles_dict.get("UseAtrFilter", 1)),
+                ("UseAtrTrailingStop", "ATR Trailing Stop", toggles_dict.get("UseAtrTrailingStop", 0)),
+                ("UseNewsFilter", "News Event Filter", toggles_dict.get("UseNewsFilter", 0)),
+            ]
+
+        if parsed_config and parsed_config.get("params"):
+            default_params = []
+            for p in parsed_config["params"]:
+                rng = p.get("range", {})
+                rng_tuple = (rng.get("start", 0), rng.get("step", 1), rng.get("stop", 10))
+                default_params.append((
+                    p["name"],
+                    p.get("mode", "fixed"),
+                    p.get("fixedValue", 0),
+                    rng_tuple
+                ))
+        elif ea == "ORB":
             default_params = [
                 ("InpTPRatio", "optimize", 1.5, (1.0, 0.25, 3.0)),
                 ("InpSLBufferPips", "optimize", 1, (0, 1, 10)),
@@ -1148,13 +1512,6 @@ class OptimizePanel(BasePanel):
                 ("InpMacdSignal", "optimize", 9, (5, 1, 13)),
             ]
         else:
-            default_indicators = [
-                ("UseTrendFilter", "EMA Trend Filter", toggles_dict.get("UseTrendFilter", 1)),
-                ("UseAdxFilter", "ADX Volatility Filter", toggles_dict.get("UseAdxFilter", 1)),
-                ("UseAtrFilter", "ATR Range Filter", toggles_dict.get("UseAtrFilter", 1)),
-                ("UseAtrTrailingStop", "ATR Trailing Stop", toggles_dict.get("UseAtrTrailingStop", 0)),
-                ("UseNewsFilter", "News Event Filter", toggles_dict.get("UseNewsFilter", 0)),
-            ]
             default_params = [
                 ("LotSize", "fixed", 0.2, (0.1, 0.05, 0.5)),
                 ("PipsOffset", "fixed", 13, (8, 1, 20)),
@@ -2513,25 +2870,36 @@ class PortfolioPanel(BasePanel):
         meta = make_card(self)
         meta.grid(row=1, column=0, sticky="ew", padx=32, pady=(20, 0))
         r0 = ctk.CTkFrame(meta, fg_color="transparent")
-        r0.grid(row=0, column=0, sticky="ew", padx=20, pady=(14,6))
+        r0.grid(row=0, column=0, sticky="ew", padx=20, pady=(14,4))
         make_label(r0, "Portfolio Name", font=FB, color=C["sub"], width=160, anchor="e").pack(side="left", padx=(0,12))
         self._port_name = make_entry(r0, width=320)
         self._port_name.insert(0, f"{cfg.get('quant_name','TRB')}_Quant_Portfolio_001")
         self._port_name.pack(side="left")
 
+        # Output Storage Folder
+        r_out = ctk.CTkFrame(meta, fg_color="transparent")
+        r_out.grid(row=1, column=0, sticky="ew", padx=20, pady=(4,6))
+        make_label(r_out, "Output Folder", font=FB, color=C["sub"], width=160, anchor="e").pack(side="left", padx=(0,12))
+        self._out_dir_var = ctk.StringVar(value="Multi_Market_Quant_Portfolio")
+        self._out_dir_cb = ctk.CTkComboBox(r_out, 
+                                           values=["Multi_Market_Quant_Portfolio", "Quant_Portfolios", "MultiMarket portfolio"],
+                                           variable=self._out_dir_var, width=320, font=FB,
+                                           fg_color=C["inp"], border_color=C["border"], button_color=C["accent"])
+        self._out_dir_cb.pack(side="left")
+
         make_label(meta, "Candidates   (run_dir | candidate | weight)",
-                   font=FH3, color=C["accent"]).grid(row=1, column=0, sticky="w", padx=20, pady=(12,4))
+                   font=FH3, color=C["accent"]).grid(row=2, column=0, sticky="w", padx=20, pady=(12,4))
 
         # Scrollable candidate list
         self._cand_scroll = ctk.CTkScrollableFrame(meta, height=200, fg_color=C["inp"],
                                                     corner_radius=8)
-        self._cand_scroll.grid(row=2, column=0, sticky="ew", padx=16, pady=(0,8))
+        self._cand_scroll.grid(row=3, column=0, sticky="ew", padx=16, pady=(0,8))
         self._cand_scroll.columnconfigure((0,1,2), weight=1)
         self._add_candidate_row()  # Start with one empty row
 
         btn_add = make_btn(meta, "+ Add Candidate", self._add_candidate_row,
                            color=C["card"], hover=C["hover"], width=160)
-        btn_add.grid(row=3, column=0, sticky="w", padx=20, pady=(0,14))
+        btn_add.grid(row=4, column=0, sticky="w", padx=20, pady=(0,14))
 
         # Action buttons
         btn_row = ctk.CTkFrame(self, fg_color="transparent")
@@ -2614,6 +2982,7 @@ class PortfolioPanel(BasePanel):
     def _build_portfolio(self):
         cands     = self._get_candidates_list()
         port_name = self._port_name.get().strip()
+        out_dir   = self._out_dir_var.get().strip() or "Multi_Market_Quant_Portfolio"
         if not cands:
             messagebox.showwarning("Empty", "Add at least one candidate.")
             return
@@ -2638,6 +3007,7 @@ class PortfolioPanel(BasePanel):
             "PORTFOLIO_NAME":    port_name,
             "QUANT_NAME":        cfg.get("quant_name","TRB"),
             "PORTFOLIO_TYPE":    "MultiMarket" if is_multi_market else "SingleMarket",
+            "TARGET_OUTPUT_DIR": out_dir,
         }
         patch_script(script, patches)
         # Also patch the CANDIDATES list (special multi-line replacement)
@@ -2654,6 +3024,7 @@ class PortfolioPanel(BasePanel):
 
         self.log_clear(self._log)
         self.run_script("build_quant_portfolio.py", self._log,
+                        env_extra={"AF_PORTFOLIO_OUTPUT_DIR": out_dir},
                         on_done=self._refresh_portfolios)
 
     def _refresh_portfolios(self):

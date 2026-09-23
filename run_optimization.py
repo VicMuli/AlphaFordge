@@ -68,19 +68,27 @@ DEPOSIT  = 2500
 CURRENCY = 'USD'
 LEVERAGE = '1:100'
 
+_SCRIPT_DIR = Path(__file__).resolve().parent
+_CONFIG_FILE = _SCRIPT_DIR / "config.json"
+_CFG = {}
+if _CONFIG_FILE.exists():
+    try:
+        with open(_CONFIG_FILE, "r", encoding="utf-8") as _f:
+            _CFG = json.load(_f)
+    except Exception:
+        pass
+
 # -- MULTI-EA SWITCHBOARD ---------------------------------------------------
 # Change ACTIVE_EA to run the pipeline against a different Expert Advisor.
-# Each EA has its own compiled .ex5, its own fixed/optimizable parameter
-# names (they don't share an input schema), and its own list of symbols
-# it's actually meant to trade -- TARGET_SYMBOL below is validated against
-# that list, so picking a symbol the active EA wasn't built for fails
-# loudly at startup instead of silently generating a nonsense .set file.
-ACTIVE_EA = 'TRB'
+# Loads active_ea from config.json (or defaults to 'TRB').
+ACTIVE_EA = _CFG.get("active_ea", "TRB").upper()
 
 # -- MULTI-SYMBOL SWITCHBOARD ----------------------------------------------
 # Change TARGET_SYMBOL to run optimization for different Forex markets.
-# (Must be one of ACTIVE_EA's valid_symbols below -- checked at startup.)
-TARGET_SYMBOL = "USDJPY"  # Choices: "EURUSD", "GBPUSD", "USDJPY", "EURJPY", "XAUUSD"
+_cfg_sym = _CFG.get("symbol_key") or _CFG.get("symbol", "USDJPY")
+if " " in _cfg_sym:
+    _cfg_sym = _cfg_sym.split()[0].upper()
+TARGET_SYMBOL = _cfg_sym if _cfg_sym in ["EURUSD", "GBPUSD", "USDJPY", "EURJPY", "XAUUSD"] else "USDJPY"
 
 # Shared across EAs -- just the MT5 symbol name and its pip size. Anything
 # EA-specific (which parameters get optimized, over what range) lives in
@@ -401,7 +409,36 @@ EA_CONFIGS = {
 }
 
 if ACTIVE_EA not in EA_CONFIGS:
-    raise SystemExit(f"Unknown ACTIVE_EA '{ACTIVE_EA}'. Choices: {list(EA_CONFIGS)}")
+    ea_folder = _SCRIPT_DIR / "researched_strategies" / ACTIVE_EA
+    if ea_folder.exists():
+        ex5_files = list(ea_folder.glob("*.ex5"))
+        expert_file = ex5_files[0].name if ex5_files else f"{ACTIVE_EA}.ex5"
+
+        def _build_dynamic_mql5(symbol_key: str, pip_size: float) -> tuple[dict, dict]:
+            try:
+                import mql5_parser
+                parsed = mql5_parser.get_strategy_mql5_config(ACTIVE_EA)
+                fixed = {}
+                ranges = {}
+                for ind in parsed.get("indicators", []):
+                    fixed[ind["toggleParam"]] = 1 if ind.get("enabled") else 0
+                for p in parsed.get("params", []):
+                    if p.get("mode") == "optimize":
+                        rng = p.get("range", {})
+                        ranges[p["name"]] = (rng.get("start", 0), rng.get("step", 1), rng.get("stop", 10))
+                    else:
+                        fixed[p["name"]] = p.get("fixedValue", 0)
+                return fixed, ranges
+            except Exception:
+                return {}, {}
+
+        EA_CONFIGS[ACTIVE_EA] = {
+            "expert": expert_file,
+            "valid_symbols": list(SYMBOL_CONFIGS.keys()),
+            "build": _build_dynamic_mql5,
+        }
+    else:
+        raise SystemExit(f"Unknown ACTIVE_EA '{ACTIVE_EA}'. Choices: {list(EA_CONFIGS)} or any folder in researched_strategies")
 
 _ea_cfg = EA_CONFIGS[ACTIVE_EA]
 if TARGET_SYMBOL not in _ea_cfg["valid_symbols"]:
@@ -411,7 +448,7 @@ if TARGET_SYMBOL not in _ea_cfg["valid_symbols"]:
         f"Either change TARGET_SYMBOL, or switch ACTIVE_EA."
     )
 
-EXPERT = 'TRB V2.0.ex5'
+EXPERT = _CFG.get("expert") or _ea_cfg.get("expert", f"{ACTIVE_EA}.ex5")
 
 # -- Date windows ---------------------------------------------------------
 TRAIN_FROM   = '2013.01.01'

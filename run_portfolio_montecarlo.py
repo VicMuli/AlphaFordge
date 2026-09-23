@@ -153,9 +153,19 @@ def resolve_portfolio_dir() -> Path | None:
     search_roots = [
         work_path,
         work_path.parent,
+        script_dir / "Multi_Market_Quant_Portfolio",
         script_dir / "MultiMarket portfolio",
+        script_dir / "Quant_Portfolios",
         script_dir / "optimization_runs",
+        script_dir,
     ]
+    env_out = os.environ.get("AF_PORTFOLIO_OUTPUT_DIR", "").strip()
+    if env_out:
+        p_env = Path(env_out)
+        if not p_env.is_absolute():
+            p_env = script_dir / env_out
+        if p_env.exists() and p_env not in search_roots:
+            search_roots.insert(0, p_env)
     for root in search_roots:
         if root.exists():
             try:

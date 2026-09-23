@@ -30,7 +30,10 @@ import {
   Sparkles,
   Scale,
   ShieldCheck,
-  DollarSign
+  DollarSign,
+  Code2,
+  RefreshCw,
+  Cpu
 } from 'lucide-react';
 import { useScriptRunner } from '../useScriptRunner';
 import { 
@@ -201,8 +204,14 @@ export default function Optimize({
   const { logs, isRunning, runScript, stopScript, clearLogs } = useScriptRunner();
   const [currentPhase, setCurrentPhase] = useState<number>(0);
 
-  // Active strategy (TRB vs ORB)
-  const activeEa = ((config?.active_ea || 'TRB') as string).toUpperCase();
+  // Active strategy selection from researched_strategies folder
+  const [selectedEa, setSelectedEa] = useState<string>(((config?.active_ea || 'TRB') as string).toUpperCase());
+  const [availableStrategies, setAvailableStrategies] = useState<string[]>(['TRB', 'ORB']);
+  const [mql5SourceInfo, setMql5SourceInfo] = useState<{ mq5File: string | null; rawCount: number } | null>(null);
+  const [isLoadingMql5, setIsLoadingMql5] = useState<boolean>(false);
+
+  // Keep activeEa alias for compatibility
+  const activeEa = selectedEa;
 
   // State for parameters and indicators
   const [params, setParams] = useState<StrategyParam[]>([]);
@@ -431,105 +440,70 @@ export default function Optimize({
     setCriteriaSaveStatus(null);
   };
 
-  // Load saved optimization configuration from backend or fallback to EA defaults
+  // Fetch available strategies from researched_strategies directory
+  const fetchAvailableStrategies = async () => {
+    try {
+      const res = await fetch('/api/researched-strategies');
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.eas) && data.eas.length > 0) {
+          const names = data.eas.map((ea: any) => ea.name);
+          const combined = Array.from(new Set([...names, 'TRB', 'ORB']));
+          setAvailableStrategies(combined);
+        }
+      }
+    } catch (err) {
+      console.warn('Could not fetch researched strategies list:', err);
+    }
+  };
+
+  useEffect(() => {
+    fetchAvailableStrategies();
+  }, []);
+
+  // Sync with config changes if present
+  useEffect(() => {
+    if (config?.active_ea && !availableStrategies.includes(config.active_ea.toUpperCase())) {
+      setAvailableStrategies(prev => Array.from(new Set([...prev, config.active_ea.toUpperCase()])));
+    }
+  }, [config?.active_ea]);
+
+  // Load strategy configuration from MQL5 source code in researched_strategies/<EA>/
   useEffect(() => {
     let isMounted = true;
-    const loadParams = async () => {
-      const defaults = getDefaultConfigForEa(activeEa);
+    const loadStrategyConfig = async () => {
+      setIsLoadingMql5(true);
+      const defaults = getDefaultConfigForEa(selectedEa);
       let mergedParams: StrategyParam[] = defaults.params;
       let mergedIndicators: IndicatorDefinition[] = defaults.indicators;
 
       try {
-        const res = await fetch(`/api/optimization-params?ea=${activeEa}`);
+        const res = await fetch(`/api/mql5-strategy-inputs?ea=${encodeURIComponent(selectedEa)}`);
         if (res.ok) {
           const json = await res.json();
-          const savedData = json.data;
-          if (savedData) {
-            // 1. Merge indicators
-            if (Array.isArray(savedData.indicators) && savedData.indicators.length > 0) {
-              const savedIndMap = new Map<string, any>(
-                savedData.indicators.map((i: any) => [i.id || i.toggleParam, i])
-              );
-              mergedIndicators = mergedIndicators.map(ind => {
-                const s = savedIndMap.get(ind.id) || savedIndMap.get(ind.toggleParam);
-                return s ? { ...ind, enabled: !!s.enabled, optimize: s.optimize !== undefined ? !!s.optimize : ind.optimize } : ind;
+          if (json.status === 'ok') {
+            if (isMounted) {
+              setMql5SourceInfo({
+                mq5File: json.mq5File || null,
+                rawCount: json.rawCount || 0,
               });
-            } else if (savedData.indicator_toggles) {
-              mergedIndicators = mergedIndicators.map(ind => ({
-                ...ind,
-                enabled: savedData.indicator_toggles[ind.toggleParam] !== undefined
-                  ? Boolean(savedData.indicator_toggles[ind.toggleParam])
-                  : ind.enabled
-              }));
             }
 
-            // 2. Merge fixed_params and opt_ranges
-            const fixedDict = savedData.fixed_params || {};
-            const rangesDict = savedData.opt_ranges || {};
+            if (Array.isArray(json.indicators) && json.indicators.length > 0) {
+              mergedIndicators = json.indicators;
+            }
 
-            mergedParams = mergedParams.map(p => {
-              const updated = { ...p };
-              if (fixedDict[p.name] !== undefined) {
-                updated.mode = 'fixed';
-                updated.fixedValue = fixedDict[p.name];
-              }
-              if (rangesDict[p.name] !== undefined && Array.isArray(rangesDict[p.name]) && rangesDict[p.name].length === 3) {
-                updated.mode = 'optimize';
-                updated.range = {
-                  start: Number(rangesDict[p.name][0]) || 0,
-                  step: Number(rangesDict[p.name][1]) || 1,
-                  stop: Number(rangesDict[p.name][2]) || 10,
-                };
-              }
-              return updated;
-            });
-
-            // 3. Merge detailed params array (while preserving full metadata like category, label, etc.)
-            if (Array.isArray(savedData.params) && savedData.params.length > 0) {
-              const savedParamMap = new Map<string, any>(savedData.params.map((p: any) => [p.name, p]));
-
-              mergedParams = mergedParams.map(p => {
-                const s = savedParamMap.get(p.name);
-                if (!s) return p;
-                return {
-                  ...p,
-                  category: s.category || p.category || 'core',
-                  label: s.label || p.label || p.name,
-                  description: s.description || p.description || '',
-                  mode: s.mode === 'optimize' ? 'optimize' : 'fixed',
-                  fixedValue: s.fixedValue !== undefined ? s.fixedValue : (s.value !== undefined ? s.value : p.fixedValue),
-                  range: s.range ? {
-                    start: Number(s.range.start) || p.range.start,
-                    step: Number(s.range.step) || p.range.step,
-                    stop: Number(s.range.stop) || p.range.stop,
-                  } : p.range,
-                };
-              });
-
-              // Also preserve custom params added by user
-              savedData.params.forEach((s: any) => {
-                if (s.name && !mergedParams.some(p => p.name === s.name)) {
-                  mergedParams.push({
-                    name: s.name,
-                    label: s.label || s.name,
-                    category: s.category || 'custom',
-                    mode: s.mode === 'optimize' ? 'optimize' : 'fixed',
-                    fixedValue: s.fixedValue !== undefined ? s.fixedValue : 1,
-                    range: s.range ? {
-                      start: Number(s.range.start) || 1,
-                      step: Number(s.range.step) || 1,
-                      stop: Number(s.range.stop) || 10,
-                    } : { start: 1, step: 1, stop: 10 },
-                    description: s.description || 'Custom parameter',
-                    isCustom: true,
-                  });
-                }
-              });
+            if (Array.isArray(json.params) && json.params.length > 0) {
+              mergedParams = json.params;
             }
           }
         }
       } catch (err) {
-        console.warn('Could not fetch saved optimization params, loading defaults:', err);
+        console.warn('Could not fetch MQL5 strategy inputs, falling back to defaults:', err);
+      } finally {
+        if (isMounted) {
+          setIsLoadingMql5(false);
+        }
       }
 
       if (isMounted) {
@@ -538,9 +512,9 @@ export default function Optimize({
       }
     };
 
-    loadParams();
+    loadStrategyConfig();
     return () => { isMounted = false; };
-  }, [activeEa]);
+  }, [selectedEa]);
 
   // Phase tracker from pipeline logs
   useEffect(() => {
@@ -671,7 +645,7 @@ export default function Optimize({
 
     setIndicators(prev => prev.map(i => i.id === indId ? { ...i, optimize: nextOptimize } : i));
     setParams(prev => prev.map(p => {
-      if (p.indicatorId === indId) {
+      if (p.indicatorId === indId || (ind.paramNames && ind.paramNames.includes(p.name))) {
         return { ...p, mode: nextOptimize ? 'optimize' : 'fixed' };
       }
       return p;
@@ -785,17 +759,80 @@ export default function Optimize({
         subtitle={`Adjust indicator filters, fixed parameters, and parameter ranges for ${activeEa} before executing`} 
       />
       
-      {/* Top Banner: Strategy & Config Overview */}
+      {/* Top Banner: Strategy Selection & Source Configuration */}
       <Card className="p-4 border border-[#2d3748] bg-[#141b2d]">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs flex-1">
+        <div className="flex flex-col gap-4">
+          {/* Strategy Selection Row */}
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-3 border-b border-[#232f48]">
+            <div className="flex items-center gap-3 flex-1">
+              <div className="p-2 rounded-lg bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                <Cpu size={18} />
+              </div>
+              <div className="flex-1">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-medium text-[#8b95a6]">Select Strategy to Optimize:</span>
+                  <div className="relative inline-block">
+                    <select
+                      value={selectedEa}
+                      onChange={(e) => setSelectedEa(e.target.value)}
+                      className="bg-[#0f172a] text-white text-sm font-semibold border border-blue-500/50 rounded-lg px-3 py-1.5 pr-8 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer appearance-none shadow-sm hover:border-blue-400"
+                    >
+                      {availableStrategies.map(ea => (
+                        <option key={ea} value={ea}>
+                          {ea} ({ea === 'TRB' ? 'Trend Reversal Breakout' : ea === 'ORB' ? 'Opening Range Breakout' : 'Researched EA'})
+                        </option>
+                      ))}
+                    </select>
+                    <ChevronDown size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-blue-400 pointer-events-none" />
+                  </div>
+                  <button
+                    onClick={fetchAvailableStrategies}
+                    title="Refresh strategies from researched_strategies folder"
+                    className="p-1.5 rounded-lg bg-[#0d1322] border border-[#232f48] text-[#8b95a6] hover:text-white hover:border-slate-500 transition-colors"
+                  >
+                    <RefreshCw size={13} />
+                  </button>
+                </div>
+                <div className="flex items-center gap-2 mt-1.5 text-xs">
+                  <span className="flex items-center gap-1 font-mono text-emerald-400 bg-emerald-950/40 px-2 py-0.5 rounded border border-emerald-800/50">
+                    <Code2 size={12} />
+                    {mql5SourceInfo?.mq5File ? `researched_strategies/${selectedEa}/${mql5SourceInfo.mq5File}` : `researched_strategies/${selectedEa}/${selectedEa}.mq5`}
+                  </span>
+                  <span className="text-[#8b95a6]">
+                    • {isLoadingMql5 ? 'Reading MQL5 code...' : `${indicators.length} indicator filters, ${params.length} strategy parameters configured from MQL5`}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Quick Stats Pill */}
+            <div className="flex items-center gap-2 bg-[#0d1322] px-3 py-2 rounded-lg border border-[#232f48] text-xs self-start md:self-auto">
+              <div className="flex items-center gap-1 text-amber-400 font-semibold">
+                <Zap size={14} />
+                <span>{stats.numOptimizing}</span>
+                <span className="text-[#8b95a6] font-normal">optimizing</span>
+              </div>
+              <span className="text-[#2d3748]">•</span>
+              <div className="flex items-center gap-1 text-slate-300 font-semibold">
+                <Lock size={13} className="text-slate-400" />
+                <span>{stats.numFixed}</span>
+                <span className="text-[#8b95a6] font-normal">fixed</span>
+              </div>
+              <span className="text-[#2d3748]">•</span>
+              <div className="flex items-center gap-1 text-emerald-400 font-semibold">
+                <Filter size={13} />
+                <span>{stats.activeInds}/{indicators.length}</span>
+                <span className="text-[#8b95a6] font-normal">indicators</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Config Details */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs">
             <div className="border-r border-[#2d3748] pr-2">
-              <div className="text-[#8b95a6] mb-1 font-medium">Strategy / EA</div>
-              <div className="font-semibold text-white flex items-center gap-1.5">
-                <span className="px-1.5 py-0.5 rounded bg-blue-900/60 text-blue-300 font-mono text-[11px] border border-blue-700">
-                  {activeEa}
-                </span>
-                <span className="truncate">{config.expert || `${activeEa} Strategy.ex5`}</span>
+              <div className="text-[#8b95a6] mb-1 font-medium">Compiled Expert Binary</div>
+              <div className="font-semibold text-white truncate font-mono text-[11px]">
+                {config.expert || `${selectedEa} Strategy.ex5`}
               </div>
             </div>
             <div className="border-r border-[#2d3748] pr-2">
@@ -817,27 +854,6 @@ export default function Optimize({
               </div>
             </div>
           </div>
-
-          {/* Quick Stats Pill */}
-          <div className="flex items-center gap-2 bg-[#0d1322] px-3 py-2 rounded-lg border border-[#232f48] text-xs">
-            <div className="flex items-center gap-1 text-amber-400 font-semibold">
-              <Zap size={14} />
-              <span>{stats.numOptimizing}</span>
-              <span className="text-[#8b95a6] font-normal">optimizing</span>
-            </div>
-            <span className="text-[#2d3748]">•</span>
-            <div className="flex items-center gap-1 text-slate-300 font-semibold">
-              <Lock size={13} className="text-slate-400" />
-              <span>{stats.numFixed}</span>
-              <span className="text-[#8b95a6] font-normal">fixed</span>
-            </div>
-            <span className="text-[#2d3748]">•</span>
-            <div className="flex items-center gap-1 text-emerald-400 font-semibold">
-              <Filter size={13} />
-              <span>{stats.activeInds}/{indicators.length}</span>
-              <span className="text-[#8b95a6] font-normal">indicators</span>
-            </div>
-          </div>
         </div>
       </Card>
 
@@ -851,8 +867,10 @@ export default function Optimize({
               <Filter size={16} />
             </div>
             <div>
-              <h3 className="text-sm font-semibold text-white">Indicator Filter Switchboard</h3>
-              <p className="text-xs text-[#8b95a6]">Enable or disable indicator filters, and select whether their inputs are held fixed or optimized</p>
+              <h3 className="text-sm font-semibold text-white">Indicator Filter Switchboard ({selectedEa})</h3>
+              <p className="text-xs text-[#8b95a6]">
+                Extracted from {selectedEa}'s MQL5 code in researched_strategies. Enable or disable indicator filters and select fixed vs optimize mode.
+              </p>
             </div>
           </div>
           <button 
@@ -867,7 +885,9 @@ export default function Optimize({
         {showIndicatorsGrid && (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 pt-1">
             {indicators.map(ind => {
-              const indicatorParams = params.filter(p => p.indicatorId === ind.id);
+              const indicatorParams = params.filter(p => 
+                p.indicatorId === ind.id || (ind.paramNames && ind.paramNames.includes(p.name))
+              );
               const anyOptimizing = indicatorParams.some(p => p.mode === 'optimize');
 
               return (
@@ -914,20 +934,24 @@ export default function Optimize({
 
                   <div className="text-[11px] font-mono text-[#a0aec0] flex flex-wrap items-center gap-1 pt-1 border-t border-[#232f48]/70">
                     <span className="text-[#64748b]">Params:</span>
-                    {indicatorParams.map(p => (
-                      <span 
-                        key={p.name}
-                        className={`px-1.5 py-0.5 rounded text-[10px] ${
-                          !ind.enabled 
-                            ? 'bg-[#1a2336] text-[#64748b]' 
-                            : p.mode === 'optimize' 
-                              ? 'bg-amber-950/70 text-amber-300 border border-amber-800/60 font-semibold' 
-                              : 'bg-[#1c263b] text-slate-300 border border-[#2d3a54]'
-                        }`}
-                      >
-                        {p.name} {p.mode === 'optimize' ? `(${p.range.start}..${p.range.stop})` : `=${p.fixedValue}`}
-                      </span>
-                    ))}
+                    {indicatorParams.length === 0 ? (
+                      <span className="text-[10px] text-slate-500 italic">No linked inputs</span>
+                    ) : (
+                      indicatorParams.map(p => (
+                        <span 
+                          key={p.name}
+                          className={`px-1.5 py-0.5 rounded text-[10px] ${
+                            !ind.enabled 
+                              ? 'bg-[#1a2336] text-[#64748b]' 
+                              : p.mode === 'optimize' 
+                                ? 'bg-amber-950/70 text-amber-300 border border-amber-800/60 font-semibold' 
+                                : 'bg-[#1c263b] text-slate-300 border border-[#2d3a54]'
+                          }`}
+                        >
+                          {p.name} {p.mode === 'optimize' ? `(${p.range.start}..${p.range.stop})` : `=${p.fixedValue}`}
+                        </span>
+                      ))
+                    )}
                   </div>
                 </div>
               );

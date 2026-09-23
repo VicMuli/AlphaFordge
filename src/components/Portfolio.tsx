@@ -41,6 +41,7 @@ interface PortfolioDetail {
 export default function Portfolio({ config }: { config: any }) {
   const { logs, isRunning, runScript, stopScript, clearLogs } = useScriptRunner();
   const [portfolioName, setPortfolioName] = useState(`${config.quant_name || 'TRB'}_Quant_Portfolio_001`);
+  const [outputFolder, setOutputFolder] = useState<string>('Multi_Market_Quant_Portfolio');
   const [candidateRows, setCandidateRows] = useState<CandidateRow[]>([
     { runDir: 'latest', candidate: 'cand_014', weight: '1.0' }
   ]);
@@ -131,8 +132,12 @@ export default function Portfolio({ config }: { config: any }) {
         patches: {
           PORTFOLIO_NAME: cleanPortName,
           QUANT_NAME: config.quant_name || 'TRB',
+          TARGET_OUTPUT_DIR: outputFolder || 'Multi_Market_Quant_Portfolio',
         },
         candidates: formattedCandidates
+      },
+      envOverrides: {
+        AF_PORTFOLIO_OUTPUT_DIR: outputFolder || 'Multi_Market_Quant_Portfolio',
       },
       onDone: () => {
         fetchWorkspace();
@@ -356,7 +361,7 @@ export default function Portfolio({ config }: { config: any }) {
       {/* VIEW: New Basket Builder */}
       {activeView === 'builder' && (
         <Card className="p-5 border border-[#2d3748]">
-          <div className="flex items-center gap-4 mb-5 max-w-xl">
+          <div className="flex items-center gap-4 mb-3 max-w-xl">
             <label className="text-[#8b95a6] w-32 text-right text-xs font-semibold">Portfolio Name</label>
             <input 
               type="text" 
@@ -364,6 +369,24 @@ export default function Portfolio({ config }: { config: any }) {
               onChange={e => setPortfolioName(e.target.value)} 
               className="bg-[#1a2235] border border-[#2d3748] text-white rounded-lg px-3 py-2 flex-1 text-sm font-mono focus:outline-none focus:border-[#f59e0b]"
             />
+          </div>
+
+          <div className="flex items-center gap-4 mb-5 max-w-xl">
+            <label className="text-[#8b95a6] w-32 text-right text-xs font-semibold">Output Folder</label>
+            <input 
+              type="text" 
+              value={outputFolder} 
+              onChange={e => setOutputFolder(e.target.value)} 
+              placeholder="Multi_Market_Quant_Portfolio"
+              className="bg-[#1a2235] border border-[#2d3748] text-white rounded-lg px-3 py-2 flex-1 text-sm font-mono focus:outline-none focus:border-[#f59e0b]"
+            />
+            <button
+              type="button"
+              onClick={() => setOutputFolder('Multi_Market_Quant_Portfolio')}
+              className="text-[11px] px-2 py-1 bg-[#1e293b] hover:bg-[#334155] text-amber-300 rounded border border-[#2d3748] whitespace-nowrap"
+            >
+              Default Folder
+            </button>
           </div>
           
           <div className="mb-6">

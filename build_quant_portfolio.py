@@ -149,7 +149,9 @@ CANDIDATES = [
 QUANT_PORTFOLIOS_DIR = Path(WORK_DIR) / "Quant_Portfolios"
 _SCRIPT_DIR = Path(__file__).parent.resolve()
 MULTI_MARKET_DIR = _SCRIPT_DIR / "MultiMarket portfolio"
+MULTI_MARKET_QUANT_DIR = _SCRIPT_DIR / "Multi_Market_Quant_Portfolio"
 PORTFOLIO_TYPE = "Standard"  # "Standard" or "MultiMarket"
+TARGET_OUTPUT_DIR = "Multi_Market_Quant_Portfolio"
 
 CORRELATION_PAIRING_THRESHOLD = 0.5
 
@@ -196,6 +198,8 @@ def resolve_candidate_dir(
         roots.append(opt_runs)
     if base_work_dir.parent.exists() and base_work_dir.parent not in roots:
         roots.append(base_work_dir.parent)
+    if MULTI_MARKET_QUANT_DIR.exists() and MULTI_MARKET_QUANT_DIR not in roots:
+        roots.append(MULTI_MARKET_QUANT_DIR)
     if MULTI_MARKET_DIR.exists() and MULTI_MARKET_DIR not in roots:
         roots.append(MULTI_MARKET_DIR)
 
@@ -2912,6 +2916,7 @@ def save_manifest(
 ):
     manifest = {
         "portfolio_name": portfolio_name,
+        "output_dir": str(portfolio_dir.parent),
         "created_utc": pd.Timestamp.now(tz="UTC").isoformat(),
         "deposit": deposit,
         "currency": CURRENCY,
@@ -3005,12 +3010,23 @@ def main():
         or len(set(str(s.get("market", "")).upper() for s in CANDIDATES if s.get("market"))) > 1
     )
 
-    if is_multi_market:
-        MULTI_MARKET_DIR.mkdir(
-            parents=True,
-            exist_ok=True,
-        )
-        quant_dir = MULTI_MARKET_DIR
+    # Determine destination folder for portfolio results
+    out_dir_setting = (
+        os.environ.get("AF_PORTFOLIO_OUTPUT_DIR", "").strip()
+        or str(TARGET_OUTPUT_DIR).strip()
+    )
+
+    if out_dir_setting:
+        custom_out = Path(out_dir_setting)
+        if custom_out.is_absolute():
+            quant_dir = custom_out
+        else:
+            quant_dir = _SCRIPT_DIR / out_dir_setting
+        quant_dir.mkdir(parents=True, exist_ok=True)
+    elif is_multi_market:
+        # Default destination for MultiMarket portfolio: Multi_Market_Quant_Portfolio
+        quant_dir = _SCRIPT_DIR / "Multi_Market_Quant_Portfolio"
+        quant_dir.mkdir(parents=True, exist_ok=True)
     else:
         QUANT_PORTFOLIOS_DIR.mkdir(
             parents=True,

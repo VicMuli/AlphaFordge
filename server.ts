@@ -3,7 +3,7 @@ import path from "path";
 import fs from "fs/promises";
 import { existsSync } from "fs";
 import { fileURLToPath } from 'url';
-import { spawn, ChildProcess, exec } from "child_process";
+import { spawn, ChildProcess, exec, execFile } from "child_process";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -53,6 +53,97 @@ async function startServer() {
     }
   });
 
+  // Get MQL5 Strategy Inputs from researched_strategies/<EA>/
+  app.get("/api/mql5-strategy-inputs", async (req, res) => {
+    try {
+      const configPath = path.join(process.cwd(), 'config.json');
+      let cfg: any = {};
+      if (existsSync(configPath)) {
+        cfg = JSON.parse(await fs.readFile(configPath, 'utf-8'));
+      }
+      const activeEa = (req.query.ea as string) || cfg.active_ea || 'TRB';
+
+      // Execute Python mql5_parser
+      execFile('python3', [path.join(process.cwd(), 'mql5_parser.py'), activeEa], async (err, stdout, stderr) => {
+        let parsed: any = { indicators: [], params: [] };
+        if (!err && stdout) {
+          try {
+            parsed = JSON.parse(stdout.trim());
+          } catch (pe) {
+            console.error('Failed to parse mql5_parser output:', pe);
+          }
+        }
+
+        // Merge with saved overrides in config.json
+        const optParams = cfg.optimization_params;
+        const savedData = optParams ? (optParams[activeEa] || (optParams.active_ea === activeEa ? optParams : null)) : null;
+
+        let mergedIndicators = parsed.indicators || [];
+        let mergedParams = parsed.params || [];
+
+        if (savedData) {
+          // 1. Merge indicators
+          if (Array.isArray(savedData.indicators) && savedData.indicators.length > 0) {
+            const indMap = new Map<string, any>(savedData.indicators.map((i: any) => [i.id || i.toggleParam, i]));
+            mergedIndicators = mergedIndicators.map((ind: any) => {
+              const s = indMap.get(ind.id) || indMap.get(ind.toggleParam);
+              return s ? { ...ind, enabled: !!s.enabled, optimize: s.optimize !== undefined ? !!s.optimize : ind.optimize } : ind;
+            });
+          } else if (savedData.indicator_toggles) {
+            mergedIndicators = mergedIndicators.map((ind: any) => ({
+              ...ind,
+              enabled: savedData.indicator_toggles[ind.toggleParam] !== undefined
+                ? Boolean(savedData.indicator_toggles[ind.toggleParam])
+                : ind.enabled
+            }));
+          }
+
+          // 2. Merge fixed_params and opt_ranges
+          const fixedDict = savedData.fixed_params || {};
+          const rangesDict = savedData.opt_ranges || {};
+
+          mergedParams = mergedParams.map((p: any) => {
+            const updated = { ...p };
+            if (fixedDict[p.name] !== undefined) {
+              updated.mode = 'fixed';
+              updated.fixedValue = fixedDict[p.name];
+            }
+            if (rangesDict[p.name] !== undefined && Array.isArray(rangesDict[p.name]) && rangesDict[p.name].length === 3) {
+              updated.mode = 'optimize';
+              updated.range = {
+                start: Number(rangesDict[p.name][0]) || 0,
+                step: Number(rangesDict[p.name][1]) || 1,
+                stop: Number(rangesDict[p.name][2]) || 10,
+              };
+            }
+            return updated;
+          });
+
+          // 3. Merge custom params
+          if (Array.isArray(savedData.params)) {
+            savedData.params.forEach((sp: any) => {
+              if (sp.name && !mergedParams.some((p: any) => p.name === sp.name)) {
+                mergedParams.push(sp);
+              }
+            });
+          }
+        }
+
+        res.json({
+          status: "ok",
+          ea: activeEa,
+          mq5File: parsed.mq5_file || null,
+          indicators: mergedIndicators,
+          params: mergedParams,
+          rawCount: parsed.raw_count || 0,
+          savedConfig: savedData
+        });
+      });
+    } catch (e: any) {
+      res.status(500).json({ status: "error", message: e.message });
+    }
+  });
+
   // Get and Save optimization parameters
   app.get("/api/optimization-params", async (req, res) => {
     try {
@@ -84,6 +175,23 @@ async function startServer() {
       }
       const { activeEa, payload } = req.body;
       const targetEa = activeEa || cfg.active_ea || 'TRB';
+
+      // Update active_ea and quant_name
+      cfg.active_ea = targetEa;
+      cfg.quant_name = targetEa;
+
+      // Check if EA folder in researched_strategies has an .ex5 file
+      const eaFolder = path.join(process.cwd(), 'researched_strategies', targetEa);
+      if (existsSync(eaFolder)) {
+        try {
+          const files = await fs.readdir(eaFolder);
+          const ex5 = files.find(f => f.endsWith('.ex5'));
+          if (ex5) {
+            cfg.expert = ex5;
+          }
+        } catch {}
+      }
+
       if (!cfg.optimization_params) {
         cfg.optimization_params = {};
       }
@@ -96,7 +204,7 @@ async function startServer() {
       cfg.optimization_params.indicators = payload.indicators;
 
       await fs.writeFile(configPath, JSON.stringify(cfg, null, 2), 'utf-8');
-      res.json({ status: "ok", message: "Optimization parameters saved successfully" });
+      res.json({ status: "ok", message: "Optimization parameters saved successfully", activeEa: targetEa });
     } catch (e: any) {
       res.status(500).json({ status: "error", message: e.message });
     }
@@ -405,6 +513,72 @@ async function startServer() {
         portfolios,
         researchedStrategies: researchedItems,
         strategyFiles: strategyItems,
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Researched Strategies Detailed Scanner
+  app.get("/api/researched-strategies", async (req, res) => {
+    try {
+      const cwd = process.cwd();
+      let cfg: any = {};
+      try {
+        cfg = JSON.parse(await fs.readFile(path.join(cwd, 'config.json'), 'utf-8'));
+      } catch {}
+
+      const baseDir = (cfg.research_dir && existsSync(cfg.research_dir))
+        ? cfg.research_dir
+        : path.join(cwd, 'researched_strategies');
+
+      if (!existsSync(baseDir)) {
+        await fs.mkdir(baseDir, { recursive: true });
+      }
+
+      const entries = await fs.readdir(baseDir, { withFileTypes: true });
+      const eas = [];
+
+      for (const ent of entries) {
+        if (!ent.isDirectory()) continue;
+        const eaFolder = path.join(baseDir, ent.name);
+        try {
+          const files = await fs.readdir(eaFolder);
+          const docs = files.filter(f => f.endsWith('.docx') || f.endsWith('.doc'));
+          const mq5s = files.filter(f => f.endsWith('.mq5'));
+          const ex5s = files.filter(f => f.endsWith('.ex5'));
+          const sets = files.filter(f => f.endsWith('.set'));
+          const htmls = files.filter(f => f.endsWith('.html') || f.endsWith('.htm'));
+          const wordReports = docs.filter(f => f.toLowerCase().includes('report'));
+          const logicDocs = docs.filter(f => !f.toLowerCase().includes('report'));
+          const charts = files.filter(f => f.startsWith('chart_') && f.endsWith('.png'));
+
+          let summary = null;
+          const summaryPath = path.join(eaFolder, `${ent.name}_summary.json`);
+          if (existsSync(summaryPath)) {
+            try {
+              summary = JSON.parse(await fs.readFile(summaryPath, 'utf-8'));
+            } catch {}
+          }
+
+          eas.push({
+            name: ent.name,
+            folder: eaFolder,
+            logicDoc: logicDocs[0] || docs[0] || null,
+            mq5File: mq5s[0] || null,
+            ex5File: ex5s[0] || null,
+            setFiles: sets,
+            htmlReport: htmls[0] || null,
+            wordReport: wordReports[0] || null,
+            charts,
+            summary,
+          });
+        } catch {}
+      }
+
+      res.json({
+        baseDir,
+        eas,
       });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
