@@ -91,6 +91,7 @@ DEFAULT_CONFIG = {
     "quant_name":         "TRB",
     "research_dir":       str(SCRIPT_DIR / "researched_strategies"),
     "strategies_dir":     str(SCRIPT_DIR / "strategies"),
+    "ui_zoom":            "1.0",
 }
 
 NAV_ITEMS = [
@@ -784,6 +785,144 @@ class SubprocessMixin:
                     self.app.after(0, lambda: self.app.set_process_status(None))
 
         threading.Thread(target=_worker, daemon=True).start()
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 2-Way (Vertical & Horizontal) Scrollable Container
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class DualScrollableContainer(ctk.CTkFrame):
+    """
+    Container providing both vertical (down and up) and horizontal (sideways)
+    scrolling for full application visibility across varying screen sizes.
+    """
+    def __init__(self, master, fg_color=None, **kwargs):
+        super().__init__(master, fg_color=fg_color or C["panel"], corner_radius=0, **kwargs)
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_columnconfigure(1, weight=0)
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=0)
+
+        # Underlying 2D canvas
+        self._canvas = tk.Canvas(
+            self,
+            bg=C["panel"],
+            highlightthickness=0,
+            bd=0
+        )
+        self._canvas.grid(row=0, column=0, sticky="nsew")
+
+        # Vertical scrollbar (right edge, scrolls down and up)
+        self._v_scrollbar = ctk.CTkScrollbar(
+            self,
+            orientation="vertical",
+            command=self._canvas.yview,
+            width=14,
+            fg_color="#0a0e1a",
+            button_color="#232f48",
+            button_hover_color=C["accent"]
+        )
+        self._v_scrollbar.grid(row=0, column=1, sticky="ns")
+
+        # Horizontal scrollbar (bottom edge, scrolls sideways)
+        self._h_scrollbar = ctk.CTkScrollbar(
+            self,
+            orientation="horizontal",
+            command=self._canvas.xview,
+            height=14,
+            fg_color="#0a0e1a",
+            button_color="#232f48",
+            button_hover_color=C["accent"]
+        )
+        self._h_scrollbar.grid(row=1, column=0, sticky="ew")
+
+        # Corner filler where scrollbars meet
+        self._corner = ctk.CTkFrame(
+            self,
+            width=14,
+            height=14,
+            fg_color="#0a0e1a",
+            corner_radius=0
+        )
+        self._corner.grid(row=1, column=1, sticky="nsew")
+
+        self._canvas.configure(
+            xscrollcommand=self._h_scrollbar.set,
+            yscrollcommand=self._v_scrollbar.set
+        )
+
+        # Viewport frame holding the active panel
+        self.viewport = ctk.CTkFrame(self._canvas, fg_color=C["panel"], corner_radius=0)
+        self.viewport.grid_columnconfigure(0, weight=1)
+        self.viewport.grid_rowconfigure(0, weight=1)
+        self._window_id = self._canvas.create_window((0, 0), window=self.viewport, anchor="nw")
+
+        self._current_w = None
+        self._current_h = None
+
+        self._canvas.bind("<Configure>", self._on_canvas_configure)
+        self.viewport.bind("<Configure>", self._on_viewport_configure)
+
+    def _update_scroll_region(self):
+        try:
+            canv_w = self._canvas.winfo_width()
+            canv_h = self._canvas.winfo_height()
+            if canv_w <= 1 or canv_h <= 1:
+                return
+
+            req_w = self.viewport.winfo_reqwidth()
+            req_h = self.viewport.winfo_reqheight()
+
+            # Ensure viewport matches or exceeds canvas dimensions
+            target_w = max(canv_w, req_w, 980)
+            target_h = max(canv_h, req_h)
+
+            if target_w != self._current_w or target_h != self._current_h:
+                self._current_w = target_w
+                self._current_h = target_h
+                self._canvas.itemconfigure(self._window_id, width=target_w, height=target_h)
+                self._canvas.configure(scrollregion=(0, 0, target_w, target_h))
+        except Exception:
+            pass
+
+    def _on_canvas_configure(self, event=None):
+        self._update_scroll_region()
+
+    def _on_viewport_configure(self, event=None):
+        self._update_scroll_region()
+
+    def update_scroll(self):
+        self._current_w = None
+        self._current_h = None
+        self.after_idle(self._update_scroll_region)
+
+    def scroll_to_top_left(self):
+        self._canvas.xview_moveto(0.0)
+        self._canvas.yview_moveto(0.0)
+
+    def scroll_to_top(self):
+        self._canvas.yview_moveto(0.0)
+
+    def scroll_to_bottom(self):
+        self._canvas.yview_moveto(1.0)
+
+    def scroll_to_left(self):
+        self._canvas.xview_moveto(0.0)
+
+    def scroll_to_right(self):
+        self._canvas.xview_moveto(1.0)
+
+    def scroll_up(self, units=3):
+        self._canvas.yview_scroll(-units, "units")
+
+    def scroll_down(self, units=3):
+        self._canvas.yview_scroll(units, "units")
+
+    def scroll_left(self, units=3):
+        self._canvas.xview_scroll(-units, "units")
+
+    def scroll_right(self, units=3):
+        self._canvas.xview_scroll(units, "units")
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -3306,6 +3445,38 @@ class SettingsPanel(BasePanel):
         self._field(c6,        "Quant Portfolio Name Prefix",  "quant_name",    4)
         ctk.CTkFrame(c6, height=14, fg_color="transparent").grid(row=5, column=0)
 
+        # UI & Display Scaling
+        c_ui = section("Display & Zoom", "Scale interface up or down to fit your screen resolution")
+        ui_f = ctk.CTkFrame(c_ui, fg_color="transparent")
+        ui_f.grid(row=1, column=0, padx=16, pady=12, sticky="ew")
+        make_label(ui_f, "Interface Zoom Scale:", font=FB, color=C["sub"]).pack(side="left")
+        self._zoom_status_lbl = make_label(
+            ui_f,
+            f"  {int(round(float(self.cfg.get('ui_zoom', 1.0)) * 100))}%  ",
+            font=FH2,
+            color=C["accent"]
+        )
+        self._zoom_status_lbl.pack(side="left", padx=8)
+
+        def _do_zoom_out():
+            self.app.zoom_out()
+            self._zoom_status_lbl.configure(text=f"  {int(round(self.app._current_zoom * 100))}%  ")
+
+        def _do_zoom_reset():
+            self.app.zoom_reset()
+            self._zoom_status_lbl.configure(text="  100%  ")
+
+        def _do_zoom_in():
+            self.app.zoom_in()
+            self._zoom_status_lbl.configure(text=f"  {int(round(self.app._current_zoom * 100))}%  ")
+
+        make_btn(ui_f, "− Zoom Out", _do_zoom_out, color=C["card"], hover=C["hover"], width=110).pack(side="left", padx=4)
+        make_btn(ui_f, "100% Reset", _do_zoom_reset, color=C["card"], hover=C["hover"], width=100).pack(side="left", padx=4)
+        make_btn(ui_f, "+ Zoom In", _do_zoom_in, color=C["card"], hover=C["hover"], width=100).pack(side="left", padx=4)
+
+        make_label(ui_f, "  (Tip: Ctrl + Mouse Wheel, or Ctrl +/- to zoom anytime)", font=FSM, color=C["sub"]).pack(side="left", padx=12)
+        ctk.CTkFrame(c_ui, height=14, fg_color="transparent").grid(row=2, column=0)
+
         # Action buttons
         btn_card = ctk.CTkFrame(scroll, fg_color="transparent")
         btn_card.grid(sticky="ew", padx=32, pady=(20, 28))
@@ -3402,6 +3573,17 @@ class AlphaForgeApp(ctk.CTk):
         FSM  = ctk.CTkFont("Segoe UI", 10)
 
         self.config = load_config()
+        try:
+            self._current_zoom = float(self.config.get("ui_zoom", 1.0))
+        except (ValueError, TypeError):
+            self._current_zoom = 1.0
+
+        if self._current_zoom != 1.0:
+            try:
+                ctk.set_widget_scaling(self._current_zoom)
+            except Exception:
+                pass
+
         self.title("AlphaForge  —  MT5 Quant Optimizer & Portfolio Builder")
         self.geometry("1420x860")
         self.minsize(1100, 700)
@@ -3415,6 +3597,7 @@ class AlphaForgeApp(ctk.CTk):
         self._nav_buttons  = {}
         self._active_panel = None
         self._build_nav_buttons()
+        self._setup_events()
         self.show_panel("dashboard")
 
     # ── Sidebar ──────────────────────────────────────────────────────────────
@@ -3487,7 +3670,7 @@ class AlphaForgeApp(ctk.CTk):
 
         # Left meta pills: Active EA | Symbol | Period
         tb_left = ctk.CTkFrame(self._topbar, fg_color="transparent")
-        tb_left.pack(side="left", padx=24, fill="y")
+        tb_left.pack(side="left", padx=20, fill="y")
 
         cfg = self.config
         ctk.CTkLabel(tb_left, text="Active EA:", font=ctk.CTkFont("Segoe UI", 11), text_color=C["sub"]).pack(side="left")
@@ -3505,27 +3688,79 @@ class AlphaForgeApp(ctk.CTk):
                                         font=ctk.CTkFont("Segoe UI", 11, "bold"), text_color=C["text"])
         self._top_per_val.pack(side="left")
 
-        # Right status badge
+        # Right toolbar: Quick Scroll, Zoom Controls, Engine Status
         tb_right = ctk.CTkFrame(self._topbar, fg_color="transparent")
-        tb_right.pack(side="right", padx=24, fill="y")
+        tb_right.pack(side="right", padx=16, fill="y")
 
+        # Quick Scroll cluster (sideways, down and up)
+        scroll_grp = ctk.CTkFrame(tb_right, fg_color="#0e1526", corner_radius=6, border_width=1, border_color="#232f48")
+        scroll_grp.pack(side="left", padx=(0, 10), pady=8)
+
+        ctk.CTkLabel(scroll_grp, text="⇳ Scroll:", font=ctk.CTkFont("Segoe UI", 10, "bold"),
+                     text_color=C["sub"]).pack(side="left", padx=(6, 2))
+
+        ctk.CTkButton(scroll_grp, text="▲ Top", width=44, height=24, font=ctk.CTkFont("Segoe UI", 10, "bold"),
+                      fg_color="transparent", hover_color=C["hover"], text_color=C["text"],
+                      command=lambda: self._scroll_container.scroll_to_top()).pack(side="left", padx=1)
+        ctk.CTkButton(scroll_grp, text="▼ Bottom", width=58, height=24, font=ctk.CTkFont("Segoe UI", 10, "bold"),
+                      fg_color="transparent", hover_color=C["hover"], text_color=C["text"],
+                      command=lambda: self._scroll_container.scroll_to_bottom()).pack(side="left", padx=1)
+        ctk.CTkButton(scroll_grp, text="◄ Left", width=46, height=24, font=ctk.CTkFont("Segoe UI", 10, "bold"),
+                      fg_color="transparent", hover_color=C["hover"], text_color=C["text"],
+                      command=lambda: self._scroll_container.scroll_to_left()).pack(side="left", padx=1)
+        ctk.CTkButton(scroll_grp, text="► Right", width=50, height=24, font=ctk.CTkFont("Segoe UI", 10, "bold"),
+                      fg_color="transparent", hover_color=C["hover"], text_color=C["text"],
+                      command=lambda: self._scroll_container.scroll_to_right()).pack(side="left", padx=(1, 4))
+
+        # Zoom cluster (Zoom In, Out, Reset, Presets)
+        zoom_grp = ctk.CTkFrame(tb_right, fg_color="#0e1526", corner_radius=6, border_width=1, border_color="#232f48")
+        zoom_grp.pack(side="left", padx=(0, 12), pady=8)
+
+        ctk.CTkLabel(zoom_grp, text="🔍 Zoom", font=ctk.CTkFont("Segoe UI", 10, "bold"),
+                     text_color=C["sub"]).pack(side="left", padx=(6, 2))
+
+        ctk.CTkButton(zoom_grp, text="−", width=24, height=24, font=ctk.CTkFont("Segoe UI", 12, "bold"),
+                      fg_color=C["card"], hover_color=C["hover"], text_color=C["text"], corner_radius=4,
+                      command=self.zoom_out).pack(side="left", padx=2)
+
+        self._zoom_val_btn = ctk.CTkButton(
+            zoom_grp, text=f"{int(round(self._current_zoom * 100))}%", width=48, height=24,
+            font=ctk.CTkFont("Segoe UI", 10, "bold"), fg_color="transparent", hover_color=C["hover"],
+            text_color=C["accent"], corner_radius=4,
+            command=self.zoom_reset
+        )
+        self._zoom_val_btn.pack(side="left", padx=1)
+
+        ctk.CTkButton(zoom_grp, text="+", width=24, height=24, font=ctk.CTkFont("Segoe UI", 12, "bold"),
+                      fg_color=C["card"], hover_color=C["hover"], text_color=C["text"], corner_radius=4,
+                      command=self.zoom_in).pack(side="left", padx=2)
+
+        self._zoom_presets = ["60%", "70%", "75%", "80%", "85%", "90%", "100%", "110%", "125%", "150%"]
+        self._zoom_combo = ctk.CTkComboBox(
+            zoom_grp, values=self._zoom_presets, width=72, height=24,
+            font=ctk.CTkFont("Segoe UI", 10, "bold"),
+            command=self._on_zoom_preset
+        )
+        self._zoom_combo.set(f"{int(round(self._current_zoom * 100))}%")
+        self._zoom_combo.pack(side="left", padx=(2, 6))
+
+        # Status badge
         self._status_badge = ctk.CTkLabel(
             tb_right,
             text="● Engine Ready",
             font=ctk.CTkFont("Segoe UI", 11, "bold"),
             text_color=C["success"],
         )
-        self._status_badge.pack(side="left", padx=(0, 16))
+        self._status_badge.pack(side="left", padx=(0, 8))
 
         # Bottom subtle separator line under topbar
         tb_sep = ctk.CTkFrame(self._topbar, height=1, fg_color=C["border"])
         tb_sep.place(relx=0, rely=1.0, relwidth=1.0, anchor="sw")
 
-        # Main dynamic panel container
-        self._content = ctk.CTkFrame(self._main_container, fg_color=C["panel"], corner_radius=0)
-        self._content.grid(row=1, column=0, sticky="nsew")
-        self._content.columnconfigure(0, weight=1)
-        self._content.rowconfigure(0, weight=1)
+        # Main dynamic 2-way scrollable container (handles both vertical and horizontal scrolling)
+        self._scroll_container = DualScrollableContainer(self._main_container, fg_color=C["panel"])
+        self._scroll_container.grid(row=1, column=0, sticky="nsew")
+        self._content = self._scroll_container.viewport
         self._panels: dict[str, BasePanel] = {}
 
     def set_process_status(self, script_name: str | None):
@@ -3590,28 +3825,163 @@ class AlphaForgeApp(ctk.CTk):
     # ── Panel switching ───────────────────────────────────────────────────────
 
     def show_panel(self, key: str):
-        if self._active_panel:
+        if self._active_panel and self._active_panel in self._panels:
             self._panels[self._active_panel].grid_remove()
-            self._nav_buttons[self._active_panel].configure(
-                fg_color="transparent",
-                text_color=C["sub"],
-                border_width=0
-            )
+            if self._active_panel in self._nav_buttons:
+                self._nav_buttons[self._active_panel].configure(
+                    fg_color="transparent",
+                    text_color=C["sub"],
+                    border_width=0
+                )
 
         panel = self._panels.get(key)
         if panel:
-            panel.grid()
+            panel.grid(row=0, column=0, sticky="nsew")
             # Refresh dynamic panels
             if key in ("dashboard", "strategies", "montecarlo") and hasattr(panel, "refresh"):
                 panel.refresh()
+            self._scroll_container.update_scroll()
+            self._scroll_container.scroll_to_top_left()
 
-        self._nav_buttons[key].configure(
-            fg_color=C["nav_act"],
-            text_color=C["accent"],
-            border_width=1,
-            border_color="#314264"
-        )
+        if key in self._nav_buttons:
+            self._nav_buttons[key].configure(
+                fg_color=C["nav_act"],
+                text_color=C["accent"],
+                border_width=1,
+                border_color="#314264"
+            )
         self._active_panel = key
+
+    # ── Zoom controls ─────────────────────────────────────────────────────────
+
+    def set_zoom(self, zoom_factor: float, save: bool = True):
+        zoom_factor = max(0.5, min(1.8, round(zoom_factor, 2)))
+        self._current_zoom = zoom_factor
+        try:
+            ctk.set_widget_scaling(zoom_factor)
+        except Exception as e:
+            print(f"Widget scaling notice: {e}")
+
+        pct = int(round(zoom_factor * 100))
+        if hasattr(self, "_zoom_val_btn"):
+            self._zoom_val_btn.configure(text=f"{pct}%")
+        if hasattr(self, "_zoom_combo"):
+            self._zoom_combo.set(f"{pct}%")
+
+        if hasattr(self, "_scroll_container"):
+            self.after(60, self._scroll_container.update_scroll)
+
+        if save:
+            self.config["ui_zoom"] = str(zoom_factor)
+            save_config(self.config)
+
+    def zoom_in(self):
+        new_zoom = round(self._current_zoom + 0.10, 2)
+        if new_zoom > 1.8:
+            new_zoom = 1.8
+        self.set_zoom(new_zoom)
+
+    def zoom_out(self):
+        new_zoom = round(self._current_zoom - 0.10, 2)
+        if new_zoom < 0.5:
+            new_zoom = 0.5
+        self.set_zoom(new_zoom)
+
+    def zoom_reset(self):
+        self.set_zoom(1.0)
+
+    def _on_zoom_preset(self, val_str: str):
+        try:
+            val = int(val_str.replace("%", "").strip()) / 100.0
+            self.set_zoom(val)
+        except Exception:
+            pass
+
+    # ── Keyboard & Mouse event handling ──────────────────────────────────────
+
+    def _setup_events(self):
+        # Keyboard shortcuts for zoom
+        for key in ("<Control-plus>", "<Control-equal>", "<Control-KP_Add>"):
+            self.bind_all(key, lambda e: self.zoom_in())
+        for key in ("<Control-minus>", "<Control-underscore>", "<Control-KP_Subtract>"):
+            self.bind_all(key, lambda e: self.zoom_out())
+        for key in ("<Control-0>", "<Control-KP_0>"):
+            self.bind_all(key, lambda e: self.zoom_reset())
+
+        # Keyboard shortcuts for scrolling
+        self.bind_all("<Prior>", lambda e: self._scroll_container.scroll_up(8))
+        self.bind_all("<Next>", lambda e: self._scroll_container.scroll_down(8))
+        self.bind_all("<Home>", lambda e: self._scroll_container.scroll_to_top())
+        self.bind_all("<End>", lambda e: self._scroll_container.scroll_to_bottom())
+        self.bind_all("<Alt-Left>", lambda e: self._scroll_container.scroll_left(8))
+        self.bind_all("<Alt-Right>", lambda e: self._scroll_container.scroll_right(8))
+
+        # Mouse wheel bindings (Windows, macOS)
+        self.bind_all("<MouseWheel>", self._handle_mousewheel, add="+")
+        self.bind_all("<Shift-MouseWheel>", self._handle_shift_mousewheel, add="+")
+
+        # Linux X11 bindings
+        self.bind_all("<Button-4>", self._handle_button4, add="+")
+        self.bind_all("<Button-5>", self._handle_button5, add="+")
+        self.bind_all("<Shift-Button-4>", lambda e: self._scroll_container.scroll_left(4), add="+")
+        self.bind_all("<Shift-Button-5>", lambda e: self._scroll_container.scroll_right(4), add="+")
+        self.bind_all("<Control-Button-4>", lambda e: self.zoom_in(), add="+")
+        self.bind_all("<Control-Button-5>", lambda e: self.zoom_out(), add="+")
+
+    def _handle_mousewheel(self, event):
+        # 1. Ctrl + Wheel -> Zoom In/Out
+        if event.state & 0x0004 or event.state & 4:
+            if event.delta > 0:
+                self.zoom_in()
+            else:
+                self.zoom_out()
+            return "break"
+
+        # 2. Shift + Wheel -> Sideways scroll
+        if event.state & 0x0001 or event.state & 1:
+            if event.delta > 0:
+                self._scroll_container.scroll_left(4)
+            else:
+                self._scroll_container.scroll_right(4)
+            return "break"
+
+        # 3. Normal Wheel -> Down and Up scroll
+        try:
+            w = event.widget
+            if w and w.winfo_class() == "Text":
+                return
+        except Exception:
+            pass
+
+        if event.delta > 0:
+            self._scroll_container.scroll_up(3)
+        else:
+            self._scroll_container.scroll_down(3)
+
+    def _handle_shift_mousewheel(self, event):
+        if event.delta > 0:
+            self._scroll_container.scroll_left(4)
+        else:
+            self._scroll_container.scroll_right(4)
+        return "break"
+
+    def _handle_button4(self, event):
+        if event.state & 0x0004 or event.state & 4:
+            self.zoom_in()
+            return "break"
+        if event.state & 0x0001 or event.state & 1:
+            self._scroll_container.scroll_left(4)
+            return "break"
+        self._scroll_container.scroll_up(3)
+
+    def _handle_button5(self, event):
+        if event.state & 0x0004 or event.state & 4:
+            self.zoom_out()
+            return "break"
+        if event.state & 0x0001 or event.state & 1:
+            self._scroll_container.scroll_right(4)
+            return "break"
+        self._scroll_container.scroll_down(3)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
