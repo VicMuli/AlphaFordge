@@ -749,6 +749,8 @@ class SubprocessMixin:
             return
 
         env = os.environ.copy()
+        env["PYTHONIOENCODING"] = "utf-8"
+        env["PYTHONUTF8"] = "1"
         if env_extra:
             env.update(env_extra)
 
@@ -765,7 +767,8 @@ class SubprocessMixin:
             try:
                 proc = subprocess.Popen(
                     cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                    text=True, cwd=str(SCRIPT_DIR), env=env,
+                    text=True, encoding="utf-8", errors="replace",
+                    cwd=str(SCRIPT_DIR), env=env,
                     creationflags=subprocess.CREATE_NO_WINDOW
                     if sys.platform == "win32" else 0,
                 )

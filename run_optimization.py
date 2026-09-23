@@ -10,10 +10,20 @@ Flow
      Walk Forward stability testing is run MANUALLY one-by-one after the pipeline completes.
 """
 
+import sys
 import datetime
 import json
 import time
 from pathlib import Path
+
+# Prevent Windows console UnicodeEncodeError when running on cp1252 / charmap environments
+try:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
 
 import pandas as pd
 try:

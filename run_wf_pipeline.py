@@ -11,11 +11,22 @@ Flow
   6. Compiles an advanced 'WalkForward_Full_Summary_cand_XXX.docx' into its folder.
 """
 
+import sys
 import shutil
 import json
 import time
 import statistics
 from pathlib import Path
+
+# Prevent Windows console UnicodeEncodeError when running on cp1252 / charmap environments
+try:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 import pandas as pd
 
 try:

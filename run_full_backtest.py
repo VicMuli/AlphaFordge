@@ -20,6 +20,7 @@ This version keeps the original runner flow but fixes the reporting layer:
 The MT5 backtest execution interface is unchanged.
 """
 
+import sys
 import io
 import json
 import math
@@ -27,6 +28,15 @@ import re
 import shutil
 import time
 from pathlib import Path
+
+# Prevent Windows console UnicodeEncodeError when running on cp1252 / charmap environments
+try:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
 
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt

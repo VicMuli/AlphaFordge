@@ -13,6 +13,7 @@ Flow
 """
 
 import os
+import sys
 import shutil
 import json
 import time
@@ -20,6 +21,16 @@ import random
 import statistics
 import re
 from pathlib import Path
+
+# Prevent Windows console UnicodeEncodeError when running on cp1252 / charmap environments
+try:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 import pandas as pd
 
 try:

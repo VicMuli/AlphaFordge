@@ -78,12 +78,22 @@ Usage:
     )
 """
 
+import sys
 import json
 import time
 import shutil
 import datetime
 import tempfile
 from pathlib import Path
+
+# Prevent Windows console UnicodeEncodeError when running on cp1252 / charmap environments
+try:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
 
 import pandas as pd
 
@@ -707,9 +717,9 @@ def run_mt5_strategy_search(
     print("=" * 70)
     print(f"  Expert    : {expert}")
     print(f"  Symbol    : {symbol}  |  Period: {period}")
-    print(f"  Train     : {train_from} → {train_to}")
-    print(f"  Validation: {val_from} → {val_to}")
-    print(f"  Holdout   : {holdout_from} → {holdout_to}")
+    print(f"  Train     : {train_from} -> {train_to}")
+    print(f"  Validation: {val_from} -> {val_to}")
+    print(f"  Holdout   : {holdout_from} -> {holdout_to}")
     print(f"  Fixed params : {fixed_params}")
     print(f"  Opt ranges   : {opt_ranges}")
     print(f"  Work dir  : {run_dir}")
@@ -718,9 +728,9 @@ def run_mt5_strategy_search(
     # ------------------------------------------------------------------
     # PHASE 1 — MT5 Optimization on Train data
     # ------------------------------------------------------------------
-    print("─" * 70)
-    print(f"PHASE 1: MT5 Optimization on TRAIN data ({train_from} → {train_to})")
-    print("─" * 70)
+    print("-" * 70)
+    print(f"PHASE 1: MT5 Optimization on TRAIN data ({train_from} -> {train_to})")
+    print("-" * 70)
 
     # Write the .set file directly into the terminal's Profiles/Tester/ folder.
     # MT5 requires ExpertParameters to be a bare filename resolved from there.
@@ -788,9 +798,9 @@ def run_mt5_strategy_search(
     # ------------------------------------------------------------------
     # PHASE 2 — Validation single tests
     # ------------------------------------------------------------------
-    print("\n" + "─" * 70)
-    print(f"PHASE 2: Validation single tests ({val_from} → {val_to})")
-    print("─" * 70)
+    print("\n" + "-" * 70)
+    print(f"PHASE 2: Validation single tests ({val_from} -> {val_to})")
+    print("-" * 70)
 
     val_dir = run_dir / "validation"
     val_dir.mkdir(parents=True, exist_ok=True)
@@ -857,9 +867,9 @@ def run_mt5_strategy_search(
     # ------------------------------------------------------------------
     # PHASE 3 — Holdout single tests (one-time, untouched)
     # ------------------------------------------------------------------
-    print("\n" + "─" * 70)
-    print(f"PHASE 3: Holdout single tests ({holdout_from} → {holdout_to})")
-    print("─" * 70)
+    print("\n" + "-" * 70)
+    print(f"PHASE 3: Holdout single tests ({holdout_from} -> {holdout_to})")
+    print("-" * 70)
 
     holdout_dir = run_dir / "holdout"
     holdout_dir.mkdir(parents=True, exist_ok=True)
@@ -968,7 +978,7 @@ def run_mt5_strategy_search(
             continue
 
         print(f"    Running Monte Carlo certification ({len(mc_trades)} closed trades "
-              f"over full period {train_from} → {holdout_to})...")
+              f"over full period {train_from} -> {holdout_to})...")
 
         mc_result = certify_strategy(mc_trades, starting_capital=deposit)
         print_certification_result(mc_result)

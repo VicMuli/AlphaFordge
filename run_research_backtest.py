@@ -22,6 +22,15 @@ import json
 import shutil
 from pathlib import Path
 
+# Prevent Windows console UnicodeEncodeError when running on cp1252 / charmap environments
+try:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  Local Project & Configuration Resolution
 # ─────────────────────────────────────────────────────────────────────────────
@@ -143,7 +152,7 @@ def _create_research_word_report(report_dir: Path, strategy_name: str,
 
     info_p = doc.add_paragraph(
         f"Expert: {expert}  |  Symbol: {symbol}  |  Timeframe: {period}\n"
-        f"Backtest Period: {from_date}  →  {to_date}  |  Initial Deposit: ${deposit:,.2f}\n"
+        f"Backtest Period: {from_date}  ->  {to_date}  |  Initial Deposit: ${deposit:,.2f}\n"
         f"Generated: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}"
     )
     info_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -283,12 +292,12 @@ def run_research_backtest(
     report_dir, ea_name, expert_filename = resolve_researched_folder(strategy_name, expert, research_dir)
 
     print("\n" + "=" * 74)
-    print(f"  ALPHA FORGE — RESEARCH STRATEGY BACKTEST")
+    print(f"  ALPHA FORGE -- RESEARCH STRATEGY BACKTEST")
     print(f"  Strategy / EA Name : {ea_name}")
     print(f"  Target Folder      : {report_dir}")
     print(f"  Expert (.ex5)      : {expert_filename}")
     print(f"  Symbol / Period    : {symbol}  |  {period}")
-    print(f"  Date Range         : {from_date}  →  {to_date}")
+    print(f"  Date Range         : {from_date}  ->  {to_date}")
     print(f"  Initial Deposit    : ${deposit:,.2f} {CURRENCY}")
     print("=" * 74 + "\n")
 
@@ -298,14 +307,14 @@ def run_research_backtest(
     ex5_files = list(report_dir.glob("*.ex5"))
 
     if doc_files:
-        print(f"  📄 Found Strategy Logic Doc : {doc_files[0].name}")
+        print(f"  [DOC] Found Strategy Logic Doc : {doc_files[0].name}")
     else:
-        print("  ℹ  No Strategy Logic Word doc found in folder (optional)")
+        print("  [INFO] No Strategy Logic Word doc found in folder (optional)")
 
     if mq5_files:
-        print(f"  💻 Found EA MQL5 Source Code: {mq5_files[0].name}")
+        print(f"  [CODE] Found EA MQL5 Source Code: {mq5_files[0].name}")
     else:
-        print("  ℹ  No MQL5 source code file found in folder (optional)")
+        print("  [INFO] No MQL5 source code file found in folder (optional)")
 
     # 3. Synchronize compiled EA (.ex5) to MT5 Experts directory if needed
     mt5_experts_dir = Path(TERMINAL_DATA_DIR) / "MQL5" / "Experts"
@@ -317,7 +326,7 @@ def run_research_backtest(
     if matching_local_ex5 and not target_expert_in_mt5.exists():
         try:
             shutil.copy2(matching_local_ex5[0], target_expert_in_mt5)
-            print(f"  ✔ Synchronized EA binary to MT5 Experts: {target_expert_in_mt5.name}")
+            print(f"  [OK] Synchronized EA binary to MT5 Experts: {target_expert_in_mt5.name}")
         except Exception as e:
             print(f"  [WARN] Failed to copy .ex5 into MT5 Experts: {e}")
 
@@ -347,7 +356,7 @@ def run_research_backtest(
         if local_sets:
             shutil.copy2(local_sets[0], profiles_tester_dir / local_sets[0].name)
             active_set_file = local_sets[0].name
-            print(f"  ⚙ Using detected set file from folder: {active_set_file}")
+            print(f"  [*] Using detected set file from folder: {active_set_file}")
 
     # If still no set file, create a default parameter file in Profiles/Tester
     # This runs the EA with its built-in default inputs and guarantees MT5 won't fail with 'file not found'
@@ -361,11 +370,11 @@ def run_research_backtest(
             encoding="utf-8"
         )
         active_set_file = default_set_name
-        print(f"  ⚙ Using EA default built-in inputs ({active_set_file})")
+        print(f"  [*] Using EA default built-in inputs ({active_set_file})")
 
     # 5. Execute MT5 Backtest
     report_name = f"{ea_name}_default"
-    print(f"\n  ▶ Launching MetaTrader 5 Strategy Tester...")
+    print(f"\n  [>] Launching MetaTrader 5 Strategy Tester...")
     print(f"    Terminal : {TERMINAL_PATH}")
     print(f"    Data Dir : {TERMINAL_DATA_DIR}")
     print(f"    Set File : {active_set_file}")
@@ -394,7 +403,7 @@ def run_research_backtest(
         print(f"\n[ERROR] MT5 Backtest execution failed: {exc}")
         raise
 
-    print(f"\n  ✔ Backtest finished! Report generated: {report_path.name}")
+    print(f"\n  [OK] Backtest finished! Report generated: {report_path.name}")
 
     # 6. Parse and Analyze Results
     curated = {}
@@ -413,7 +422,7 @@ def run_research_backtest(
             if deals_df is not None and not deals_df.empty:
                 chart_paths = generate_equity_charts(deals_df, float(deposit), report_dir)
                 derived = calculate_derived_metrics(deals_df, float(deposit))
-                print(f"  ✔ Equity charts generated: {list(chart_paths.keys())}")
+                print(f"  [OK] Equity charts generated: {list(chart_paths.keys())}")
         except Exception as e:
             print(f"  [WARN] Could not generate advanced charts: {e}")
 
@@ -467,16 +476,16 @@ def run_research_backtest(
         json.dump(manifest, mf, indent=2)
 
     # 9. Print Terminal Summary
-    print("\n" + "─" * 74)
-    print(f"  RESEARCH BACKTEST SUMMARY — {ea_name}")
-    print("─" * 74)
+    print("\n" + "-" * 74)
+    print(f"  RESEARCH BACKTEST SUMMARY -- {ea_name}")
+    print("-" * 74)
     print(f"  Net Profit      : ${float(net_p):>12,.2f}  ({float(pct):.2f}%)")
     print(f"  Profit Factor   : {float(pf):>10.3f}")
     print(f"  Sharpe Ratio    : {float(sharpe):>10.3f}")
     print(f"  Max Drawdown    : {float(maxdd):>9.2f}%")
     print(f"  Total Trades    : {int(trades):>10,}")
     print(f"  Win Rate        : {float(wr):>9.2f}%")
-    print("─" * 74)
+    print("-" * 74)
     print(f"  Results saved to: {report_dir}")
     if doc_path:
         print(f"  Word Report     : {doc_path.name}")
