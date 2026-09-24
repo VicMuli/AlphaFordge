@@ -84,9 +84,9 @@ from report_analysis import analyze
 
 import os
 
-TARGET_RUN_DIR = 'run_20260911_094409'
-TARGET_CANDIDATE = 'cand_007'
-TARGET_SYMBOL = 'USDJPY'
+TARGET_RUN_DIR = 'run_20260924_163108'
+TARGET_CANDIDATE = 'cand_001'
+TARGET_SYMBOL = 'EURUSD dukascopy'
 
 BT_START = os.environ.get("AF_BT_START", TRAIN_FROM)
 BT_END   = os.environ.get("AF_BT_END", HOLDOUT_TO)
@@ -568,6 +568,8 @@ def parse_mt5_html_for_deals(html_path: Path, deposit: float = None):
             balance_reconstructed = False
         else:
             net_change = df["Profit"].fillna(0.0) + df["Commission"] + df["Swap"]
+            # Exclude balance operations from the net change so we don't double count the initial deposit
+            net_change = net_change.where(~df["IsBalanceOperation"], 0.0)
             df["Balance"] = float(DEPOSIT_OVERRIDE) + net_change.cumsum()
             balance_reconstructed = True
 

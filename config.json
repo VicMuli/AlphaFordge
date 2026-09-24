@@ -1,19 +1,19 @@
 {
   "terminal_path": "C:\\Users\\HP\\AppData\\Roaming\\MetaTrader\\terminal64.exe",
   "terminal_data_dir": "C:\\Users\\HP\\AppData\\Roaming\\MetaQuotes\\Terminal\\CDE1ED2F37049DA2E508A3C44B675D09",
-  "active_ea": "HA V1.0",
-  "expert": "HA V1.0.ex5",
-  "symbol": "XAUUSD Dukascopy",
-  "symbol_key": "XAUUSD",
-  "period": "H4",
-  "pip_size": "0.1",
+  "active_ea": "LRB V1.0",
+  "expert": "LRB V1.0.ex5",
+  "symbol": "EURUSD dukascopy",
+  "symbol_key": "EURUSD",
+  "period": "M15",
+  "pip_size": "0.0001",
   "train_from": "2013.01.01",
   "train_to": "2022.01.01",
   "val_from": "2022.01.01",
   "val_to": "2024.01.01",
   "holdout_from": "2024.01.01",
   "holdout_to": "2026.07.03",
-  "deposit": "2500",
+  "deposit": "5000",
   "currency": "USD",
   "leverage": "1:100",
   "login": "52909674",
@@ -36,7 +36,7 @@
   "quant_name": "HA",
   "research_dir": "C:\\Users\\HP\\Desktop\\AlphaFordge\\researched_strategies",
   "strategies_dir": "C:\\Users\\HP\\Desktop\\AlphaFordge\\strategies",
-  "ui_zoom": "1.0",
+  "ui_zoom": "0.9",
   "optimization_params": {
     "TRB": {
       "indicator_toggles": {
@@ -61,106 +61,154 @@
         ]
       }
     },
-    "active_ea": "HA V1.0",
+    "active_ea": "LRB V1.0",
     "indicator_toggles": {
-      "InpUseBodyFilter": 0,
-      "InpUseTrendFilter": 1
+      "InpUseNewsFilter": 0,
+      "InpUseRiskPercent": 0
     },
     "fixed_params": {
-      "InpTimeframe": "H4",
-      "InpBodyIndex": 0.1,
-      "InpATRLength": 20,
-      "InpATRStop": 6.0,
-      "InpLotSize": 0.1,
-      "InpHistoryDepth": 500,
+      "InpBrokerToGMTOffsetHours": 0.0,
+      "InpAsianStartHour": 0,
+      "InpAsianEndHour": 6,
+      "InpSetupHour": 7,
+      "InpMinRangePips": 24,
+      "InpMaxRangePips": 32.0,
+      "InpWideRangeThresholdPips": 32.5,
+      "InpBufferPips": 5.0,
+      "InpTightStopPips": 20.0,
+      "InpRewardToRisk": 2.0,
+      "InpAvoidMonday": "False",
+      "InpAvoidFriday": "False",
+      "InpDrawRangeMarkers": "True",
+      "InpRiskPercent": 1.0,
       "InpSlippage": 20,
       "InpMagic": 20260922
     },
     "opt_ranges": {
-      "InpLookBack": [
+      "InpExpiryHour": [
+        4,
         1,
-        5,
-        145
+        16
       ],
-      "InpTimeIndex": [
-        1,
+      "InpCloseHour": [
         5,
-        145
+        1,
+        19
       ],
-      "InpTrendIndex": [
-        1,
-        5,
-        145
+      "InpLotSize": [
+        0.1,
+        0.05,
+        0.3
       ]
     },
     "HA V1.0": {
       "active_ea": "HA V1.0",
       "indicator_toggles": {
         "InpUseBodyFilter": 0,
-        "InpUseTrendFilter": 1
+        "InpUseTrendFilter": 1,
+        "InpUseRiskPercent": 0
       },
       "fixed_params": {
-        "InpTimeframe": "H4",
+        "InpTimeframe": 16388,
+        "InpLookBack": 1.0,
+        "InpTimeIndex": 111,
         "InpBodyIndex": 0.1,
-        "InpATRLength": 20,
-        "InpATRStop": 6.0,
+        "InpTrendIndex": 96,
+        "InpRiskPercent": 1.0,
         "InpLotSize": 0.1,
         "InpHistoryDepth": 500,
         "InpSlippage": 20,
         "InpMagic": 20260922
       },
       "opt_ranges": {
-        "InpLookBack": [
-          1,
+        "InpATRLength": [
+          10,
           5,
-          145
+          40
         ],
-        "InpTimeIndex": [
+        "InpATRStop": [
+          2.0,
+          0.5,
+          10.0
+        ]
+      }
+    },
+    "LRB V1.0": {
+      "active_ea": "LRB V1.0",
+      "indicator_toggles": {
+        "InpUseNewsFilter": 0,
+        "InpUseRiskPercent": 0
+      },
+      "fixed_params": {
+        "InpBrokerToGMTOffsetHours": 0.0,
+        "InpAsianStartHour": 0,
+        "InpAsianEndHour": 6,
+        "InpSetupHour": 7,
+        "InpMinRangePips": 24,
+        "InpMaxRangePips": 32.0,
+        "InpWideRangeThresholdPips": 32.5,
+        "InpBufferPips": 5.0,
+        "InpTightStopPips": 20.0,
+        "InpRewardToRisk": 2.0,
+        "InpAvoidMonday": "False",
+        "InpAvoidFriday": "False",
+        "InpDrawRangeMarkers": "True",
+        "InpRiskPercent": 1.0,
+        "InpSlippage": 20,
+        "InpMagic": 20260922
+      },
+      "opt_ranges": {
+        "InpExpiryHour": [
+          4,
           1,
-          5,
-          145
+          16
         ],
-        "InpTrendIndex": [
-          1,
+        "InpCloseHour": [
           5,
-          145
+          1,
+          19
+        ],
+        "InpLotSize": [
+          0.1,
+          0.05,
+          0.3
         ]
       }
     }
   },
   "qualification_criteria": {
     "train": {
-      "min_profit_gain_pct": 30.0,
-      "max_drawdown_pct": 20.0,
-      "min_avg_trades_month": 1.0,
-      "min_sharpe_ratio": 0.5,
-      "min_ret_dd_ratio": 1.3,
+      "min_profit_gain_pct": 30,
+      "max_drawdown_pct": 30,
       "min_profit_factor": 1.1,
-      "min_net_profit": 0.0,
+      "min_sharpe_ratio": 0.3,
+      "min_ret_dd_ratio": 1.3,
+      "min_avg_trades_month": 1,
+      "min_net_profit": 0,
       "min_total_trades": 0,
-      "min_win_rate_pct": 0.0
+      "min_win_rate_pct": 0
     },
     "val": {
-      "min_profit_gain_pct": 15.0,
-      "max_drawdown_pct": 20.0,
-      "min_avg_trades_month": 1.0,
-      "min_sharpe_ratio": 0.5,
-      "min_ret_dd_ratio": 1.0,
-      "min_profit_factor": 1.0,
-      "min_net_profit": 0.0,
+      "min_profit_gain_pct": 15,
+      "max_drawdown_pct": 30,
+      "min_profit_factor": 1,
+      "min_sharpe_ratio": 0.3,
+      "min_ret_dd_ratio": 1,
+      "min_avg_trades_month": 1,
+      "min_net_profit": 0,
       "min_total_trades": 0,
-      "min_win_rate_pct": 0.0
+      "min_win_rate_pct": 0
     },
     "holdout": {
-      "min_profit_gain_pct": 15.0,
-      "max_drawdown_pct": 20.0,
-      "min_avg_trades_month": 1.0,
-      "min_sharpe_ratio": 0.5,
-      "min_ret_dd_ratio": 1.0,
-      "min_profit_factor": 1.0,
-      "min_net_profit": 0.0,
+      "min_profit_gain_pct": 15,
+      "max_drawdown_pct": 30,
+      "min_profit_factor": 1,
+      "min_sharpe_ratio": 0.3,
+      "min_ret_dd_ratio": 1,
+      "min_avg_trades_month": 1,
+      "min_net_profit": 0,
       "min_total_trades": 0,
-      "min_win_rate_pct": 0.0
+      "min_win_rate_pct": 0
     }
   }
 }

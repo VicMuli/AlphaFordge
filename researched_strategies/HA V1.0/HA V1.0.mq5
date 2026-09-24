@@ -41,7 +41,9 @@ input int      InpATRLength       = 20;    // ATR_Length
 input double   InpATRStop         = 6.0;   // ATR_Stop multiplier
 
 input group "=== Position Sizing ==="
-input double   InpLotSize         = 0.10;  // Fixed lot size per trade
+input bool     InpUseRiskPercent  = true;  // true: size by % risk of balance | false: use fixed lot below
+input double   InpRiskPercent     = 1.0;   // Risk per trade, % of account balance (used when InpUseRiskPercent = true)
+input double   InpLotSize         = 0.10;  // Fixed lot size per trade (used when InpUseRiskPercent = false)
 
 input group "=== Execution ==="
 input int      InpHistoryDepth    = 500;   // Bars of history used to stabilize the recursive HA calc
@@ -242,11 +244,51 @@ void ClosePosition()
 }
 
 //+------------------------------------------------------------------+
+//| Lot sizing:                                                       |
+//|  InpUseRiskPercent = false -> fixed InpLotSize (unchanged legacy) |
+//|  InpUseRiskPercent = true  -> lots sized so that a full stop-out  |
+//|  at stopDistance loses InpRiskPercent% of account balance.        |
+//+------------------------------------------------------------------+
+double CalculateLotSize(double stopDistance)
+{
+   if(!InpUseRiskPercent)
+      return InpLotSize;
+
+   if(stopDistance <= 0.0)
+      return InpLotSize; // safety fallback, e.g. ATR not ready
+
+   double balance   = AccountInfoDouble(ACCOUNT_BALANCE);
+   double riskMoney = balance * (InpRiskPercent / 100.0);
+
+   double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
+   double tickSize  = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+   if(tickValue <= 0.0 || tickSize <= 0.0)
+      return InpLotSize; // safety fallback if symbol info unavailable
+
+   double moneyPerLotAtStop = (stopDistance / tickSize) * tickValue;
+   if(moneyPerLotAtStop <= 0.0)
+      return InpLotSize;
+
+   double lots = riskMoney / moneyPerLotAtStop;
+
+   double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   double lotMin  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   double lotMax  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+   if(lotStep <= 0.0) lotStep = 0.01;
+
+   lots = MathFloor(lots / lotStep) * lotStep;
+   lots = MathMax(lotMin, MathMin(lotMax, lots));
+
+   return lots;
+}
+
+//+------------------------------------------------------------------+
 void OpenLong(double atrValue)
 {
    double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
    double sl    = price - atrValue * InpATRStop;
-   trade.Buy(InpLotSize, _Symbol, price, sl, 0.0, "HA_Oxfordstrat");
+   double lots  = CalculateLotSize(price - sl);
+   trade.Buy(lots, _Symbol, price, sl, 0.0, "HA_Oxfordstrat");
 }
 
 //+------------------------------------------------------------------+
@@ -254,7 +296,8 @@ void OpenShort(double atrValue)
 {
    double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    double sl    = price + atrValue * InpATRStop;
-   trade.Sell(InpLotSize, _Symbol, price, sl, 0.0, "HA_Oxfordstrat");
+   double lots  = CalculateLotSize(sl - price);
+   trade.Sell(lots, _Symbol, price, sl, 0.0, "HA_Oxfordstrat");
 }
 
 //+------------------------------------------------------------------+
@@ -335,4 +378,18 @@ void OnTick()
       }
    }
 }
+//+------------------------------------------------------------------+
+
+double OnTester()
+{
+   double profit = TesterStatistics(STAT_PROFIT);
+   double drawdown = TesterStatistics(STAT_EQUITY_DD);
+   
+   // Calculates Recovery Factor. Helps optimization find settings with the best return vs drawdown ratio.
+   if(drawdown > 0)
+      return profit / drawdown;
+      
+   return profit;
+}
+
 //+------------------------------------------------------------------+

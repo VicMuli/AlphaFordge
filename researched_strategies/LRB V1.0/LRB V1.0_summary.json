@@ -1,0 +1,22 @@
+{
+  "ea_name": "LRB V1.0",
+  "expert": "LRB V1.0.ex5",
+  "symbol": "EURUSD dukascopy",
+  "period": "M15",
+  "date_range": "2013.01.01 -> 2026.07.03",
+  "deposit": 5000.0,
+  "strategy_doc": "LRB Strategy concept.docx",
+  "mql5_code": "LRB V1.0.mq5",
+  "word_report": "LRB V1.0_Research_Report.docx",
+  "html_report": "LRB V1.0_default.htm",
+  "metrics": {
+    "net_profit": -2786.67,
+    "profit_pct": -55.7334,
+    "profit_factor": 0.61,
+    "sharpe_ratio": -5.0,
+    "max_drawdown_pct": 56.47,
+    "total_trades": 447,
+    "win_rate_pct": 40.49
+  },
+  "timestamp_utc": "2026-09-24 09:57:58 UTC"
+}

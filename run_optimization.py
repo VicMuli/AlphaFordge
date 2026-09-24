@@ -78,20 +78,20 @@ from mt5_optimizer import sync_ea_to_mt5
 
 TERMINAL_PATH     = 'C:\\Users\\HP\\AppData\\Roaming\\MetaTrader\\terminal64.exe'
 TERMINAL_DATA_DIR = 'C:\\Users\\HP\\AppData\\Roaming\\MetaQuotes\\Terminal\\CDE1ED2F37049DA2E508A3C44B675D09'
-PERIOD            = 'H4'
+PERIOD            = 'M15'
 
 LOGIN    = 52909674
 PASSWORD = '3F!@4rwo7wc02f'
 SERVER   = 'ICMarketsKE-Demo'
 
-DEPOSIT  = 2500
+DEPOSIT  = 5000
 CURRENCY = 'USD'
 LEVERAGE = '1:100'
 
 # -- MULTI-EA SWITCHBOARD ---------------------------------------------------
 # Change ACTIVE_EA to run the pipeline against a different Expert Advisor.
 # Loads active_ea from config.json (or defaults to 'TRB').
-ACTIVE_EA = 'HA V1.0'
+ACTIVE_EA = 'LRB V1.0'
 
 # Shared across EAs -- just the MT5 symbol name and its pip size. Anything
 # EA-specific (which parameters get optimized, over what range) lives in
@@ -116,8 +116,8 @@ TARGET_SYMBOL = _cfg_sym_key if _cfg_sym_key in SYMBOL_CONFIGS else "USDJPY"
 
 # Resolve active symbol parameters
 _active_cfg = SYMBOL_CONFIGS.get(TARGET_SYMBOL, {"symbol_mt5": _CFG.get("symbol", "USDJPY Dukascopy"), "pip_size": 0.01})
-SYMBOL      = 'XAUUSD Dukascopy'
-SYMBOL_KEY  = 'XAUUSD'
+SYMBOL      = 'EURUSD dukascopy'
+SYMBOL_KEY  = 'EURUSD'
 PIP_SIZE    = float(_CFG.get("pip_size", _active_cfg.get("pip_size", 0.01)))
 
 
@@ -485,9 +485,9 @@ _ea_cfg = EA_CONFIGS[ACTIVE_EA]
 if TARGET_SYMBOL not in _ea_cfg["valid_symbols"] and TARGET_SYMBOL not in SYMBOL_CONFIGS:
     print(f"  [INFO] Target symbol '{TARGET_SYMBOL}' will be used for '{ACTIVE_EA}'.")
 
-EXPERT = 'HA V1.0.ex5'
+EXPERT = 'LRB V1.0.ex5'
 # Ensure the compiled EA binary is copied into MT5 Experts directory
-EXPERT = 'HA V1.0.ex5'
+EXPERT = 'LRB V1.0.ex5'
 
 # -- Date windows ---------------------------------------------------------
 TRAIN_FROM   = '2013.01.01'
