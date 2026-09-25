@@ -10,6 +10,7 @@ Flow
      Walk Forward stability testing is run MANUALLY one-by-one after the pipeline completes.
 """
 
+import os
 import sys
 import datetime
 import json
@@ -73,25 +74,26 @@ if _CONFIG_FILE.exists():
             _CFG = json.load(_f)
     except Exception:
         pass
+_cfg = _CFG
 
 from mt5_optimizer import sync_ea_to_mt5
 
-TERMINAL_PATH     = 'C:\\Users\\HP\\AppData\\Roaming\\MetaTrader\\terminal64.exe'
-TERMINAL_DATA_DIR = 'C:\\Users\\HP\\AppData\\Roaming\\MetaQuotes\\Terminal\\CDE1ED2F37049DA2E508A3C44B675D09'
-PERIOD            = 'M15'
+TERMINAL_PATH     = _CFG.get("terminal_path", r'C:\Users\HP\AppData\Roaming\MetaTrader\terminal64.exe')
+TERMINAL_DATA_DIR = _CFG.get("terminal_data_dir", r'C:\Users\HP\AppData\Roaming\MetaQuotes\Terminal\CDE1ED2F37049DA2E508A3C44B675D09')
+PERIOD            = _CFG.get("period", 'M15')
 
-LOGIN    = 52909674
-PASSWORD = '3F!@4rwo7wc02f'
-SERVER   = 'ICMarketsKE-Demo'
+LOGIN    = int(_CFG.get("login", 52909674))
+PASSWORD = str(_CFG.get("password", '3F!@4rwo7wc02f'))
+SERVER   = str(_CFG.get("server", 'ICMarketsKE-Demo'))
 
-DEPOSIT  = 5000
-CURRENCY = 'USD'
-LEVERAGE = '1:100'
+DEPOSIT  = float(_CFG.get("deposit", 2500))
+CURRENCY = _CFG.get("currency", 'USD')
+LEVERAGE = _CFG.get("leverage", '1:100')
 
 # -- MULTI-EA SWITCHBOARD ---------------------------------------------------
 # Change ACTIVE_EA to run the pipeline against a different Expert Advisor.
-# Loads active_ea from config.json (or defaults to 'TRB').
-ACTIVE_EA = 'LRB V1.0'
+# Loads active_ea from AF_ACTIVE_EA env var, config.json, or defaults to 'TRB'.
+ACTIVE_EA = os.environ.get("AF_ACTIVE_EA") or _CFG.get("active_ea", "TRB").strip()
 
 # Shared across EAs -- just the MT5 symbol name and its pip size. Anything
 # EA-specific (which parameters get optimized, over what range) lives in
@@ -116,8 +118,8 @@ TARGET_SYMBOL = _cfg_sym_key if _cfg_sym_key in SYMBOL_CONFIGS else "USDJPY"
 
 # Resolve active symbol parameters
 _active_cfg = SYMBOL_CONFIGS.get(TARGET_SYMBOL, {"symbol_mt5": _CFG.get("symbol", "USDJPY Dukascopy"), "pip_size": 0.01})
-SYMBOL      = 'EURUSD dukascopy'
-SYMBOL_KEY  = 'EURUSD'
+SYMBOL      = _CFG.get("symbol") or _active_cfg.get("symbol_mt5", "USDJPY Dukascopy")
+SYMBOL_KEY  = TARGET_SYMBOL
 PIP_SIZE    = float(_CFG.get("pip_size", _active_cfg.get("pip_size", 0.01)))
 
 
@@ -414,14 +416,14 @@ EA_CONFIGS = {
         "build":         _build_orb_fixed_and_ranges,
     },
     "TRB": {
-        "expert":        "TRB v1.8.ex5",
+        "expert":        _CFG.get("expert", "TRB V2.0.ex5"),
         "valid_symbols": ["USDJPY", "EURJPY"],
         "build":         _build_trb_fixed_and_ranges,
     },
 }
 
 if ACTIVE_EA not in EA_CONFIGS:
-    # Look for folder matching ACTIVE_EA case-insensitively
+    clean_active = re.sub(r'\.(ex5|mq5)$', '', ACTIVE_EA, flags=re.IGNORECASE).strip().lower()
     search_dirs = [
         _SCRIPT_DIR / "researched_strategies",
         _SCRIPT_DIR / "strategies",
@@ -431,19 +433,35 @@ if ACTIVE_EA not in EA_CONFIGS:
         search_dirs.insert(0, Path(_CFG["research_dir"]))
 
     found_folder = None
+    found_ex5_file = None
+
     for sdir in search_dirs:
         if not sdir.exists():
             continue
-        for d in sdir.iterdir():
-            if d.is_dir() and d.name.lower() == ACTIVE_EA.lower():
-                found_folder = d
+        # Direct .ex5 search
+        for f in sdir.glob("*.ex5"):
+            f_stem = f.stem.lower()
+            if f_stem == clean_active or f_stem.startswith(clean_active) or clean_active.startswith(f_stem):
+                found_ex5_file = f.name
                 break
+        if found_ex5_file:
+            break
+
+        for d in sdir.iterdir():
+            if d.is_dir() and not d.name.startswith("."):
+                d_low = d.name.lower()
+                if d_low == clean_active or d_low.startswith(clean_active) or clean_active.startswith(d_low) or clean_active in d_low:
+                    found_folder = d
+                    break
         if found_folder:
             break
 
-    ea_folder = found_folder if found_folder else (_SCRIPT_DIR / "researched_strategies" / ACTIVE_EA)
-    ex5_files = list(ea_folder.glob("*.ex5")) if ea_folder.exists() else []
-    expert_file = ex5_files[0].name if ex5_files else f"{ACTIVE_EA}.ex5"
+    if not found_ex5_file and found_folder:
+        ex5s = list(found_folder.glob("*.ex5"))
+        if ex5s:
+            found_ex5_file = ex5s[0].name
+
+    expert_file = _CFG.get("expert") or found_ex5_file or f"{ACTIVE_EA}.ex5"
 
     def _build_dynamic_mql5(symbol_key: str, pip_size: float) -> tuple[dict, dict]:
         try:
@@ -485,17 +503,17 @@ _ea_cfg = EA_CONFIGS[ACTIVE_EA]
 if TARGET_SYMBOL not in _ea_cfg["valid_symbols"] and TARGET_SYMBOL not in SYMBOL_CONFIGS:
     print(f"  [INFO] Target symbol '{TARGET_SYMBOL}' will be used for '{ACTIVE_EA}'.")
 
-EXPERT = 'LRB V1.0.ex5'
+EXPERT = _CFG.get("expert") or _ea_cfg.get("expert", f"{ACTIVE_EA}.ex5")
 # Ensure the compiled EA binary is copied into MT5 Experts directory
-EXPERT = 'LRB V1.0.ex5'
+EXPERT = sync_ea_to_mt5(EXPERT, TERMINAL_DATA_DIR, TERMINAL_PATH)
 
 # -- Date windows ---------------------------------------------------------
-TRAIN_FROM   = '2013.01.01'
-TRAIN_TO     = '2022.01.01'
-VAL_FROM     = '2022.01.01'
-VAL_TO       = '2024.01.01'
-HOLDOUT_FROM = '2024.01.01'
-HOLDOUT_TO   = '2026.07.03'
+TRAIN_FROM   = _CFG.get("train_from", '2013.01.01')
+TRAIN_TO     = _CFG.get("train_to", '2022.01.01')
+VAL_FROM     = _CFG.get("val_from", '2022.01.01')
+VAL_TO       = _CFG.get("val_to", '2024.01.01')
+HOLDOUT_FROM = _CFG.get("holdout_from", '2024.01.01')
+HOLDOUT_TO   = _CFG.get("holdout_to", '2026.07.03')
 
 
 def _months_between(from_str: str, to_str: str) -> float:
@@ -523,67 +541,6 @@ if _CONFIG_FILE.exists():
                 _BASE_WORK_DIR = Path(_cfg["work_dir"])
     except Exception:
         pass
-
-# ---------------------------------------------------------------------------
-# MT5 ENUM_TIMEFRAMES integer IDs (NOT period-in-minutes).
-# MT5 uses its own internal enum values in .set files.  Writing the wrong
-# number (e.g. 240 = minutes for H4 in MT4) causes MT5 to silently fall
-# back to PERIOD_CURRENT.  Human-readable names like "H4" or "PERIOD_H4"
-# are also invalid unless mapped here first.
-# ---------------------------------------------------------------------------
-MT5_TIMEFRAME_IDS: dict[str, int] = {
-    # canonical PERIOD_xxx names
-    "PERIOD_CURRENT": 0,
-    "PERIOD_M1":  1,   "PERIOD_M2":  2,   "PERIOD_M3":  3,
-    "PERIOD_M4":  4,   "PERIOD_M5":  5,   "PERIOD_M6":  6,
-    "PERIOD_M10": 10,  "PERIOD_M12": 12,  "PERIOD_M15": 15,
-    "PERIOD_M20": 20,  "PERIOD_M30": 30,
-    "PERIOD_H1":  16385, "PERIOD_H2":  16386, "PERIOD_H3":  16387,
-    "PERIOD_H4":  16388, "PERIOD_H6":  16390, "PERIOD_H8":  16392,
-    "PERIOD_H12": 16396,
-    "PERIOD_D1":  16408,
-    "PERIOD_W1":  32769,
-    "PERIOD_MN1": 49153,
-    # short names (case-insensitive after .upper())
-    "CURRENT": 0,
-    "M1":  1,   "M2":  2,   "M3":  3,   "M4":  4,   "M5":  5,
-    "M6":  6,   "M10": 10,  "M12": 12,  "M15": 15,  "M20": 20,
-    "M30": 30,
-    "H1":  16385, "H2":  16386, "H3":  16387, "H4":  16388,
-    "H6":  16390, "H8":  16392, "H12": 16396,
-    "D1":  16408,
-    "W1":  32769,
-    "MN1": 49153, "MN": 49153,
-}
-
-# Set of parameter names that are ENUM_TIMEFRAMES inputs
-_TIMEFRAME_PARAM_NAMES = {"InpTimeframe", "Timeframe", "WorkingTimeframe", "TF"}
-
-
-def _coerce_param_value(name: str, val):
-    """Convert a config value to the correct Python type for a .set file.
-    ENUM_TIMEFRAMES params: resolve string names (e.g. 'H4', 'PERIOD_H4')
-    to their MT5 internal integer IDs so MT5 doesn't fall back to
-    PERIOD_CURRENT when it receives an unrecognised string.
-    All other params: standard numeric coercion (int or float).
-    """
-    if isinstance(val, str):
-        # Check if this is a timeframe parameter by name OR by value shape
-        key = val.strip().upper()
-        if name in _TIMEFRAME_PARAM_NAMES or key in MT5_TIMEFRAME_IDS:
-            resolved = MT5_TIMEFRAME_IDS.get(key)
-            if resolved is not None:
-                return resolved
-            # value looks like a period name but wasn't found — warn and fall through
-            print(f"  [WARN] '{val}' is not a recognised MT5 timeframe name for param "
-                  f"'{name}'. Attempting numeric parse.")
-        # Generic numeric coercion
-        try:
-            return float(val) if "." in val else int(val)
-        except ValueError:
-            return val  # leave as string — MT5 may handle it for non-numeric inputs
-    return val
-
 
 def _apply_optimization_config_overrides(fixed: dict, ranges: dict, cfg: dict, active_ea: str) -> tuple[dict, dict]:
     """
@@ -619,7 +576,12 @@ def _apply_optimization_config_overrides(fixed: dict, ranges: dict, cfg: dict, a
             if mode == "fixed":
                 ranges.pop(name, None)
                 val = p.get("value", p.get("fixedValue", fixed.get(name, 0)))
-                fixed[name] = _coerce_param_value(name, val)
+                try:
+                    if isinstance(val, str):
+                        val = float(val) if "." in val else int(val)
+                except ValueError:
+                    pass
+                fixed[name] = val
             elif mode == "optimize":
                 fixed.pop(name, None)
                 rng = p.get("range", {})
@@ -642,7 +604,12 @@ def _apply_optimization_config_overrides(fixed: dict, ranges: dict, cfg: dict, a
     if "fixed_params" in ea_cfg and isinstance(ea_cfg["fixed_params"], dict):
         for k, v in ea_cfg["fixed_params"].items():
             ranges.pop(k, None)
-            fixed[k] = _coerce_param_value(k, v)
+            try:
+                if isinstance(v, str):
+                    v = float(v) if "." in v else int(v)
+            except ValueError:
+                pass
+            fixed[k] = v
 
     # 4. Direct opt_ranges overrides
     if "opt_ranges" in ea_cfg and isinstance(ea_cfg["opt_ranges"], dict):
@@ -663,22 +630,22 @@ WORK_DIR = str(_BASE_WORK_DIR / f"{ACTIVE_EA.lower()}_{SYMBOL_KEY.lower()}")
 FIXED_PARAMS, OPT_RANGES = _ea_cfg["build"](SYMBOL_KEY, PIP_SIZE)
 
 # Apply user overrides from config.json (configured in Optimize tab)
-if "_cfg" in locals() and _cfg:
+if _CFG:
     FIXED_PARAMS, OPT_RANGES = _apply_optimization_config_overrides(
-        FIXED_PARAMS, OPT_RANGES, _cfg, ACTIVE_EA
+        FIXED_PARAMS, OPT_RANGES, _CFG, ACTIVE_EA
     )
 
-CRITERIA_CFG = _cfg.get("qualification_criteria", {}) if "_cfg" in locals() and _cfg else {}
+CRITERIA_CFG = _CFG.get("qualification_criteria", {}) if _CFG else {}
 
 # -- Pipeline settings -----------------------------------------------------
-TOP_N_TRAIN         = 20
+TOP_N_TRAIN         = int(_CFG.get("top_n_train", 20))
 OPTIMIZATION_MODE   = int(_CFG.get("optimization_mode", 2))
-OPT_TIMEOUT         = 21600
-SINGLE_TEST_TIMEOUT = 100
+OPT_TIMEOUT         = int(_CFG.get("opt_timeout", 21600))
+SINGLE_TEST_TIMEOUT = int(_CFG.get("single_test_timeout", 100))
 
 # -- Walk Forward ----------------------------------------------------------
-WF_WINDOW_MONTHS  = 12
-WF_STEP_MONTHS    = 6
+WF_WINDOW_MONTHS  = int(_CFG.get("wf_window_months", 12))
+WF_STEP_MONTHS    = int(_CFG.get("wf_step_months", 6))
 WF_MIN_PASS_RATE  = float(_CFG.get("wf_min_pass_rate", 70.0))
 
 # -- Monte Carlo -----------------------------------------------------------
@@ -1049,6 +1016,27 @@ def main():
     run_dir = Path(WORK_DIR) / f"run_{run_ts}"
     run_dir.mkdir(parents=True, exist_ok=True)
     profiles_tester_dir = Path(TERMINAL_DATA_DIR) / "MQL5" / "Profiles" / "Tester"
+
+    meta = {
+        "ea": ACTIVE_EA,
+        "expert": EXPERT,
+        "symbol": SYMBOL,
+        "symbol_key": SYMBOL_KEY,
+        "period": PERIOD,
+        "deposit": DEPOSIT,
+        "currency": CURRENCY,
+        "train_from": TRAIN_FROM,
+        "train_to": TRAIN_TO,
+        "val_from": VAL_FROM,
+        "val_to": VAL_TO,
+        "holdout_from": HOLDOUT_FROM,
+        "holdout_to": HOLDOUT_TO,
+        "timestamp": run_ts,
+    }
+    try:
+        (run_dir / "run_meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    except Exception:
+        pass
 
     print("=" * 72)
     print(f"STRATEGY OPTIMIZATION PIPELINE  |  {ACTIVE_EA} on {SYMBOL_KEY}  |  {run_ts}")

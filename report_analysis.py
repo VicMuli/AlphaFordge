@@ -71,29 +71,66 @@ def _parse_settings_and_results(table) -> dict:
 
 
 def _parse_deals(table) -> pd.DataFrame:
-    """Second table contains both an Orders section and a Deals section.
-    We only want Deals (it has running Balance + realized Profit)."""
-    deals_header_th = None
-    for th in table.find_all("th"):
-        if th.get_text(strip=True) == "Deals":
-            deals_header_th = th
+    """Find and parse the Deals section (it has running Balance + realized Profit)."""
+    deals_header_elem = None
+    for tag in ("th", "td", "div", "b"):
+        for elem in table.find_all(tag):
+            if elem.get_text(strip=True).lower() == "deals":
+                deals_header_elem = elem
+                break
+        if deals_header_elem is not None:
             break
-    if deals_header_th is None:
+
+    header_tr = None
+    if deals_header_elem is not None:
+        header_tr = deals_header_elem.find_parent("tr")
+
+    # If not found by "Deals" text, scan for column header containing Time + Profit + Balance
+    if header_tr is None:
+        for tr in table.find_all("tr"):
+            cells = [td.get_text(strip=True).lower() for td in tr.find_all(["td", "th"])]
+            has_time = any(c in ("time", "date") for c in cells)
+            has_profit = any("profit" in c for c in cells)
+            has_balance = any("balance" in c for c in cells)
+            if has_time and has_profit and has_balance and len(cells) >= 5:
+                header_tr = tr
+                break
+
+    if header_tr is None:
         raise ValueError("Could not find 'Deals' section in report")
 
-    header_tr = deals_header_th.find_parent("tr")
     rows = []
     columns = None
-    for tr in header_tr.find_next_siblings("tr"):
-        if tr.find("th"):
-            break  # hit another section header — stop
-        cells = [td.get_text(strip=True) for td in tr.find_all("td")]
+    # If header_tr itself was the column header row
+    first_cells = [td.get_text(strip=True) for td in header_tr.find_all(["td", "th"])]
+    first_norms = [c.lower() for c in first_cells]
+    if any(c in ("time", "date") for c in first_norms) and any("profit" in c for c in first_norms):
+        columns = first_cells
+        candidates_tr = header_tr.find_next_siblings("tr")
+    else:
+        candidates_tr = header_tr.find_next_siblings("tr")
+
+    for tr in candidates_tr:
+        if tr.find("th") and not columns:
+            continue
+        cells = [td.get_text(strip=True) for td in tr.find_all(["td", "th"])]
         if columns is None:
             # This is the column-name row (Time, Deal, Symbol, Type, ...)
             columns = cells
             continue
-        if len(cells) == len(columns):
-            rows.append(cells)
+        if tr.find("th") and len(cells) < 3:
+            break  # hit another section header — stop
+        if not cells or len(cells) < 3:
+            continue
+        # Stop at summary total line or end of deals
+        if not re.match(r"^\d{4}[.\-/]", cells[0]):
+            continue
+        if len(cells) < len(columns):
+            cells = cells + [""] * (len(columns) - len(cells))
+        rows.append(cells[:len(columns)])
+
+    if not columns or not rows:
+        raise ValueError("No deal rows found in 'Deals' section")
 
     df = pd.DataFrame(rows, columns=columns)
     return _clean_deals(df)
@@ -124,12 +161,32 @@ def parse_report(path) -> dict:
     html = _read_html_text(path)
     soup = BeautifulSoup(html, "html.parser")
     tables = soup.find_all("table")
-    if len(tables) < 2:
-        raise ValueError(f"Expected at least 2 tables in report, found {len(tables)}")
+    if not tables:
+        raise ValueError(f"No tables found in report {path}")
 
-    summary_raw = _parse_settings_and_results(tables[0])
-    ea_inputs = _parse_ea_inputs(tables[0])
-    deals = _parse_deals(tables[1])
+    summary_raw = {}
+    ea_inputs = {}
+    deals = None
+
+    for t in tables:
+        if not summary_raw:
+            sr = _parse_settings_and_results(t)
+            if sr:
+                summary_raw = sr
+        if not ea_inputs:
+            inp = _parse_ea_inputs(t)
+            if inp:
+                ea_inputs = inp
+        if deals is None:
+            try:
+                d = _parse_deals(t)
+                if d is not None and not d.empty:
+                    deals = d
+            except Exception:
+                pass
+
+    if deals is None:
+        raise ValueError("Could not find 'Deals' section in report tables")
 
     return {"summary_raw": summary_raw, "ea_inputs": ea_inputs, "deals": deals}
 
@@ -200,6 +257,12 @@ def compute_curated_summary(parsed: dict) -> dict:
         "Final Balance": final_balance,
         "Max Balance Drawdown ($)": bal_dd_abs,
         "Max Balance Drawdown (%)": _pct(bal_dd_extra),
+        "Gross Profit": _to_float(get("Gross Profit")),
+        "Gross Loss": _to_float(get("Gross Loss")),
+        "Initial Deposit": _to_float(get("Initial Deposit")),
+        "Expected Payoff": _to_float(get("Expected Payoff")),
+        "Balance Drawdown Maximal": get("Balance Drawdown Maximal"),
+        "Equity Drawdown Maximal": get("Equity Drawdown Maximal"),
         "Profit Factor": _to_float(get("Profit Factor")),
         "Sharpe Ratio": _to_float(get("Sharpe Ratio")),
         "Recovery Factor": _to_float(get("Recovery Factor")),
@@ -255,10 +318,11 @@ def analyze(path) -> dict:
     monthly, yearly = compute_period_performance(parsed["deals"])
     return {
         "curated_summary": curated,
-        "ea_inputs": parsed["ea_inputs"],
+        "summary_raw": parsed.get("summary_raw", {}),
+        "ea_inputs": parsed.get("ea_inputs", {}),
         "monthly": monthly,
         "yearly": yearly,
-        "deals": parsed["deals"],  # kept for anyone who wants the raw trades later
+        "deals": parsed.get("deals", pd.DataFrame()),  # kept for anyone who wants the raw trades later
     }
 
 

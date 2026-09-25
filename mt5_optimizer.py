@@ -84,13 +84,14 @@ def sync_ea_to_mt5(expert: str, terminal_data_dir: str, terminal_path: str = Non
     """
     Ensures that the requested EA (.ex5) exists in <terminal_data_dir>/MQL5/Experts/.
     If not found in MT5 Experts, searches researched_strategies/, strategies/, or workspace.
+    Supports flexible matching (e.g. 'LRB' matches 'LRB V1.0.ex5', 'TRB' matches 'TRB V2.0.ex5').
     If only .mq5 exists, attempts to compile it with metaeditor64.exe if available.
     Returns the resolved filename inside MQL5/Experts.
     """
     clean_expert = Path(expert).name
     if not clean_expert.lower().endswith(".ex5"):
         clean_expert += ".ex5"
-    ea_stem = clean_expert[:-4]
+    ea_stem = clean_expert[:-4].strip().lower()
 
     mt5_experts_dir = Path(terminal_data_dir) / "MQL5" / "Experts"
     mt5_experts_dir.mkdir(parents=True, exist_ok=True)
@@ -100,7 +101,14 @@ def sync_ea_to_mt5(expert: str, terminal_data_dir: str, terminal_path: str = Non
     if target_path.is_file() and target_path.stat().st_size > 0:
         return clean_expert
 
-    # Search for matching .ex5 in workspace folders
+    # Check existing files in MT5 Experts with flexible matching
+    for exp_file in mt5_experts_dir.glob("*.ex5"):
+        if exp_file.is_file() and exp_file.stat().st_size > 0:
+            f_stem = exp_file.stem.lower()
+            if f_stem == ea_stem or f_stem.startswith(ea_stem) or ea_stem.startswith(f_stem):
+                return exp_file.name
+
+    # Search for matching .ex5 and .mq5 in workspace folders
     workspace_dir = Path(__file__).resolve().parent
     search_dirs = [
         workspace_dir / "researched_strategies",
@@ -111,24 +119,61 @@ def sync_ea_to_mt5(expert: str, terminal_data_dir: str, terminal_path: str = Non
     found_ex5 = None
     found_mq5 = None
 
+    # Pass 1: exact stem match
     for sdir in search_dirs:
         if not sdir.exists():
             continue
         for sub in sdir.rglob("*"):
             if sub.is_file():
-                if sub.name.lower() == clean_expert.lower():
+                low_name = sub.name.lower()
+                low_stem = sub.stem.lower()
+                if low_name == clean_expert.lower():
                     found_ex5 = sub
                     break
-                elif sub.name.lower() == f"{ea_stem.lower()}.mq5":
+                elif low_stem == f"{ea_stem}.mq5" or (sub.suffix.lower() == ".mq5" and low_stem == ea_stem):
                     found_mq5 = sub
         if found_ex5:
             break
 
+    # Pass 2: prefix / starts with match (e.g. 'LRB' matches 'LRB V1.0.ex5')
+    if not found_ex5:
+        for sdir in search_dirs:
+            if not sdir.exists():
+                continue
+            for sub in sdir.rglob("*.ex5"):
+                low_stem = sub.stem.lower()
+                if low_stem.startswith(ea_stem) or ea_stem.startswith(low_stem) or ea_stem in low_stem:
+                    found_ex5 = sub
+                    break
+            if found_ex5:
+                break
+
+    if not found_mq5:
+        for sdir in search_dirs:
+            if not sdir.exists():
+                continue
+            for sub in sdir.rglob("*.mq5"):
+                low_stem = sub.stem.lower()
+                if low_stem.startswith(ea_stem) or ea_stem.startswith(low_stem) or ea_stem in low_stem:
+                    found_mq5 = sub
+                    break
+            if found_mq5:
+                break
+
+    resolved_expert_name = found_ex5.name if found_ex5 else clean_expert
+
     if found_ex5:
         try:
-            shutil.copy2(found_ex5, target_path)
-            print(f"  [OK] Synchronized EA binary to MT5 Experts: {clean_expert} (from {found_ex5.parent.name})")
-            return clean_expert
+            target_resolved = mt5_experts_dir / found_ex5.name
+            shutil.copy2(found_ex5, target_resolved)
+            # Also copy to requested clean_expert name if different, for maximum compatibility
+            if clean_expert.lower() != found_ex5.name.lower():
+                try:
+                    shutil.copy2(found_ex5, target_path)
+                except Exception:
+                    pass
+            print(f"  [OK] Synchronized EA binary to MT5 Experts: {found_ex5.name} (from {found_ex5.parent.name})")
+            return found_ex5.name
         except Exception as e:
             print(f"  [WARN] Failed to copy {found_ex5} to {target_path}: {e}")
 
@@ -143,16 +188,16 @@ def sync_ea_to_mt5(expert: str, terminal_data_dir: str, terminal_path: str = Non
                 subprocess.run(cmd_comp, capture_output=True, text=True, timeout=60)
                 expected_ex5 = found_mq5.with_suffix(".ex5")
                 if expected_ex5.exists():
-                    shutil.copy2(expected_ex5, target_path)
-                    print(f"  [OK] Compiled and synchronized {clean_expert} to MT5 Experts!")
-                    return clean_expert
+                    shutil.copy2(expected_ex5, mt5_experts_dir / expected_ex5.name)
+                    print(f"  [OK] Compiled and synchronized {expected_ex5.name} to MT5 Experts!")
+                    return expected_ex5.name
             except Exception as ce:
                 print(f"  [WARN] MetaEditor compilation failed: {ce}")
 
     if not target_path.exists() or target_path.stat().st_size == 0:
-        print(f"  [WARN] EA binary '{clean_expert}' not found in MT5 Experts directory ({mt5_experts_dir}).")
+        print(f"  [WARN] EA binary '{resolved_expert_name}' not found in MT5 Experts directory ({mt5_experts_dir}).")
 
-    return clean_expert
+    return resolved_expert_name
 
 
 def _read_latest_mt5_tester_log(terminal_data_dir: str) -> str:

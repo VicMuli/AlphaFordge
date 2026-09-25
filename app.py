@@ -1459,10 +1459,12 @@ class OptimizePanel(BasePanel):
         self.cfg["active_ea"] = self.active_ea
         self.cfg["quant_name"] = self.active_ea
 
-        # Search case-insensitively in researched_strategies / strategies
+        # Search flexibly in researched_strategies / strategies
+        clean_ea = re.sub(r'\.(ex5|mq5)$', '', self.active_ea, flags=re.IGNORECASE).strip().lower()
         search_dirs = [
             SCRIPT_DIR / "researched_strategies",
             SCRIPT_DIR / "strategies",
+            SCRIPT_DIR,
         ]
         if self.cfg.get("research_dir"):
             search_dirs.insert(0, Path(self.cfg["research_dir"]))
@@ -1471,16 +1473,26 @@ class OptimizePanel(BasePanel):
         for sdir in search_dirs:
             if not sdir.exists():
                 continue
+            # Check direct .ex5 in directory
+            for f in sdir.glob("*.ex5"):
+                low = f.stem.lower()
+                if low == clean_ea or low.startswith(clean_ea) or clean_ea.startswith(low):
+                    found_ex5 = f.name
+                    break
+            if found_ex5:
+                break
             for sub in sdir.iterdir():
-                if sub.is_dir() and sub.name.lower() == self.active_ea.lower():
-                    ex5s = list(sub.glob("*.ex5"))
-                    if ex5s:
-                        found_ex5 = ex5s[0].name
-                        break
-                    mq5s = list(sub.glob("*.mq5"))
-                    if mq5s:
-                        found_ex5 = mq5s[0].stem + ".ex5"
-                        break
+                if sub.is_dir() and not sub.name.startswith("."):
+                    sub_low = sub.name.lower()
+                    if sub_low == clean_ea or sub_low.startswith(clean_ea) or clean_ea.startswith(sub_low) or clean_ea in sub_low:
+                        ex5s = list(sub.glob("*.ex5"))
+                        if ex5s:
+                            found_ex5 = ex5s[0].name
+                            break
+                        mq5s = list(sub.glob("*.mq5"))
+                        if mq5s:
+                            found_ex5 = mq5s[0].stem + ".ex5"
+                            break
             if found_ex5:
                 break
 
@@ -1497,7 +1509,10 @@ class OptimizePanel(BasePanel):
             tdir = self.cfg.get("terminal_data_dir")
             tpath = self.cfg.get("terminal_path")
             if tdir:
-                sync_ea_to_mt5(self.cfg["expert"], tdir, tpath)
+                resolved_exp = sync_ea_to_mt5(self.cfg["expert"], tdir, tpath)
+                if resolved_exp:
+                    self.cfg["expert"] = resolved_exp
+                    save_config(self.cfg)
         except Exception:
             pass
 
@@ -1612,8 +1627,15 @@ class OptimizePanel(BasePanel):
         self._log.grid(row=1, column=0, sticky="nsew", padx=16, pady=(0, 16))
 
     def _run(self):
+        self.cfg["active_ea"] = self.active_ea
+        self.cfg["quant_name"] = self.active_ea
+        save_config(self.cfg)
         self.log_clear(self._log)
-        self.run_script("run_optimization.py", self._log)
+        env_extra = {
+            "AF_ACTIVE_EA": self.active_ea,
+            "AF_EXPERT": self.cfg.get("expert", ""),
+        }
+        self.run_script("run_optimization.py", self._log, env_extra=env_extra)
 
     def _open_param_dialog(self):
         ea = getattr(self, "active_ea", self.cfg.get("active_ea", "TRB")).upper()
@@ -1800,39 +1822,6 @@ class OptimizePanel(BasePanel):
         status_lbl = make_label(footer, "", font=FB, color=C["success"])
         status_lbl.pack(side="left", padx=8)
 
-        # MT5 ENUM_TIMEFRAMES name→ID map (needed when user types "H4" etc. in the dialog)
-        _TF_IDS = {
-            "PERIOD_CURRENT": 0, "CURRENT": 0,
-            "PERIOD_M1": 1,  "M1": 1,  "PERIOD_M2": 2,  "M2": 2,
-            "PERIOD_M3": 3,  "M3": 3,  "PERIOD_M4": 4,  "M4": 4,
-            "PERIOD_M5": 5,  "M5": 5,  "PERIOD_M6": 6,  "M6": 6,
-            "PERIOD_M10": 10, "M10": 10, "PERIOD_M12": 12, "M12": 12,
-            "PERIOD_M15": 15, "M15": 15, "PERIOD_M20": 20, "M20": 20,
-            "PERIOD_M30": 30, "M30": 30,
-            "PERIOD_H1": 16385, "H1": 16385, "PERIOD_H2": 16386, "H2": 16386,
-            "PERIOD_H3": 16387, "H3": 16387, "PERIOD_H4": 16388, "H4": 16388,
-            "PERIOD_H6": 16390, "H6": 16390, "PERIOD_H8": 16392, "H8": 16392,
-            "PERIOD_H12": 16396, "H12": 16396,
-            "PERIOD_D1": 16408, "D1": 16408,
-            "PERIOD_W1": 32769, "W1": 32769,
-            "PERIOD_MN1": 49153, "MN1": 49153, "MN": 49153,
-        }
-        _TF_PARAM_NAMES = {"InpTimeframe", "Timeframe", "WorkingTimeframe", "TF"}
-
-        def _coerce_fixed_val(p_name: str, raw: str):
-            """Coerce a fixed-param string to the correct type for config.json.
-            ENUM_TIMEFRAMES params: map name → MT5 internal ID (integer).
-            Others: standard int/float parse, fallback to string."""
-            key = raw.strip().upper()
-            if p_name in _TF_PARAM_NAMES or key in _TF_IDS:
-                resolved = _TF_IDS.get(key)
-                if resolved is not None:
-                    return resolved
-            try:
-                return float(raw) if "." in raw else int(raw)
-            except ValueError:
-                return raw  # leave as string for non-numeric inputs
-
         def _save_params():
             new_fixed = {}
             new_ranges = {}
@@ -1841,8 +1830,11 @@ class OptimizePanel(BasePanel):
             for p_name, widgets in param_rows.items():
                 m = widgets["mode"].get()
                 if m == "Fixed":
-                    raw = widgets["fixed"].get().strip()
-                    new_fixed[p_name] = _coerce_fixed_val(p_name, raw)
+                    try:
+                        v = widgets["fixed"].get().strip()
+                        new_fixed[p_name] = float(v) if "." in v else int(v)
+                    except ValueError:
+                        new_fixed[p_name] = widgets["fixed"].get().strip()
                 else:
                     try:
                         st = float(widgets["start"].get().strip())

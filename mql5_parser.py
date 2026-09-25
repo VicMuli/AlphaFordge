@@ -356,47 +356,185 @@ def parse_mql5_file(mq5_path: Path, ea_name: str = "") -> Dict[str, Any]:
     }
 
 
-def get_strategy_mql5_config(ea_name: str, base_dir: Optional[Path] = None) -> Dict[str, Any]:
-    """
-    Finds the MQL5 file for `ea_name` inside `researched_strategies/<ea_name>/`
-    and parses its inputs into switchboard + parameter config.
-    """
-    if base_dir is None:
-        base_dir = SCRIPT_DIR / "researched_strategies"
-
-    ea_folder = base_dir / ea_name
-    if not ea_folder.exists() or not ea_folder.is_dir():
-        # Fallback: check if base_dir contains any folder matching ea_name case-insensitively
-        found = None
-        if base_dir.exists():
-            for d in base_dir.iterdir():
-                if d.is_dir() and d.name.lower() == ea_name.lower():
-                    found = d
-                    break
-        if found:
-            ea_folder = found
-        else:
-            ea_folder.mkdir(parents=True, exist_ok=True)
-
-    # Search for .mq5 file in folder
-    mq5_files = list(ea_folder.glob("*.mq5"))
-    if not mq5_files:
-        # Check subdirectories
-        mq5_files = list(ea_folder.rglob("*.mq5"))
-
-    if not mq5_files:
-        # If no .mq5 in folder, check if a known preset exists or create baseline
+def _parse_set_file_to_config(set_path: Path, ea_name: str) -> Dict[str, Any]:
+    """Fallback parser when only a .set file is available."""
+    try:
+        content = ""
+        for enc in ("utf-16", "utf-16-le", "utf-8", "cp1252"):
+            try:
+                content = set_path.read_text(encoding=enc)
+                break
+            except Exception:
+                continue
+        params = []
+        for line in content.splitlines():
+            line = line.strip()
+            if not line or line.startswith(";") or line.startswith("#") or "=" not in line:
+                continue
+            parts = line.split("=", 1)
+            p_name = parts[0].strip()
+            p_body = parts[1].strip()
+            is_opt = "||Y" in p_body or "||y" in p_body
+            if "||" in p_body:
+                chunks = p_body.split("||")
+                cur_val = _clean_val(chunks[0])
+                st = _clean_val(chunks[1]) if len(chunks) > 1 else cur_val
+                sp = _clean_val(chunks[2]) if len(chunks) > 2 else 1
+                so = _clean_val(chunks[3]) if len(chunks) > 3 else cur_val
+                rng = (st, sp, so)
+            else:
+                cur_val = _clean_val(p_body)
+                rng = _generate_range_for_val(cur_val)
+            params.append({
+                "name": p_name,
+                "label": re.sub(r'([A-Z])', r' \1', p_name).strip(),
+                "type": type(cur_val).__name__,
+                "category": _categorize_param(p_name, ""),
+                "mode": "optimize" if is_opt else "fixed",
+                "fixedValue": cur_val,
+                "range": {"start": rng[0], "step": rng[1], "stop": rng[2]},
+                "description": f"Parameter {p_name}"
+            })
         return {
             "ea_name": ea_name,
             "mq5_file": None,
             "indicators": [],
-            "params": [],
-            "error": f"No .mq5 file found in {ea_folder}"
+            "params": params,
+            "raw_count": len(params)
+        }
+    except Exception as e:
+        print(f"  [WARN] Failed parsing .set file: {e}")
+        return {"ea_name": ea_name, "mq5_file": None, "indicators": [], "params": [], "raw_count": 0}
+
+
+def get_strategy_mql5_config(ea_name: str, base_dir: Optional[Path] = None) -> Dict[str, Any]:
+    """
+    Finds the MQL5 file for `ea_name` inside `researched_strategies/` or `strategies/`
+    and parses its inputs into switchboard + parameter config.
+    Supports flexible matching (e.g. 'LRB' matches 'LRB V1.0').
+    """
+    clean_ea = re.sub(r'\.(ex5|mq5)$', '', ea_name, flags=re.IGNORECASE).strip().lower()
+
+    search_dirs = [
+        SCRIPT_DIR / "researched_strategies",
+        SCRIPT_DIR / "strategies",
+        SCRIPT_DIR,
+    ]
+    if base_dir:
+        search_dirs.insert(0, Path(base_dir))
+
+    matched_folder = None
+    direct_mq5 = None
+    direct_set = None
+
+    for sdir in search_dirs:
+        if not sdir.exists():
+            continue
+        # 1. Direct file search
+        for f in sdir.glob("*.mq5"):
+            f_stem = f.stem.lower()
+            if f_stem == clean_ea or f_stem.startswith(clean_ea) or clean_ea.startswith(f_stem):
+                direct_mq5 = f
+                break
+        if direct_mq5:
+            break
+
+        # 2. Folder search
+        for d in sdir.iterdir():
+            if not d.is_dir() or d.name.startswith("."):
+                continue
+            d_low = d.name.lower()
+            if d_low == clean_ea or d_low.startswith(clean_ea) or clean_ea.startswith(d_low) or clean_ea in d_low:
+                matched_folder = d
+                break
+        if matched_folder:
+            break
+
+    # Search for .mq5 file in matched folder
+    primary_mq5 = direct_mq5
+    if not primary_mq5 and matched_folder:
+        mq5_files = list(matched_folder.glob("*.mq5")) or list(matched_folder.rglob("*.mq5"))
+        if mq5_files:
+            primary_mq5 = mq5_files[0]
+        else:
+            set_files = list(matched_folder.glob("*.set")) or list(matched_folder.rglob("*.set"))
+            if set_files:
+                direct_set = set_files[0]
+
+    if primary_mq5:
+        return parse_mql5_file(primary_mq5, ea_name=ea_name)
+
+    if direct_set:
+        return _parse_set_file_to_config(direct_set, ea_name=ea_name)
+
+    # 3. HTML report fallback (e.g. HA V1.0_default.htm contains EA Inputs)
+    if matched_folder:
+        htm_files = list(matched_folder.glob("*.htm*"))
+        if htm_files:
+            try:
+                import report_analysis as ra
+                parsed_rep = ra.parse_report(htm_files[0])
+                ea_inputs = parsed_rep.get("ea_inputs", {})
+                if ea_inputs:
+                    params = []
+                    for p_name, p_val_str in ea_inputs.items():
+                        cur_val = _clean_val(p_val_str)
+                        rng = _generate_range_for_val(cur_val)
+                        is_numeric = isinstance(cur_val, (int, float)) and not isinstance(cur_val, bool)
+                        low_name = p_name.lower()
+                        is_ignored = any(ign in low_name for ign in ["magic", "slip", "depth", "comment"])
+                        is_opt = is_numeric and not is_ignored
+                        params.append({
+                            "name": p_name,
+                            "label": re.sub(r'([A-Z])', r' \1', p_name).strip(),
+                            "type": type(cur_val).__name__,
+                            "category": _categorize_param(p_name, ""),
+                            "mode": "optimize" if is_opt else "fixed",
+                            "fixedValue": cur_val,
+                            "range": {"start": rng[0], "step": rng[1], "stop": rng[2]},
+                            "description": f"Parameter {p_name}"
+                        })
+                    return {
+                        "ea_name": ea_name,
+                        "mq5_file": None,
+                        "indicators": [],
+                        "params": params,
+                        "raw_count": len(params)
+                    }
+            except Exception as ex:
+                print(f"  [INFO] HTML report input parse fallback: {ex}")
+
+    # Check KNOWN_PRESETS for fallback
+    ea_upper = ea_name.upper().split()[0]
+    if ea_upper in KNOWN_PRESETS:
+        preset = KNOWN_PRESETS[ea_upper]
+        params = []
+        for name, rng in preset.get("ranges", {}).items():
+            params.append({
+                "name": name,
+                "label": name,
+                "type": "double" if isinstance(rng[0], float) else "int",
+                "category": _categorize_param(name, ""),
+                "mode": "optimize" if name in preset.get("optimize_by_default", []) else "fixed",
+                "fixedValue": preset.get("fixed_defaults", {}).get(name, rng[0]),
+                "range": {"start": rng[0], "step": rng[1], "stop": rng[2]},
+                "description": f"Preset parameter {name}"
+            })
+        return {
+            "ea_name": ea_name,
+            "mq5_file": None,
+            "indicators": [],
+            "params": params,
+            "raw_count": len(params)
         }
 
-    # Use first matching .mq5
-    primary_mq5 = mq5_files[0]
-    return parse_mql5_file(primary_mq5, ea_name=ea_name)
+    return {
+        "ea_name": ea_name,
+        "mq5_file": None,
+        "indicators": [],
+        "params": [],
+        "error": f"No .mq5 or .set file found for strategy '{ea_name}' in workspace"
+    }
 
 
 if __name__ == "__main__":
