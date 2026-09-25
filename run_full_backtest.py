@@ -1385,12 +1385,14 @@ def main():
                 lines = f.readlines()
             with open(target_set_path, "w", encoding="utf-16") as f:
                 for line in lines:
-                    if lot_ovr and line.startswith("LotSize="):
-                        f.write(f"LotSize={lot_ovr}\n")
-                        print(f"  [OVERRIDE] LotSize = {lot_ovr}")
-                    elif risk_ovr and line.startswith("UseRiskBasedSizing="):
-                        f.write(f"UseRiskBasedSizing=1\n")
-                    elif risk_ovr and (line.startswith("RiskPercent=") or line.startswith("MonthlyDDPercent=") or line.startswith("DailyLossPercent=")):
+                    if lot_ovr and any(line.startswith(prefix) for prefix in ("LotSize=", "InpLotSize=", "FixedLotSize=", "InpFixedLotSize=")):
+                        k = line.split('=')[0]
+                        f.write(f"{k}={lot_ovr}\n")
+                        print(f"  [OVERRIDE] {k} = {lot_ovr}")
+                    elif risk_ovr and any(line.startswith(prefix) for prefix in ("UseRiskBasedSizing=", "InpUseRiskBasedSizing=")):
+                        k = line.split('=')[0]
+                        f.write(f"{k}=1\n")
+                    elif risk_ovr and any(line.startswith(prefix) for prefix in ("RiskPercent=", "InpRiskPercent=", "MonthlyDDPercent=", "DailyLossPercent=")):
                         f.write(f"{line.split('=')[0]}={risk_ovr}\n")
                         print(f"  [OVERRIDE] {line.split('=')[0]} = {risk_ovr}")
                     else:
@@ -1402,12 +1404,36 @@ def main():
     report_folder.mkdir(parents=True, exist_ok=True)
     report_name = f"Full_BT_{TARGET_CANDIDATE}"
 
-    print(f"\n  --> Launching MetaTrader 5 Full Backtest (Market: {SYMBOL_OVERRIDE})...")
+    expert_to_run = EXPERT
+    run_ini = target_cand_dir / "full_backtest" / "run.ini"
+    if not run_ini.exists():
+        run_ini = target_cand_dir / "full" / "run.ini"
+    
+    if run_ini.exists():
+        try:
+            with open(run_ini, "r", encoding="utf-8", errors="ignore") as fi:
+                for ln in fi:
+                    if ln.startswith("Expert="):
+                        expert_to_run = ln.split("=")[1].strip()
+                        break
+        except Exception:
+            pass
+    elif (target_cand_dir.parent.parent / "opt" / "optimize.ini").exists():
+        try:
+            with open(target_cand_dir.parent.parent / "opt" / "optimize.ini", "r", encoding="utf-16", errors="ignore") as fi:
+                for ln in fi:
+                    if ln.startswith("Expert="):
+                        expert_to_run = ln.split("=")[1].strip()
+                        break
+        except Exception:
+            pass
+
+    print(f"\n  --> Launching MetaTrader 5 Full Backtest (Market: {SYMBOL_OVERRIDE}, EA: {expert_to_run})...")
     try:
         report_html = run_single_backtest(
             terminal_path=TERMINAL_PATH,
             terminal_data_dir=TERMINAL_DATA_DIR,
-            expert=EXPERT,
+            expert=expert_to_run,
             set_file=temp_set_name,
             symbol=SYMBOL_OVERRIDE,
             period=PERIOD,
