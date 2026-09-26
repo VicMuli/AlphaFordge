@@ -3198,22 +3198,55 @@ class PortfolioPanel(BasePanel):
     def _add_candidate_row(self):
         n   = len(self._candidate_rows)
         cfg = self.cfg
-        runs  = get_run_dirs(cfg.get("work_dir",""))
+        wdir = cfg.get("work_dir", "")
+        runs  = get_run_dirs(wdir)
         row_f = ctk.CTkFrame(self._cand_scroll, fg_color="transparent")
         row_f.grid(row=n, column=0, sticky="ew", padx=4, pady=4)
 
-        run_e  = make_entry(row_f, "run_20260909_101955", width=210)
-        run_e.pack(side="left", padx=(0,6))
-        cand_e = make_entry(row_f, "cand_001", width=110)
-        cand_e.pack(side="left", padx=(0,6))
+        initial_run = runs[0] if runs else "run_..."
+        initial_cands = get_candidates(wdir, initial_run) if runs else []
+
+        run_var = ctk.StringVar(value=initial_run)
+        cand_var = ctk.StringVar(value=initial_cands[0] if initial_cands else "cand_001")
+
+        if runs:
+            run_w = ctk.CTkComboBox(row_f, values=runs, variable=run_var, width=220, font=FB,
+                                    fg_color=C["inp"], border_color=C["border"], button_color=C["accent"],
+                                    command=lambda choice: self._on_row_run_changed(choice, cand_w, cand_var))
+        else:
+            run_w = make_entry(row_f, "run_...", width=220)
+            run_w.insert(0, initial_run)
+
+        run_w.pack(side="left", padx=(0,6))
+
+        if initial_cands:
+            cand_w = ctk.CTkComboBox(row_f, values=initial_cands, variable=cand_var, width=130, font=FB,
+                                     fg_color=C["inp"], border_color=C["border"], button_color=C["accent"])
+        else:
+            cand_w = make_entry(row_f, "cand_001", width=130)
+            cand_w.insert(0, "cand_001")
+
+        cand_w.pack(side="left", padx=(0,6))
+
         wgt_e  = make_entry(row_f, "1.0", width=60)
+        wgt_e.insert(0, "1.0")
         wgt_e.pack(side="left", padx=(0,6))
+
         del_btn = ctk.CTkButton(row_f, text="✕", width=32, height=28,
                                 fg_color="#2d2d2d", hover_color=C["danger"],
                                 font=FB, corner_radius=6,
-                                command=lambda rf=row_f, recs=(run_e, cand_e, wgt_e): self._del_row(rf, recs))
+                                command=lambda rf=row_f, recs=(run_w, cand_w, wgt_e): self._del_row(rf, recs))
         del_btn.pack(side="left")
-        self._candidate_rows.append((row_f, run_e, cand_e, wgt_e))
+        self._candidate_rows.append((row_f, run_w, cand_w, wgt_e))
+
+    def _on_row_run_changed(self, choice, cand_widget, cand_var):
+        cfg = self.cfg
+        wdir = cfg.get("work_dir", "")
+        cands = get_candidates(wdir, choice)
+        if hasattr(cand_widget, "configure"):
+            cand_widget.configure(values=cands or ["(none found)"])
+        if cands:
+            cand_var.set(cands[0])
 
     def _del_row(self, row_frame, record):
         row_frame.destroy()
@@ -3222,15 +3255,22 @@ class PortfolioPanel(BasePanel):
 
     def _get_candidates_list(self):
         cands = []
+        cfg = self.cfg
+        wdir = cfg.get("work_dir", "")
         for _, run_e, cand_e, wgt_e in self._candidate_rows:
-            r = run_e.get().strip()
-            c = cand_e.get().strip()
-            w = wgt_e.get().strip() or "1.0"
-            if r and c:
-                item = {"run_dir": r, "candidate": c, "weight": float(w)}
-                combined_str = f"{r} {c}".lower()
+            r = run_e.get().strip() if hasattr(run_e, "get") else ""
+            c = cand_e.get().strip() if hasattr(cand_e, "get") else ""
+            w = wgt_e.get().strip() if hasattr(wgt_e, "get") else "1.0"
+            if r and c and c != "(none found)":
+                item = {"run_dir": r, "candidate": c, "weight": float(w or 1.0)}
+                rp = find_run_path(wdir, r)
+                if rp:
+                    item["run_path"] = str(rp)
+                    path_str = str(rp).lower()
+                else:
+                    path_str = f"{r} {c}".lower()
                 for mkt in ("eurjpy", "usdjpy", "gbpjpy", "audusd", "eurusd", "xauusd", "btcusd"):
-                    if mkt in combined_str:
+                    if mkt in path_str:
                         item["market"] = mkt.upper()
                         break
                 cands.append(item)

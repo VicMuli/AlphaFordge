@@ -1231,7 +1231,11 @@ def resolve_candidate_dir(base_work_dir: Path, target_run: str, target_cand: str
             except OSError:
                 pass
 
-    # 2. If target_run not found or empty / "latest", search across candidate folders
+        # If target_run was specified, do not fall back to candidates from other runs
+        print(f"[ERROR] Candidate '{target_cand}' not found in specified run '{target_run}'. Refusing to substitute from another run.")
+        return None
+
+    # 2. If target_run was NOT specified or was 'latest' / empty, search across candidate folders
     for root in roots:
         for cvar in cand_variants:
             try:

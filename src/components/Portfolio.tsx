@@ -121,11 +121,24 @@ export default function Portfolio({ config }: { config: any }) {
       .replace(/_+/g, '_')
       .replace(/^_+|_+$/g, '');
 
-    const formattedCandidates = candidateRows.map(row => ({
-      run_dir: row.runDir,
-      candidate: row.candidate,
-      weight: parseFloat(row.weight) || 1.0,
-    }));
+    const formattedCandidates = candidateRows.map(row => {
+      const runObj = runs.find(r => r.name === row.runDir || r.path === row.runDir);
+      let detectedMarket: string | undefined = undefined;
+      const combined = `${row.runDir} ${runObj?.path || ''} ${row.candidate}`.toLowerCase();
+      for (const mkt of ['eurjpy', 'usdjpy', 'gbpjpy', 'audusd', 'eurusd', 'xauusd', 'btcusd']) {
+        if (combined.includes(mkt)) {
+          detectedMarket = mkt.toUpperCase();
+          break;
+        }
+      }
+      return {
+        run_dir: row.runDir,
+        run_path: runObj?.path,
+        candidate: row.candidate,
+        weight: parseFloat(row.weight) || 1.0,
+        ...(detectedMarket ? { market: detectedMarket } : {}),
+      };
+    });
 
     runScript('build_quant_portfolio.py', {
       patch: {

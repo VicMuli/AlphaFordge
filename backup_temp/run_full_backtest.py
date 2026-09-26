@@ -20,13 +20,24 @@ This version keeps the original runner flow but fixes the reporting layer:
 The MT5 backtest execution interface is unchanged.
 """
 
+import sys
 import io
 import json
 import math
 import re
 import shutil
 import time
+from html.parser import HTMLParser
 from pathlib import Path
+
+# Prevent Windows console UnicodeEncodeError when running on cp1252 / charmap environments
+try:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
 
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
@@ -76,10 +87,12 @@ import os
 
 TARGET_RUN_DIR = 'run_20260911_094409'
 TARGET_CANDIDATE = 'cand_007'
+TARGET_SYMBOL = 'USDJPY'
 
 BT_START = os.environ.get("AF_BT_START", TRAIN_FROM)
 BT_END   = os.environ.get("AF_BT_END", HOLDOUT_TO)
 DEPOSIT_OVERRIDE = os.environ.get("AF_DEPOSIT", str(DEPOSIT))
+SYMBOL_OVERRIDE = os.environ.get("AF_SYMBOL", TARGET_SYMBOL if TARGET_SYMBOL else SYMBOL)
 
 # ===========================================================================
 # HTML / DATA HELPERS
@@ -156,20 +169,38 @@ def _find_column(columns, aliases):
     return None
 
 
-def _parse_number(value):
-    """Parse MT5 number formatting, including commas/currency/parentheses."""
+def _split_mt5_metric(val):
+    """
+    Split an MT5 metric string into (main_val, paren_val).
+    e.g. '2 853.57 (56.47%)' -> ('2 853.57', '56.47%')
+         '181 (40.49%)' -> ('181', '40.49%')
+         '6 (255.95)' -> ('6', '255.95')
+         '-2 786.67' -> ('-2 786.67', None)
+    """
+    if val is None:
+        return "", None
+    s = str(val).replace("\xa0", " ").strip()
+    m = re.match(r"^(.*?)\s*\(([^)]*)\)\s*$", s)
+    if m:
+        return m.group(1).strip(), m.group(2).strip()
+    return s, None
+
+
+def _parse_number(value, extract_paren=False):
+    """Parse MT5 number formatting, handling commas, spaces, currency, percentages, and parentheses."""
     if value is None or (isinstance(value, float) and math.isnan(value)):
         return np.nan
 
-    s = str(value).replace("\xa0", " ").strip()
-    if not s:
+    main_part, paren_part = _split_mt5_metric(value)
+    target = paren_part if extract_paren else main_part
+    if not target:
         return np.nan
 
+    s = target.replace("\xa0", " ").strip()
     negative_accounting = s.startswith("(") and s.endswith(")")
-    s = s.strip("()")
+    s = s.strip("()").replace(",", "").replace(" ", "").rstrip("%$")
 
     # Preserve decimal separator expected in MT5 reports; strip other symbols.
-    s = s.replace(",", "")
     s = re.sub(r"[^0-9.\-+eE]", "", s)
     if s in {"", ".", "-", "+", "-.", "+."}:
         return np.nan
@@ -181,333 +212,206 @@ def _parse_number(value):
         return np.nan
 
 
-def _parse_table_with_bs(soup):
-    """Fallback parser for MT5 HTML when pandas cannot recognise the table."""
-    if soup is None:
-        return []
+class _HTMLSummaryParser(HTMLParser):
+    """Pure Python HTML parser to extract all key-value summary metrics from Table 0."""
+    def __init__(self):
+        super().__init__()
+        self.summary = {}
+        self.current_cell = []
+        self.in_cell = False
+        self.last_label = None
 
-    parsed_tables = []
+    def handle_starttag(self, tag, attrs):
+        if tag.lower() in ("td", "th"):
+            self.current_cell = []
+            self.in_cell = True
 
-    for table_no, table in enumerate(soup.find_all("table")):
-        rows = table.find_all("tr")
-        if len(rows) < 2:
-            continue
+    def handle_endtag(self, tag):
+        if tag.lower() in ("td", "th") and self.in_cell:
+            text = "".join(self.current_cell).replace("\xa0", " ").strip()
+            self.current_cell = []
+            self.in_cell = False
+            if text.endswith(":"):
+                self.last_label = text[:-1].strip()
+            elif self.last_label:
+                self.summary[self.last_label] = text
+                self.last_label = None
 
-        # Search the first few rows for a genuine header containing Time + Profit.
-        header_idx = None
-        header_cells = None
-        for idx, row in enumerate(rows[:8]):
-            cells = [c.get_text(" ", strip=True) for c in row.find_all(["th", "td"])]
-            norms = [_normalise_label(c) for c in cells]
-            has_time = any(x in norms or any(a in x for a in ("time", "date")) for x in norms)
-            has_profit = any("profit" in x or x in {"p/l", "pl"} for x in norms)
-            if has_time and has_profit:
-                header_idx = idx
-                header_cells = cells
-                break
-
-        if header_idx is None:
-            continue
-
-        data = []
-        for row in rows[header_idx + 1:]:
-            cells = [c.get_text(" ", strip=True) for c in row.find_all(["td", "th"])]
-            if not cells:
-                continue
-            if len(cells) < len(header_cells):
-                cells += [""] * (len(header_cells) - len(cells))
-            data.append(cells[:len(header_cells)])
-
-        if data:
-            df = pd.DataFrame(data, columns=header_cells)
-            df.attrs["source_table"] = table_no
-            parsed_tables.append(df)
-
-    return parsed_tables
+    def handle_data(self, data):
+        if self.in_cell:
+            self.current_cell.append(data)
 
 
-def _load_html_tables(html_path: Path):
-    """Load HTML tables with pandas first, BeautifulSoup fallback second."""
-    html = _read_html_text(html_path)
-    tables = []
-
+def parse_mt5_summary_table(html_source) -> dict:
+    """Extract all summary metrics from Table 0 (Settings + Results) of MT5 HTML report."""
     try:
-        pandas_tables = pd.read_html(io.StringIO(html))
-        for i, df in enumerate(pandas_tables):
-            df = _flatten_columns(df)
-            df.attrs["source_table"] = i
-            tables.append(df)
+        if isinstance(html_source, Path):
+            html_text = _read_html_text(html_source)
+        else:
+            html_text = str(html_source)
+        from html.parser import HTMLParser as _BaseHTMLParser
+        parser = _HTMLSummaryParser()
+        parser.feed(html_text)
+        return parser.summary
     except Exception as exc:
-        print(f"      [INFO] pandas.read_html could not parse report: {exc}")
-
-    # If pandas did not give us a suitable trade table, use BS as a second parser.
-    if BeautifulSoup is not None:
-        soup = BeautifulSoup(html, "html.parser")
-        bs_tables = _parse_table_with_bs(soup)
-        if bs_tables:
-            tables.extend(bs_tables)
-
-    return tables
+        print(f"      [WARNING] Could not parse MT5 summary table: {exc}")
+        return {}
 
 
-def _looks_like_mt5_date(value) -> bool:
-    """Return True for common MT5 report date/time strings."""
-    if value is None:
-        return False
-    s = str(value).strip()
-    if not s:
-        return False
-    if not re.match(r"^\d{4}[.\-/]\d{1,2}[.\-/]\d{1,2}(?:\s|$)", s):
-        return False
-    dt = pd.to_datetime(s, errors="coerce")
-    return not pd.isna(dt)
+class _HTMLDealsExtractor(HTMLParser):
+    """
+    Pure Python HTML parser to extract the Deals section from MT5 Strategy Tester reports.
+    Table 1 contains Orders (first rows) followed by Deals (subsequent rows).
+    This parser reliably finds the Deals section header and extracts all and only Deal rows.
+    """
+    def __init__(self):
+        super().__init__()
+        self.tables = []
+        self.cur_table = None
+        self.cur_row = None
+        self.cur_cell = []
+        self.in_cell = False
+
+    def handle_starttag(self, tag, attrs):
+        if tag.lower() == "table":
+            self.cur_table = []
+            self.tables.append(self.cur_table)
+        elif tag.lower() == "tr" and self.cur_table is not None:
+            self.cur_row = []
+            self.cur_table.append(self.cur_row)
+        elif tag.lower() in ("td", "th") and self.cur_row is not None:
+            self.cur_cell = []
+            self.in_cell = True
+
+    def handle_endtag(self, tag):
+        if tag.lower() in ("td", "th") and self.in_cell:
+            self.cur_row.append("".join(self.cur_cell).strip())
+            self.cur_cell = []
+            self.in_cell = False
+        elif tag.lower() == "tr":
+            self.cur_row = None
+        elif tag.lower() == "table":
+            self.cur_table = None
+
+    def handle_data(self, data):
+        if self.in_cell:
+            self.cur_cell.append(data)
 
 
-def _extract_headered_deal_candidates(soup):
-    """Extract deal rows from normal HTML tables whose headers are identifiable."""
-    candidates = []
-    if soup is None:
-        return candidates
-    for table_no, table in enumerate(soup.find_all("table")):
-        rows = table.find_all("tr")
-        if len(rows) < 2:
-            continue
-        header_pos = None
-        headers = None
-        for idx, row in enumerate(rows[:15]):
-            cells = [c.get_text(" ", strip=True) for c in row.find_all(["th", "td"])]
-            norms = [_normalise_label(c) for c in cells]
-            has_time = any(
-                x == "time" or x.startswith("time ") or x in {"date", "datetime", "date/time"}
-                or x.startswith("date ") for x in norms
-            )
-            has_profit = any(x == "profit" or x in {"p/l", "pl"} or "profit" in x for x in norms)
-            if has_time and has_profit:
-                header_pos, headers = idx, cells
+def _extract_deals_from_html_text(html_text: str) -> tuple[list[str], list[list[str]]]:
+    """
+    Search all tables in the HTML text to find the genuine Deals header and rows.
+    Returns (headers, data_rows).
+    """
+    parser = _HTMLDealsExtractor()
+    parser.feed(html_text)
+
+    search_order = parser.tables[1:] + parser.tables[:1]
+    for table in search_order:
+        deal_header_idx = None
+        for r_idx, row in enumerate(table):
+            norms = [c.lower().replace("\xa0", " ").strip() for c in row]
+            has_time = any(c in ("time", "date", "datetime", "date/time") for c in norms)
+            has_profit = any("profit" in c for c in norms)
+            has_balance = any("balance" in c for c in norms)
+            if has_time and has_profit and has_balance and len(row) >= 5:
+                deal_header_idx = r_idx
                 break
-        if header_pos is None:
-            continue
-        data = []
-        for row in rows[header_pos + 1:]:
-            cells = [c.get_text(" ", strip=True) for c in row.find_all(["th", "td"])]
-            if not cells:
-                continue
-            if len(cells) < len(headers):
-                cells += [""] * (len(headers) - len(cells))
-            data.append(cells[:len(headers)])
-        if data:
-            candidates.append((table_no, headers, data, "headered"))
-    return candidates
+            if len(row) == 1 and norms[0] == "deals" and r_idx + 1 < len(table):
+                deal_header_idx = r_idx + 1
+                break
+
+        if deal_header_idx is not None:
+            headers = [c.strip() for c in table[deal_header_idx]]
+            time_idx = next((i for i, h in enumerate(headers) if "time" in h.lower() or "date" in h.lower()), 0)
+            data_rows = []
+            for row in table[deal_header_idx + 1:]:
+                if not row or len(row) < 3:
+                    continue
+                if len(row) == 1 and not re.match(r"^\d{4}", row[0]):
+                    break
+                time_val = row[time_idx] if time_idx < len(row) else ""
+                if not re.match(r"^\d{4}[.\-/]\d{1,2}[.\-/]\d{1,2}", time_val):
+                    continue
+                padded = list(row) + [""] * (len(headers) - len(row))
+                data_rows.append(padded[:len(headers)])
+
+            if data_rows:
+                return headers, data_rows
+
+    return [], []
 
 
-def _extract_headerless_deal_candidates(soup):
-    """Fallback parser for MT5 reports whose headers are missing or localized."""
-    candidates = []
-    if soup is None:
-        return candidates
-
-    row_groups = []
-    for table_no, table in enumerate(soup.find_all("table")):
-        rows = []
-        for row in table.find_all("tr"):
-            cells = [c.get_text(" ", strip=True) for c in row.find_all(["th", "td"])]
-            if cells:
-                rows.append(cells)
-        if rows:
-            row_groups.append((table_no, rows))
-
-    # Also scan every row globally. MT5 reports can contain nested/irregular
-    # tables where the deal rows are not exposed as one normal table.
-    all_rows = []
-    for row in soup.find_all("tr"):
-        cells = [c.get_text(" ", strip=True) for c in row.find_all(["th", "td"])]
-        if cells:
-            all_rows.append(cells)
-    if all_rows:
-        row_groups.append(("global", all_rows))
-
-    for table_no, rows in row_groups:
-        date_rows = []
-        for cells in rows:
-            date_idx = next((i for i, v in enumerate(cells) if _looks_like_mt5_date(v)), None)
-            if date_idx is not None and len(cells) >= 5:
-                date_rows.append((cells, date_idx))
-        if len(date_rows) < 3:
-            continue
-
-        max_len = max(len(cells) for cells, _ in date_rows)
-        score_by_idx = {}
-        for idx in range(max_len):
-            parsed = []
-            for cells, _ in date_rows:
-                if idx < len(cells):
-                    n = _parse_number(cells[idx])
-                    if not pd.isna(n):
-                        parsed.append(float(n))
-            if len(parsed) < max(3, int(len(date_rows) * 0.50)):
-                continue
-            mixed_sign = any(v > 0 for v in parsed) and any(v < 0 for v in parsed)
-            nonzero_ratio = sum(v != 0 for v in parsed) / len(parsed)
-            positional_bonus = {8: 1.0, 9: 1.0, 10: 5.0, 11: 1.5, 12: 0.5}.get(idx, 0.0)
-            score = (len(parsed) / len(date_rows)) * 5.0 + (2.0 if mixed_sign else 0.0)
-            score += nonzero_ratio + positional_bonus
-            score_by_idx[idx] = score
-        if not score_by_idx:
-            continue
-
-        profit_idx = max(score_by_idx, key=score_by_idx.get)
-        balance_idx = profit_idx + 1 if profit_idx + 1 < max_len else None
-        commission_idx = profit_idx - 2 if profit_idx - 2 >= 0 else None
-        swap_idx = profit_idx - 1 if profit_idx - 1 >= 0 else None
-
-        # Standard MT5 deal table usually puts Profit at column 10 and Balance at 11.
-        if max_len > 10:
-            parsed10 = []
-            for cells, _ in date_rows:
-                n = _parse_number(cells[10]) if len(cells) > 10 else np.nan
-                if not pd.isna(n):
-                    parsed10.append(float(n))
-            if len(parsed10) >= max(3, int(len(date_rows) * 0.60)):
-                mixed10 = any(v > 0 for v in parsed10) and any(v < 0 for v in parsed10)
-                if mixed10 or len(parsed10) >= len(date_rows) * 0.85:
-                    profit_idx = 10
-                    balance_idx = 11 if max_len > 11 else None
-                    commission_idx = 8 if max_len > 8 else None
-                    swap_idx = 9 if max_len > 9 else None
-
-        # Try to recover a buy/sell Type (Direction) column so Long/Short
-        # trade breakdown does not have to fall back to "N/A". MT5 deal
-        # tables commonly place this a few columns after the date/time.
-        exclude_idx = {date_idx, profit_idx, balance_idx, commission_idx, swap_idx}
-        type_idx, best_type_ratio = None, 0.0
-        for idx in range(max_len):
-            if idx in exclude_idx:
-                continue
-            values = [cells[idx].strip().lower() for cells, _ in date_rows if idx < len(cells)]
-            if not values:
-                continue
-            hits = sum(1 for v in values if "buy" in v or "sell" in v)
-            ratio = hits / len(values)
-            if ratio > 0.5 and ratio > best_type_ratio:
-                best_type_ratio = ratio
-                type_idx = idx
-
-        headers = ["Time", "Profit", "Balance", "Commission", "Swap"]
-        if type_idx is not None:
-            headers.append("Type")
-
-        data = []
-        for cells, date_idx in date_rows:
-            original = list(cells) + [""] * (max_len - len(cells))
-            row = [
-                original[date_idx],
-                original[profit_idx] if profit_idx < len(original) else "",
-                original[balance_idx] if balance_idx is not None and balance_idx < len(original) else "",
-                original[commission_idx] if commission_idx is not None and commission_idx < len(original) else "",
-                original[swap_idx] if swap_idx is not None and swap_idx < len(original) else "",
-            ]
-            if type_idx is not None:
-                row.append(original[type_idx] if type_idx < len(original) else "")
-            data.append(row)
-
-        candidates.append((table_no, headers, data,
-                          f"headerless(profit_col={profit_idx}, rows={len(data)})"))
-    return candidates
-
-
-def parse_mt5_html_for_deals(html_path: Path, deposit: float = None):
-    """Extract MT5 deal-level data, including difficult/localized report layouts."""
+def parse_mt5_html_for_deals(html_path: Path, deposit: float = None) -> pd.DataFrame | None:
+    """
+    Extract real MT5 deal-level data from the Strategy Tester HTML report.
+    Guarantees that Orders are excluded and only real Deals (with Profit & running Balance) are parsed.
+    """
     try:
         html = _read_html_text(html_path)
-        soup = BeautifulSoup(html, "html.parser") if BeautifulSoup is not None else None
-        if soup is None:
-            print("    [ERROR] BeautifulSoup is unavailable; cannot parse the MT5 report.")
+
+        # 1. Parse summary table to identify reported Initial Deposit and summary stats
+        summary_dict = parse_mt5_summary_table(html)
+        reported_dep = _parse_number(summary_dict.get("Initial Deposit"))
+        if reported_dep and not math.isnan(reported_dep) and reported_dep > 0:
+            effective_deposit = float(reported_dep)
+        elif deposit and deposit > 0:
+            effective_deposit = float(deposit)
+        else:
+            effective_deposit = float(DEPOSIT_OVERRIDE) if DEPOSIT_OVERRIDE else 2500.0
+
+        # 2. Extract Deals headers and rows
+        headers, data_rows = _extract_deals_from_html_text(html)
+
+        # Fallback to BeautifulSoup if HTMLParser found nothing
+        if not data_rows and BeautifulSoup is not None:
+            soup = BeautifulSoup(html, "html.parser")
+            for table in soup.find_all("table"):
+                rows = table.find_all("tr")
+                for r_idx, tr in enumerate(rows):
+                    cells = [c.get_text(" ", strip=True) for c in tr.find_all(["th", "td"])]
+                    norms = [_normalise_label(c) for c in cells]
+                    if any("time" in c for c in norms) and any("profit" in c for c in norms) and any("balance" in c for c in norms):
+                        headers = cells
+                        for data_tr in rows[r_idx + 1:]:
+                            dcells = [c.get_text(" ", strip=True) for c in data_tr.find_all(["td", "th"])]
+                            if dcells and re.match(r"^\d{4}[.\-/]", dcells[0]):
+                                padded = dcells + [""] * (len(headers) - len(dcells))
+                                data_rows.append(padded[:len(headers)])
+                        break
+                if data_rows:
+                    break
+
+        if not data_rows or not headers:
+            print("    [ERROR] Could not identify MT5 deal rows in the HTML report.")
             return None
 
-        candidates = _extract_headered_deal_candidates(soup)
-        if not candidates:
-            print("    [INFO] Standard MT5 headers were not detected; using raw-row fallback parser...")
-            candidates = _extract_headerless_deal_candidates(soup)
-
-        if not candidates:
-            print("    [ERROR] Could not identify MT5 deal rows (timestamp + numeric P&L data).")
+        df = pd.DataFrame(data_rows, columns=headers)
+        if df.empty:
             return None
 
-        best_df = None
-        best_score = -1
-        best_meta = None
-        for table_no, headers, rows, mode in candidates:
-            df = pd.DataFrame(rows, columns=headers)
-            if df.empty:
-                continue
-            df["Time"] = pd.to_datetime(df["Time"], errors="coerce")
-            df["Profit"] = df["Profit"].apply(_parse_number)
-            for col in ["Balance", "Commission", "Swap"]:
-                if col in df.columns:
-                    df[col] = df[col].apply(_parse_number)
-            valid = df["Time"].notna() & df["Profit"].notna()
-            valid_count = int(valid.sum())
-            if valid_count < 3:
-                continue
-            score = valid_count + min(len(df), 100) / 1000.0
-            if "Balance" in df.columns:
-                score += 10 * float(df["Balance"].notna().mean())
-            if "Commission" in df.columns:
-                score += 2
-            if "Swap" in df.columns:
-                score += 2
-            if mode == "headered":
-                score += 3
-            if score > best_score:
-                best_score = score
-                best_df = df.loc[valid].copy()
-                best_meta = (table_no, mode)
+        # Clean columns
+        df["Time"] = pd.to_datetime(df["Time"], errors="coerce")
+        df["Profit"] = df["Profit"].apply(_parse_number)
 
-        # A malformed/localized header can create a false-positive candidate.
-        # In that case, run the raw-row parser as a second pass.
-        if best_df is None or best_df.empty:
-            fallback_candidates = _extract_headerless_deal_candidates(soup)
-            if fallback_candidates:
-                best_df = None
-                best_score = -1
-                best_meta = None
-                for table_no, headers, rows, mode in fallback_candidates:
-                    fdf = pd.DataFrame(rows, columns=headers)
-                    if fdf.empty:
-                        continue
-                    fdf["Time"] = pd.to_datetime(fdf["Time"], errors="coerce")
-                    fdf["Profit"] = fdf["Profit"].apply(_parse_number)
-                    for col in ["Balance", "Commission", "Swap"]:
-                        if col in fdf.columns:
-                            fdf[col] = fdf[col].apply(_parse_number)
-                    valid = fdf["Time"].notna() & fdf["Profit"].notna()
-                    valid_count = int(valid.sum())
-                    if valid_count < 3:
-                        continue
-                    score = valid_count + (10 * float(fdf["Balance"].notna().mean()) if "Balance" in fdf.columns else 0)
-                    if score > best_score:
-                        best_score = score
-                        best_df = fdf.loc[valid].copy()
-                        best_meta = (table_no, mode)
+        for col in ["Balance", "Commission", "Swap", "Volume", "Price"]:
+            if col in df.columns:
+                df[col] = df[col].apply(_parse_number)
 
-        if best_df is None or best_df.empty:
-            print("    [ERROR] Deal rows were found, but no valid timestamp + P&L records survived parsing.")
-            print("             The MT5 HTML appears not to expose deal rows in a parseable form.")
-            print("             Save/export the tester report with the Deals section included.")
-            return None
-
-        df = best_df.sort_values("Time").reset_index(drop=True)
         if "Commission" not in df.columns:
             df["Commission"] = 0.0
         else:
             df["Commission"] = df["Commission"].fillna(0.0)
+
         if "Swap" not in df.columns:
             df["Swap"] = 0.0
         else:
             df["Swap"] = df["Swap"].fillna(0.0)
-        if "Balance" in df.columns:
-            df["Balance"] = pd.to_numeric(df["Balance"], errors="coerce")
 
+        # Filter out invalid time rows
+        df = df.dropna(subset=["Time"]).sort_values("Time").reset_index(drop=True)
+
+        # 3. Identify balance operations (deposit / withdrawal / credit)
         if "Type" in df.columns:
             type_text = df["Type"].astype(str).str.lower()
             df["IsBalanceOperation"] = type_text.str.contains(
@@ -516,62 +420,45 @@ def parse_mt5_html_for_deals(html_path: Path, deposit: float = None):
         else:
             df["IsBalanceOperation"] = False
 
-        # Heuristic safety net: every MT5 tester report opens with an initial
-        # deposit/balance entry. When the report's Type/Direction column was
-        # not captured (this happens routinely with the headerless fallback
-        # parser, which only recovers Time/Profit/Balance/Commission/Swap),
-        # that deposit row is otherwise indistinguishable from a real trade
-        # and silently inflates Gross Profit, Profit Factor, Largest Profit
-        # Trade, consecutive-win streaks, and the first month of the heatmap
-        # by the full deposit amount. Flag it explicitly: it is always the
-        # very first chronological entry and its Profit is numerically equal
-        # to the account's starting deposit.
-        if DEPOSIT_OVERRIDE:
-            first_time = df["Time"].min()
-            is_first_row = df["Time"] == first_time
-            matches_deposit = np.isclose(df["Profit"].fillna(0.0), float(DEPOSIT_OVERRIDE), atol=0.01)
-            newly_flagged = int((is_first_row & matches_deposit & ~df["IsBalanceOperation"]).sum())
-            df.loc[is_first_row & matches_deposit, "IsBalanceOperation"] = True
-            if newly_flagged:
-                print(f"       Detected and excluded {newly_flagged} initial deposit row(s) "
-                      f"(Profit == deposit of {float(DEPOSIT_OVERRIDE):,.2f}) that were not tagged as a balance operation.")
+        # In MT5, row 0 is almost universally the starting balance/deposit
+        if len(df) > 0:
+            row0_dir = str(df.iloc[0].get("Direction", "")).strip().lower() if "Direction" in df.columns else ""
+            row0_profit = df["Profit"].iloc[0]
+            if (row0_dir in ("", "nan", "none") and pd.notna(row0_profit) and row0_profit > 0) or str(df.iloc[0].get("Type", "")).lower() == "balance":
+                df.loc[df.index == 0, "IsBalanceOperation"] = True
+                if effective_deposit == 0 or effective_deposit == 2500.0:
+                    effective_deposit = float(row0_profit)
 
-        # Build net per-row P&L before creating the stored trade dataframe.
-        df["NetTradePnl"] = df["Profit"] + df["Commission"] + df["Swap"]
+        # 4. Running balance from MT5 or reconstruction
+        balance_reconstructed = False
+        if "Balance" in df.columns and df["Balance"].notna().sum() >= 2:
+            df["Balance"] = pd.to_numeric(df["Balance"], errors="coerce").ffill()
+            first_bal = df["Balance"].iloc[0]
+            if pd.notna(first_bal) and float(first_bal) > 0:
+                effective_deposit = float(first_bal)
+        else:
+            net_change = (df["Profit"].fillna(0.0) + df["Commission"] + df["Swap"]).where(~df["IsBalanceOperation"], 0.0)
+            df["Balance"] = effective_deposit + net_change.cumsum()
+            balance_reconstructed = True
+
+        # Build NetTradePnl per row
+        df["NetTradePnl"] = df["Profit"].fillna(0.0) + df["Commission"] + df["Swap"]
 
         trade_df = df.loc[~df["IsBalanceOperation"]].copy()
         if trade_df.empty:
             trade_df = df.copy()
 
-        balance_usable = False
-        if "Balance" in df.columns:
-            finite_balance = df["Balance"].replace([np.inf, -np.inf], np.nan).dropna()
-            if len(finite_balance) >= 3:
-                pnl_movement = (df["Profit"] + df["Commission"] + df["Swap"]).abs().sum()
-                balance_movement = finite_balance.max() - finite_balance.min()
-                balance_usable = bool(balance_movement > 0 or pnl_movement == 0)
-
-        if balance_usable:
-            df["Balance"] = df["Balance"].ffill()
-            balance_reconstructed = False
-        else:
-            net_change = df["Profit"].fillna(0.0) + df["Commission"] + df["Swap"]
-            df["Balance"] = float(DEPOSIT_OVERRIDE) + net_change.cumsum()
-            balance_reconstructed = True
-
         df.attrs["trade_df"] = trade_df
         df.attrs["balance_reconstructed"] = balance_reconstructed
-        df.attrs["source_table"] = best_meta[0]
-        df.attrs["parser_mode"] = best_meta[1]
+        df.attrs["effective_deposit"] = effective_deposit
         df.attrs["parsed_rows"] = len(df)
+        df.attrs["raw_summary"] = summary_dict
 
-        print(f"    -> MT5 deal data identified via {best_meta[1]} parser (table {best_meta[0]}); parsed {len(df):,} rows.")
-        if balance_reconstructed:
-            print("       Balance reconstructed from Profit + Commission + Swap.")
-        else:
-            print("       Using MT5-reported Balance values for drawdown/equity calculations.")
-        print(f"       Date range: {df['Time'].min()} -> {df['Time'].max()} | P&L range: {df['Profit'].min():,.2f} -> {df['Profit'].max():,.2f}")
+        print(f"    -> MT5 deal data identified successfully; parsed {len(df):,} deal rows.")
+        print(f"       Effective Deposit: ${effective_deposit:,.2f} | Running Balance: ${df['Balance'].iloc[0]:,.2f} -> ${df['Balance'].iloc[-1]:,.2f}")
+        print(f"       Date range: {df['Time'].min()} -> {df['Time'].max()} | Deals Net P&L: ${df.loc[~df['IsBalanceOperation'], 'NetTradePnl'].sum():,.2f}")
         return df
+
     except Exception as exc:
         print(f"    [ERROR] Failed parsing MT5 HTML deal data: {exc}")
         return None
@@ -589,7 +476,7 @@ def _get_trade_rows(deals_df: pd.DataFrame) -> pd.DataFrame:
     trade_df = deals_df.attrs.get("trade_df")
     if isinstance(trade_df, pd.DataFrame) and not trade_df.empty:
         return trade_df.copy()
-    return deals_df.copy()
+    return deals_df.loc[~deals_df.get("IsBalanceOperation", False)].copy() if "IsBalanceOperation" in deals_df.columns else deals_df.copy()
 
 
 def calculate_derived_metrics(deals_df: pd.DataFrame, deposit: float) -> dict:
@@ -598,25 +485,33 @@ def calculate_derived_metrics(deals_df: pd.DataFrame, deposit: float) -> dict:
     if deals_df is None or deals_df.empty:
         return result
 
+    effective_deposit = float(deals_df.attrs.get("effective_deposit", deposit))
     df = deals_df.sort_values("Time").copy()
     trades = _get_trade_rows(df).sort_values("Time").copy()
-    pnl_all = pd.to_numeric(trades["NetTradePnl"], errors="coerce").fillna(0.0)
 
-    # MT5 can export opening and closing deals as separate rows. Opening rows
-    # commonly have zero Profit, so result/trade statistics use non-zero P&L
-    # rows. The official MT5 Total Trades figure is preferred in the document
-    # when report_analysis.analyze() successfully provides it.
-    nonzero_mask = pnl_all != 0.0
-    pnl = pnl_all[nonzero_mask].reset_index(drop=True)
+    # Identify completed/closed trades:
+    # In MT5 Deals, Direction == 'out' (or 'in/out') represents closed trades.
+    if "Direction" in trades.columns:
+        dir_series = trades["Direction"].astype(str).str.lower()
+        closed_trades = trades.loc[dir_series.isin(["out", "in/out"])].copy()
+        if closed_trades.empty:
+            closed_trades = trades.loc[trades["NetTradePnl"] != 0.0].copy()
+    else:
+        closed_trades = trades.loc[trades["NetTradePnl"] != 0.0].copy()
 
-    # Account-level P&L.
+    if closed_trades.empty:
+        closed_trades = trades.copy()
+
+    pnl = pd.to_numeric(closed_trades["NetTradePnl"], errors="coerce").fillna(0.0).reset_index(drop=True)
+
+    # Account-level P&L from balance
     balance = pd.to_numeric(df["Balance"], errors="coerce").dropna()
     if not balance.empty:
-        total_net_profit = float(balance.iloc[-1] - deposit)
+        total_net_profit = float(balance.iloc[-1] - effective_deposit)
     else:
-        total_net_profit = float(pnl.sum())
+        total_net_profit = float(trades["NetTradePnl"].sum())
 
-    # Balance drawdown from the actual balance curve.
+    # Balance drawdown from the actual MT5 balance curve
     equity = pd.to_numeric(df["Balance"], errors="coerce").to_numpy(dtype=float)
     peak = np.maximum.accumulate(equity)
     dd = peak - equity
@@ -627,14 +522,13 @@ def calculate_derived_metrics(deals_df: pd.DataFrame, deposit: float) -> dict:
 
     positive = pnl[pnl > 0]
     negative = pnl[pnl < 0]
-    breakeven = pnl[pnl == 0]
 
     gross_profit = float(positive.sum())
     gross_loss = float(negative.sum())
     profit_factor = gross_profit / abs(gross_loss) if gross_loss < 0 else float("inf")
     recovery_factor = total_net_profit / max_dd if max_dd > 0 else float("inf")
 
-    # Consecutive results.
+    # Consecutive results
     max_wins = max_losses = 0
     cur_wins = cur_losses = 0
     for value in pnl:
@@ -649,11 +543,11 @@ def calculate_derived_metrics(deals_df: pd.DataFrame, deposit: float) -> dict:
         else:
             cur_wins = cur_losses = 0
 
-    total_trades_from_deals = int(len(pnl))
+    total_trades_count = int(len(pnl))
 
-    # Daily account returns for a defensible Sharpe fallback.
+    # Daily account returns for Sharpe
     daily = df.groupby(df["Time"].dt.date)["NetTradePnl"].sum()
-    daily_returns = daily / float(deposit) if deposit else pd.Series(dtype=float)
+    daily_returns = daily / effective_deposit if effective_deposit else pd.Series(dtype=float)
     if len(daily_returns) >= 2 and daily_returns.std(ddof=1) > 0:
         sharpe = float((daily_returns.mean() / daily_returns.std(ddof=1)) * math.sqrt(252))
     else:
@@ -661,8 +555,9 @@ def calculate_derived_metrics(deals_df: pd.DataFrame, deposit: float) -> dict:
 
     result.update(
         {
+            "effective_deposit": effective_deposit,
             "total_net_profit": total_net_profit,
-            "profit_pct": (total_net_profit / deposit * 100.0) if deposit else 0.0,
+            "profit_pct": (total_net_profit / effective_deposit * 100.0) if effective_deposit else 0.0,
             "max_dd": max_dd,
             "max_dd_pct": dd_pct_at_peak,
             "profit_factor": profit_factor,
@@ -670,7 +565,7 @@ def calculate_derived_metrics(deals_df: pd.DataFrame, deposit: float) -> dict:
             "sharpe": sharpe,
             "gross_profit": gross_profit,
             "gross_loss": gross_loss,
-            "total_trades": total_trades_from_deals,
+            "total_trades": total_trades_count,
             "profit_trades": int((pnl > 0).sum()),
             "loss_trades": int((pnl < 0).sum()),
             "breakeven_trades": int((pnl == 0).sum()),
@@ -685,7 +580,7 @@ def calculate_derived_metrics(deals_df: pd.DataFrame, deposit: float) -> dict:
         }
     )
 
-    # Holding time from position IDs when available.
+    # Holding time from position IDs when available
     if "Position" in trades.columns:
         holding = []
         grouped = trades.groupby("Position", dropna=True)
@@ -698,16 +593,10 @@ def calculate_derived_metrics(deals_df: pd.DataFrame, deposit: float) -> dict:
             result["max_hold"] = max(holding)
             result["avg_hold"] = float(np.mean(holding))
 
-    # Long/short breakdown when Direction or Type is present.
-    dir_col = "Direction" if "Direction" in trades.columns else ("Type" if "Type" in trades.columns else None)
+    # Long/short breakdown when Direction or Type is present
+    dir_col = "Direction" if "Direction" in closed_trades.columns else ("Type" if "Type" in closed_trades.columns else None)
     if dir_col:
-        # `pnl` was filtered to non-zero rows and reset to a 0..n-1 index, so
-        # the label series must go through the exact same filter + reset
-        # before it can be used as a boolean mask against `pnl` — otherwise
-        # pandas raises "Unalignable boolean Series" because the two series
-        # carry different index values.
-        labels = trades[dir_col].astype(str).str.lower()
-        labels = labels[nonzero_mask].reset_index(drop=True)
+        labels = closed_trades[dir_col].astype(str).str.lower().reset_index(drop=True)
         for side, aliases in [("long", ("buy", "long")), ("short", ("sell", "short"))]:
             mask = labels.apply(lambda x: any(a in x for a in aliases))
             if mask.any():
@@ -732,21 +621,22 @@ def _flatten_metric_dict(obj):
     return flat
 
 
-def extract_metric(raw_metrics: dict, aliases, default=0.0):
-    """Case-insensitive metric lookup supporting nested analyze() output."""
+def extract_metric(raw_metrics: dict, aliases, default=0.0, is_pct=False):
+    """Case-insensitive metric lookup supporting nested analyze() output and parenthesized values."""
     flat = _flatten_metric_dict(raw_metrics)
     norm_map = {_normalise_label(k): v for k, v in flat.items()}
     aliases_norm = [_normalise_label(a) for a in aliases]
 
     for alias in aliases_norm:
         if alias in norm_map:
-            n = _parse_number(norm_map[alias])
-            return float(n) if not pd.isna(n) else default
+            n = _parse_number(norm_map[alias], extract_paren=is_pct)
+            if not pd.isna(n):
+                return float(n)
 
     for alias in aliases_norm:
         for key, value in norm_map.items():
             if alias in key or key in alias:
-                n = _parse_number(value)
+                n = _parse_number(value, extract_paren=is_pct)
                 if not pd.isna(n):
                     return float(n)
 
@@ -754,17 +644,22 @@ def extract_metric(raw_metrics: dict, aliases, default=0.0):
 
 
 def extract_string(raw_metrics: dict, aliases, default="N/A"):
+    """Case-insensitive string lookup supporting nested analyze() output."""
     flat = _flatten_metric_dict(raw_metrics)
     norm_map = {_normalise_label(k): v for k, v in flat.items()}
     aliases_norm = [_normalise_label(a) for a in aliases]
 
     for alias in aliases_norm:
         if alias in norm_map:
-            return str(norm_map[alias])
+            val = str(norm_map[alias]).strip()
+            if val and val != "nan":
+                return val
     for alias in aliases_norm:
         for key, value in norm_map.items():
             if alias in key or key in alias:
-                return str(value)
+                val = str(value).strip()
+                if val and val != "nan":
+                    return val
     return default
 
 
@@ -789,6 +684,7 @@ def generate_equity_charts(deals_df: pd.DataFrame, deposit: float, output_dir: P
 
     try:
         df = deals_df.sort_values("Time").copy()
+        effective_dep = float(deals_df.attrs.get("effective_deposit", deposit))
 
         times = pd.to_datetime(df["Time"], errors="coerce")
         balance = pd.to_numeric(df["Balance"], errors="coerce")
@@ -811,22 +707,20 @@ def generate_equity_charts(deals_df: pd.DataFrame, deposit: float, output_dir: P
             print("    [WARNING] No finite balance series remains after cleaning; charts cannot be generated.")
             return paths
 
-        cumulative_profit = numeric_balance - float(deposit)
+        cumulative_profit = numeric_balance - effective_dep
         pct_gain = (
-            cumulative_profit / float(deposit) * 100.0
-            if deposit
+            cumulative_profit / effective_dep * 100.0
+            if effective_dep
             else np.zeros_like(cumulative_profit)
         )
 
-        # Matplotlib 3.9+ removed pyplot.plot_date().
-        # pyplot.plot() is the supported replacement and handles datetime x-values.
         x = times.to_numpy()
 
         # 1. Total dollar P/L
         try:
             plt.figure(figsize=(10.5, 5.2))
-            plt.plot(x, cumulative_profit, "-", linewidth=1.5)
-            plt.axhline(0, linestyle="--", linewidth=1.0)
+            plt.plot(x, cumulative_profit, "-", linewidth=1.5, color="#1976D2")
+            plt.axhline(0, color="gray", linestyle="--", linewidth=1.0)
             plt.title("Total Profit / Loss ($)", fontsize=12, fontweight="bold")
             plt.xlabel("Time")
             plt.ylabel("Profit ($)")
@@ -844,16 +738,17 @@ def generate_equity_charts(deals_df: pd.DataFrame, deposit: float, output_dir: P
         # 2. Balance / equity growth
         try:
             plt.figure(figsize=(10.5, 5.2))
-            plt.plot(x, numeric_balance, "-", linewidth=1.5, label="Balance")
+            plt.plot(x, numeric_balance, "-", linewidth=1.5, color="#2E7D32", label="Balance")
             plt.axhline(
-                float(deposit),
+                effective_dep,
+                color="gray",
                 linestyle="--",
                 linewidth=1.0,
-                label="Initial Deposit",
+                label=f"Initial Deposit (${effective_dep:,.0f})",
             )
             plt.title("Equity / Balance Growth", fontsize=12, fontweight="bold")
             plt.xlabel("Time")
-            plt.ylabel("Account Balance")
+            plt.ylabel("Account Balance ($)")
             plt.legend()
             ax = plt.gca()
             locator = mdates.AutoDateLocator()
@@ -869,8 +764,8 @@ def generate_equity_charts(deals_df: pd.DataFrame, deposit: float, output_dir: P
         # 3. Percentage gain/loss
         try:
             plt.figure(figsize=(10.5, 5.2))
-            plt.plot(x, pct_gain, "-", linewidth=1.5)
-            plt.axhline(0, linestyle="--", linewidth=1.0)
+            plt.plot(x, pct_gain, "-", linewidth=1.5, color="#E65100")
+            plt.axhline(0, color="gray", linestyle="--", linewidth=1.0)
             plt.title("Percentage Gain / Loss (%)", fontsize=12, fontweight="bold")
             plt.xlabel("Time")
             plt.ylabel("Gain (%)")
@@ -891,11 +786,13 @@ def generate_equity_charts(deals_df: pd.DataFrame, deposit: float, output_dir: P
 
     return paths
 
+
 def generate_monthly_heatmap(deals_df: pd.DataFrame, deposit: float, output_dir: Path):
     """Generate a graphical monthly P&L heatmap and return its path + pivot."""
     if deals_df is None or deals_df.empty:
         return None, None
 
+    effective_dep = float(deals_df.attrs.get("effective_deposit", deposit))
     trades = _get_trade_rows(deals_df).copy()
     if trades.empty:
         return None, None
@@ -905,8 +802,6 @@ def generate_monthly_heatmap(deals_df: pd.DataFrame, deposit: float, output_dir:
     monthly = trades.groupby(["Year", "Month"])["NetTradePnl"].sum().unstack(fill_value=0)
     monthly = monthly.sort_index()
 
-    # Ensure all months are present in the plot. Column 12 (index 12) holds
-    # the year-end total, appended after December.
     all_years = list(monthly.index)
     matrix = np.zeros((len(all_years), 13), dtype=float)
     for r, year in enumerate(all_years):
@@ -916,8 +811,6 @@ def generate_monthly_heatmap(deals_df: pd.DataFrame, deposit: float, output_dir:
         matrix[r, 12] = matrix[r, :12].sum()
 
     fig, ax = plt.subplots(figsize=(13.4, max(3.2, 1.0 + 0.55 * len(all_years))))
-    # Color scale is based on the monthly cells only, so a large year total
-    # doesn't wash out the month-to-month color contrast.
     vmax = float(np.max(np.abs(matrix[:, :12]))) if matrix.size else 1.0
     if vmax == 0:
         vmax = 1.0
@@ -932,17 +825,16 @@ def generate_monthly_heatmap(deals_df: pd.DataFrame, deposit: float, output_dir:
     ax.set_ylabel("Year")
     ax.set_title("Monthly Performance Heatmap", fontsize=13, fontweight="bold")
 
-    # Vertical divider between the monthly cells and the year-end Total column.
     ax.axvline(11.5, color="black", linewidth=1.2)
 
     for r in range(matrix.shape[0]):
         for c in range(12):
             value = matrix[r, c]
-            pct = (value / deposit * 100.0) if deposit else 0.0
+            pct = (value / effective_dep * 100.0) if effective_dep else 0.0
             ax.text(c, r, f"${value:,.0f}\n{pct:+.1f}%", ha="center", va="center", fontsize=8)
 
         total_value = matrix[r, 12]
-        total_pct = (total_value / deposit * 100.0) if deposit else 0.0
+        total_pct = (total_value / effective_dep * 100.0) if effective_dep else 0.0
         ax.add_patch(plt.Rectangle((11.5, r - 0.5), 1.0, 1.0, facecolor="#f0f0f0", edgecolor="black", linewidth=0.5))
         ax.text(12, r, f"${total_value:,.0f}\n{total_pct:+.1f}%", ha="center", va="center",
                 fontsize=8, fontweight="bold",
@@ -1021,46 +913,83 @@ def create_full_backtest_word_doc(
 
     derived = calculate_derived_metrics(deals_df, deposit) if deals_df is not None else {}
 
-    # Start with report_analysis values, then prefer reliable deal-derived values.
-    # This prevents zeros from an incomplete summary parser from overwriting actual data.
-    total_net_profit = derived.get("total_net_profit", extract_metric(raw_metrics, ["Total Net Profit", "Net Profit"]))
-    profit_pct = derived.get("profit_pct", (total_net_profit / deposit * 100.0 if deposit else 0.0))
-    max_dd = derived.get("max_dd", extract_metric(raw_metrics, ["Balance Drawdown Maximal", "Max Drawdown", "Drawdown"]))
-    max_dd_pct = derived.get("max_dd_pct", 0.0)
-    pf = derived.get("profit_factor", extract_metric(raw_metrics, ["Profit Factor", "PF"]))
-    rf = derived.get("recovery_factor", extract_metric(raw_metrics, ["Recovery Factor", "RF"]))
-    sharpe = extract_metric(raw_metrics, ["Sharpe Ratio", "Sharpe"], default=derived.get("sharpe", 0.0))
+    # Determine effective initial deposit from report or deals
+    rep_deposit = extract_metric(raw_metrics, ["Initial Deposit", "Deposit"])
+    if rep_deposit and rep_deposit > 0:
+        actual_deposit = rep_deposit
+    elif deals_df is not None and "effective_deposit" in deals_df.attrs:
+        actual_deposit = float(deals_df.attrs["effective_deposit"])
+    elif deposit and deposit > 0:
+        actual_deposit = float(deposit)
+    else:
+        actual_deposit = 2500.0
 
-    summary_total_trades = extract_metric(raw_metrics, ["Total Trades", "Trades"], default=0.0)
-    summary_profit_trades = extract_metric(raw_metrics, ["Profit Trades (% of total)", "Profit Trades", "Winning Trades"], default=0.0)
-    summary_loss_trades = extract_metric(raw_metrics, ["Loss trades (% of total)", "Loss Trades", "Losing Trades"], default=0.0)
+    # Helper function to get metric: check raw_metrics (HTML table) FIRST, fallback to derived
+    def get_stat(aliases, derived_key=None, default=0.0, is_pct=False):
+        val = extract_metric(raw_metrics, aliases, default=None, is_pct=is_pct)
+        if val is not None and not (isinstance(val, float) and math.isnan(val)):
+            return val
+        if derived_key and derived_key in derived:
+            dval = derived[derived_key]
+            if dval is not None and not (isinstance(dval, float) and math.isnan(dval)):
+                return dval
+        return default
 
-    # Prefer the official summary count for Total Trades because MT5 can expose
-    # separate opening/closing deal rows. Fall back to parsed deal results only
-    # when the summary parser did not provide a usable count.
-    total_trades = int(round(summary_total_trades)) if summary_total_trades > 0 else int(derived.get("total_trades", 0))
-    profit_trades = int(round(summary_profit_trades)) if summary_profit_trades > 0 else int(derived.get("profit_trades", 0))
-    loss_trades = int(round(summary_loss_trades)) if summary_loss_trades > 0 else int(derived.get("loss_trades", 0))
+    # 1. Official Summary Metrics from MT5 HTML Report (highest priority)
+    total_net_profit = get_stat(["Total Net Profit", "Net Profit"], derived_key="total_net_profit", default=0.0)
+    profit_pct = (total_net_profit / actual_deposit * 100.0) if actual_deposit else 0.0
+
+    max_dd = get_stat(["Balance Drawdown Maximal", "Max Drawdown", "Maximal Drawdown", "Drawdown"], derived_key="max_dd", default=0.0, is_pct=False)
+    max_dd_pct = get_stat(["Balance Drawdown Maximal", "Max Drawdown %", "Balance Drawdown Relative"], derived_key="max_dd_pct", default=0.0, is_pct=True)
+
+    pf = get_stat(["Profit Factor", "PF"], derived_key="profit_factor", default=0.0)
+    rf = get_stat(["Recovery Factor", "RF"], derived_key="recovery_factor", default=0.0)
+    sharpe = get_stat(["Sharpe Ratio", "Sharpe"], derived_key="sharpe", default=0.0)
+
+    total_trades = int(round(get_stat(["Total Trades", "Trades"], derived_key="total_trades", default=0.0)))
+    profit_trades = int(round(get_stat(["Profit Trades (% of total)", "Profit Trades", "Winning Trades"], derived_key="profit_trades", default=0.0, is_pct=False)))
+    profit_trades_pct = get_stat(["Profit Trades (% of total)", "Profit Trades %", "Win Rate %", "Win Rate"], default=(profit_trades / total_trades * 100.0 if total_trades else 0.0), is_pct=True)
+
+    loss_trades = int(round(get_stat(["Loss trades (% of total)", "Loss Trades", "Losing Trades"], derived_key="loss_trades", default=0.0, is_pct=False)))
+    loss_trades_pct = get_stat(["Loss trades (% of total)", "Loss Trades %"], default=(loss_trades / total_trades * 100.0 if total_trades else 0.0), is_pct=True)
+
     breakeven_trades = max(0, total_trades - profit_trades - loss_trades)
 
-    raw_win_rate = extract_metric(raw_metrics, ["Win Rate", "Profit Trades %"], default=0.0)
-    profit_trades_pct = (profit_trades / total_trades * 100.0) if total_trades else raw_win_rate
-    loss_trades_pct = (loss_trades / total_trades * 100.0) if total_trades else extract_metric(raw_metrics, ["Loss Trades %"], default=0.0)
+    avg_win = get_stat(["Average profit trade", "Average Profit", "Average Win"], derived_key="avg_win", default=0.0)
+    avg_loss = get_stat(["Average loss trade", "Average Loss"], derived_key="avg_loss", default=0.0)
+    max_win = get_stat(["Largest profit trade", "Largest Profit"], derived_key="largest_profit", default=0.0)
+    max_loss = get_stat(["Largest loss trade", "Largest Loss"], derived_key="largest_loss", default=0.0)
 
-    avg_win = derived.get("avg_win", extract_metric(raw_metrics, ["Average profit trade", "Average Profit"]))
-    avg_loss = derived.get("avg_loss", extract_metric(raw_metrics, ["Average loss trade", "Average Loss"]))
-    max_win = derived.get("largest_profit", extract_metric(raw_metrics, ["Largest profit trade", "Largest Profit"]))
-    max_loss = derived.get("largest_loss", extract_metric(raw_metrics, ["Largest loss trade", "Largest Loss"]))
+    consec_wins = int(round(get_stat(["Maximum consecutive wins ($)", "Maximum consecutive wins", "Max consec wins"], derived_key="max_consecutive_wins", default=0.0)))
+    consec_losses = int(round(get_stat(["Maximum consecutive losses ($)", "Maximum consecutive losses", "Max consec losses"], derived_key="max_consecutive_losses", default=0.0)))
 
-    consec_wins = derived.get("max_consecutive_wins", extract_metric(raw_metrics, ["Maximum consecutive wins", "Max consec wins"]))
-    consec_losses = derived.get("max_consecutive_losses", extract_metric(raw_metrics, ["Maximum consecutive losses", "Max consec losses"]))
+    gross_profit = get_stat(["Gross Profit"], derived_key="gross_profit", default=0.0)
+    gross_loss = get_stat(["Gross Loss"], derived_key="gross_loss", default=0.0)
 
-    long_text = "N/A"
-    short_text = "N/A"
-    if "long_count" in derived:
+    # Long / short text
+    long_raw = extract_string(raw_metrics, ["Long Trades (won %)", "Long Trades"])
+    short_raw = extract_string(raw_metrics, ["Short Trades (won %)"])
+    if long_raw and long_raw != "N/A":
+        m = re.match(r"^(\d+)\s*\(([^)]*)\)", long_raw)
+        if m:
+            long_text = f"{m.group(1)} ({m.group(2)} won)"
+        else:
+            long_text = long_raw
+    elif "long_count" in derived:
         long_text = f"{derived['long_count']} ({derived['long_win_rate']:.2f}% won)"
-    if "short_count" in derived:
+    else:
+        long_text = "N/A"
+
+    if short_raw and short_raw != "N/A":
+        m = re.match(r"^(\d+)\s*\(([^)]*)\)", short_raw)
+        if m:
+            short_text = f"{m.group(1)} ({m.group(2)} won)"
+        else:
+            short_text = short_raw
+    elif "short_count" in derived:
         short_text = f"{derived['short_count']} ({derived['short_win_rate']:.2f}% won)"
+    else:
+        short_text = "N/A"
 
     start_dt = pd.to_datetime(BT_START)
     end_dt = pd.to_datetime(BT_END)
@@ -1071,13 +1000,23 @@ def create_full_backtest_word_doc(
     avg_prof_month = avg_prof_day * 30.44
     avg_prof_year = avg_prof_day * 365.25
 
-    min_hold = _seconds_to_duration(derived.get("min_hold")) if "min_hold" in derived else extract_string(raw_metrics, ["Minimal position holding time"])
-    max_hold = _seconds_to_duration(derived.get("max_hold")) if "max_hold" in derived else extract_string(raw_metrics, ["Maximal position holding time"])
-    avg_hold = _seconds_to_duration(derived.get("avg_hold")) if "avg_hold" in derived else extract_string(raw_metrics, ["Average position holding time"])
+    min_hold = extract_string(raw_metrics, ["Minimal position holding time"])
+    if not min_hold or min_hold == "N/A":
+        min_hold = _seconds_to_duration(derived.get("min_hold"))
+
+    max_hold = extract_string(raw_metrics, ["Maximal position holding time"])
+    if not max_hold or max_hold == "N/A":
+        max_hold = _seconds_to_duration(derived.get("max_hold"))
+
+    avg_hold = extract_string(raw_metrics, ["Average position holding time"])
+    if not avg_hold or avg_hold == "N/A":
+        avg_hold = _seconds_to_duration(derived.get("avg_hold"))
 
     # 1. Performance overview
     doc.add_heading("1. Performance Overview", level=1)
+    tested_symbol = extract_string(raw_metrics, ["Symbol", "Market", "Symbol / Market"], default=str(SYMBOL_OVERRIDE))
     rows = [
+        ("Market / Symbol", tested_symbol),
         ("Profit / Loss ($)", _fmt_money(total_net_profit)),
         ("Profit / Loss (%)", _fmt_pct(profit_pct)),
         ("Max Balance Drawdown", _fmt_money(max_dd)),
@@ -1109,8 +1048,8 @@ def create_full_backtest_word_doc(
         ("Average Loss per Trade", _fmt_money(avg_loss)),
         ("Largest Profit Trade", _fmt_money(max_win)),
         ("Largest Loss Trade", _fmt_money(max_loss)),
-        ("Gross Profit", _fmt_money(derived.get("gross_profit", extract_metric(raw_metrics, ["Gross Profit"])) )),
-        ("Gross Loss", _fmt_money(derived.get("gross_loss", extract_metric(raw_metrics, ["Gross Loss"])) )),
+        ("Gross Profit", _fmt_money(gross_profit)),
+        ("Gross Loss", _fmt_money(gross_loss)),
     ]
     table = doc.add_table(rows=0, cols=2)
     table.style = "Table Grid"
@@ -1166,7 +1105,7 @@ def create_full_backtest_word_doc(
             for month_no in range(1, 13):
                 value = float(monthly_profit.loc[year, month_no]) if month_no in monthly_profit.columns else 0.0
                 year_total += value
-                pct = value / deposit * 100.0 if deposit else 0.0
+                pct = value / actual_deposit * 100.0 if actual_deposit else 0.0
                 _set_cell_text(cells[month_no], f"${value:,.0f}\n({pct:+.1f}%)")
                 for p in cells[month_no].paragraphs:
                     for run in p.runs:
@@ -1175,7 +1114,7 @@ def create_full_backtest_word_doc(
                         elif value < 0:
                             run.font.color.rgb = RGBColor(192, 0, 0)
 
-            year_pct = year_total / deposit * 100.0 if deposit else 0.0
+            year_pct = year_total / actual_deposit * 100.0 if actual_deposit else 0.0
             _set_cell_text(cells[13], f"${year_total:,.0f}\n({year_pct:+.1f}%)", bold=True)
             for p in cells[13].paragraphs:
                 for run in p.runs:
@@ -1207,9 +1146,10 @@ def create_full_backtest_word_doc(
     reconstructed = bool(deals_df.attrs.get("balance_reconstructed", False)) if deals_df is not None else False
     notes = [
         f"Parsed MT5 deal rows: {parsed_rows:,}.",
+        f"Initial Deposit: ${actual_deposit:,.2f}.",
         f"Balance source: {'reconstructed from Profit + Commission + Swap' if reconstructed else 'MT5-reported Balance column'}.",
-        "Max drawdown is calculated from the chronological balance curve as peak balance minus subsequent trough balance.",
-        "Trade statistics are calculated from parsed trading rows and therefore do not depend solely on the MT5 summary table parser.",
+        "Performance overview and trade breakdown metrics reflect official MT5 Strategy Tester report summary values.",
+        "Equity and percentage curves are plotted from the chronological MT5 running balance series.",
     ]
     for note in notes:
         doc.add_paragraph(note)
@@ -1230,28 +1170,86 @@ def create_full_backtest_word_doc(
 
 
 def resolve_candidate_dir(base_work_dir: Path, target_run: str, target_cand: str) -> Path | None:
-    if target_run and target_run.strip().lower() != "latest":
-        run_dir = base_work_dir / target_run.strip()
-        if not run_dir.exists():
-            print(f"ERROR: Specified run directory '{target_run}' does not exist.")
-            return None
-        passed_path = run_dir / "passed_candidates" / target_cand
-        if passed_path.exists():
-            return passed_path
-        direct_path = run_dir / target_cand
-        if direct_path.exists():
-            return direct_path
-        print(f"ERROR: Could not find {target_cand} under {run_dir} or {run_dir / 'passed_candidates'}.")
+    # Candidate name variants to check (e.g. cand_001, cand_1, cand_01)
+    cand_variants = [target_cand]
+    m = re.search(r"(\d+)", target_cand)
+    if m:
+        num = int(m.group(1))
+        for fmt in (f"cand_{num:03d}", f"cand_{num:02d}", f"cand_{num}", f"cand_{num:04d}", f"c_{num:03d}"):
+            if fmt not in cand_variants:
+                cand_variants.append(fmt)
+
+    # If target_run is directly an existing path
+    if target_run and Path(target_run).exists():
+        direct_run = Path(target_run)
+        for cvar in cand_variants:
+            for p in (direct_run / "passed_candidates" / cvar, direct_run / cvar, direct_run / "full_backtest" / cvar):
+                if p.exists() and p.is_dir():
+                    return p
+            if direct_run.name == cvar or direct_run.name == target_cand:
+                return direct_run
+
+    # Collect search roots
+    roots = [base_work_dir]
+    if base_work_dir.parent.exists():
+        roots.append(base_work_dir.parent)
+        try:
+            for sibling in base_work_dir.parent.iterdir():
+                if sibling.is_dir() and sibling not in roots:
+                    roots.append(sibling)
+        except OSError:
+            pass
+    script_runs = Path(__file__).parent / "optimization_runs"
+    if script_runs.exists() and script_runs not in roots:
+        roots.append(script_runs)
+
+    # 1. If target_run specified
+    if target_run and target_run.strip().lower() not in ("latest", "", "(none)", "(auto)"):
+        clean_run = target_run.strip().replace("\\", "/").rstrip("/")
+        for root in roots:
+            for cand_run_path in (root / clean_run, root / Path(clean_run).name):
+                if cand_run_path.exists() and cand_run_path.is_dir():
+                    for cvar in cand_variants:
+                        for p in (cand_run_path / "passed_candidates" / cvar,
+                                  cand_run_path / cvar,
+                                  cand_run_path / "full_backtest" / cvar):
+                            if p.exists() and p.is_dir():
+                                return p
+
+        # Deep search for run folder by name
+        run_leaf = Path(clean_run).name
+        for root in roots:
+            try:
+                for match in root.rglob(run_leaf):
+                    if match.is_dir():
+                        for cvar in cand_variants:
+                            for p in (match / "passed_candidates" / cvar,
+                                      match / cvar,
+                                      match / "full_backtest" / cvar):
+                                if p.exists() and p.is_dir():
+                                    return p
+            except OSError:
+                pass
+
+        # If target_run was specified, do not fall back to candidates from other runs
+        print(f"[ERROR] Candidate '{target_cand}' not found in specified run '{target_run}'. Refusing to substitute from another run.")
         return None
 
-    run_dirs = sorted([d for d in base_work_dir.glob("run_*") if d.is_dir()], reverse=True)
-    for run_dir in run_dirs:
-        passed_path = run_dir / "passed_candidates" / target_cand
-        if passed_path.exists():
-            return passed_path
-        direct_path = run_dir / target_cand
-        if direct_path.exists():
-            return direct_path
+    # 2. If target_run was NOT specified or was 'latest' / empty, search across candidate folders
+    for root in roots:
+        for cvar in cand_variants:
+            try:
+                for pc in root.rglob("passed_candidates"):
+                    if pc.is_dir():
+                        p = pc / cvar
+                        if p.exists() and p.is_dir():
+                            return p
+                for p in root.rglob(cvar):
+                    if p.is_dir():
+                        return p
+            except OSError:
+                pass
+
     return None
 
 
@@ -1272,7 +1270,7 @@ def locate_or_build_set_file(cand_dir: Path) -> Path | None:
             with open(json_files[0], "r", encoding="utf-8") as f:
                 params = json.load(f)
             gen_set = cand_dir / f"{cand_name}.set"
-            with open(gen_set, "w", encoding="utf-16-le") as f:
+            with open(gen_set, "w", encoding="utf-16") as f:
                 for k, v in params.items():
                     f.write(f"{k}={v}\n")
             return gen_set
@@ -1333,14 +1331,43 @@ def main():
     report_folder.mkdir(parents=True, exist_ok=True)
     report_name = f"Full_BT_{TARGET_CANDIDATE}"
 
-    print("\n  --> Launching MetaTrader 5 Full Backtest...")
+    # Auto-detect expert from candidate directory, run_meta.json, or run.ini
+    expert_to_run = os.environ.get("AF_EXPERT") or EXPERT
+    for sdir in (target_cand_dir, target_cand_dir.parent, target_cand_dir.parent.parent):
+        meta_file = sdir / "run_meta.json"
+        if meta_file.exists():
+            try:
+                with open(meta_file, "r", encoding="utf-8") as mf:
+                    mdata = json.load(mf)
+                    if mdata.get("expert"):
+                        expert_to_run = mdata["expert"]
+                        break
+            except Exception:
+                pass
+        ini_file = sdir / "run.ini"
+        if ini_file.exists():
+            try:
+                ini_text = ini_file.read_text(encoding="utf-16", errors="ignore")
+                if not ini_text.strip():
+                    ini_text = ini_file.read_text(encoding="utf-8", errors="ignore")
+                m_exp = re.search(r"Expert\s*=\s*(.+)", ini_text)
+                if m_exp:
+                    expert_to_run = m_exp.group(1).strip()
+                    break
+            except Exception:
+                pass
+
+    from mt5_optimizer import sync_ea_to_mt5
+    expert_to_run = sync_ea_to_mt5(expert_to_run, TERMINAL_DATA_DIR, TERMINAL_PATH)
+
+    print(f"\n  --> Launching MetaTrader 5 Full Backtest (EA: {expert_to_run} | Market: {SYMBOL_OVERRIDE})...")
     try:
         report_html = run_single_backtest(
             terminal_path=TERMINAL_PATH,
             terminal_data_dir=TERMINAL_DATA_DIR,
-            expert=EXPERT,
+            expert=expert_to_run,
             set_file=temp_set_name,
-            symbol=SYMBOL,
+            symbol=SYMBOL_OVERRIDE,
             period=PERIOD,
             from_date=BT_START,
             to_date=BT_END,
@@ -1362,19 +1389,34 @@ def main():
         print("  ERROR: Backtest failed or report was not generated.")
         return
 
-    print(f"  --> MT5 HTML Report: {report_html}")
+    # Use the archived copy of the report inside report_folder to guarantee we are reading the exact file generated and copied!
+    report_archived = report_folder / Path(report_html).name
+    if not report_archived.exists():
+        report_archived = Path(report_html)
+
+    print(f"  --> MT5 HTML Report (Archived): {report_archived}")
 
     print("  --> Analyzing MT5 Summary Metrics...")
     try:
-        raw_metrics = analyze(report_html)
+        raw_metrics = analyze(report_archived)
         if not isinstance(raw_metrics, dict):
             raw_metrics = {}
     except Exception as exc:
         print(f"      [WARNING] report_analysis.analyze failed: {exc}")
         raw_metrics = {}
 
+    # Merge Table 0 summary metrics directly to guarantee 100% alignment with HTML report
+    summary_table = parse_mt5_summary_table(Path(report_archived))
+    for k, v in summary_table.items():
+        if k not in raw_metrics:
+            raw_metrics[k] = v
+        if "summary_raw" in raw_metrics and isinstance(raw_metrics["summary_raw"], dict):
+            raw_metrics["summary_raw"].setdefault(k, v)
+        else:
+            raw_metrics["summary_raw"] = summary_table
+
     print("  --> Extracting Deal Data for Drawdown, Charts & Heatmap...")
-    deals_df = parse_mt5_html_for_deals(Path(report_html), deposit=float(DEPOSIT_OVERRIDE))
+    deals_df = parse_mt5_html_for_deals(Path(report_archived), deposit=float(DEPOSIT_OVERRIDE))
 
     derived = calculate_derived_metrics(deals_df, float(DEPOSIT_OVERRIDE)) if deals_df is not None else {}
     if derived:

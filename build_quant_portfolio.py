@@ -183,85 +183,200 @@ def resolve_candidate_dir(
     """
     Multi-market intelligent candidate resolver.
     Finds candidates across EURJPY, USDJPY, and any other market directories.
+    STRICT: If target_run is specified, the candidate MUST be resolved from that run.
+    Never substitutes a candidate from a different optimization run.
     """
-    cand_variants = [target_cand]
-    m = re.search(r"(\d+)", target_cand)
+    target_cand_str = str(target_cand).strip()
+    target_run_str = str(target_run).strip() if target_run else ""
+    is_specific_run = target_run_str.lower() not in ("", "latest", "(none)", "(auto)")
+
+    cand_variants = [target_cand_str]
+    m = re.search(r"(\d+)", target_cand_str)
     if m:
         num = int(m.group(1))
-        for fmt in (f"cand_{num:03d}", f"cand_{num:02d}", f"cand_{num}", f"cand_{num:04d}", f"c_{num:03d}"):
+        for fmt in (f"cand_{num:03d}", f"cand_{num:02d}", f"cand_{num}", f"cand_{num:04d}", f"c_{num:03d}", f"Cand_{num:03d}", f"Cand_{num}"):
             if fmt not in cand_variants:
                 cand_variants.append(fmt)
 
-    # 1. Direct path check
-    if target_run and Path(target_run).exists():
-        drun = Path(target_run)
-        for cvar in cand_variants:
-            for p in (drun / "passed_candidates" / cvar, drun / cvar, drun / "full_backtest" / cvar):
-                if p.exists() and p.is_dir():
-                    return p
-        if drun.name in cand_variants:
-            return drun
+    cvar_lower_set = {v.lower() for v in cand_variants}
 
-    # 2. Gather search roots
-    roots = [base_work_dir]
-    opt_runs = _SCRIPT_DIR / "optimization_runs"
-    if opt_runs.exists() and opt_runs not in roots:
-        roots.append(opt_runs)
-    if base_work_dir.parent.exists() and base_work_dir.parent not in roots:
-        roots.append(base_work_dir.parent)
-    if MULTI_MARKET_QUANT_DIR.exists() and MULTI_MARKET_QUANT_DIR not in roots:
-        roots.append(MULTI_MARKET_QUANT_DIR)
-    if MULTI_MARKET_DIR.exists() and MULTI_MARKET_DIR not in roots:
-        roots.append(MULTI_MARKET_DIR)
+    def _find_candidate_in_directory(run_p: Path) -> Path | None:
+        """Search strictly inside run_p for target candidate."""
+        if not run_p.exists() or not run_p.is_dir():
+            return None
 
-    # Sibling market directories under optimization_runs
+        # Check standard priority subdirectories first
+        priority_subdirs = [
+            "passed_candidates",
+            "",
+            "full_backtest",
+            "candidates",
+            "opt",
+            "passes",
+            "val",
+            "holdout",
+            "train",
+            "full_backtest_report",
+        ]
+        for sub in priority_subdirs:
+            parent = run_p / sub if sub else run_p
+            if parent.exists() and parent.is_dir():
+                for cvar in cand_variants:
+                    cand_p = parent / cvar
+                    if cand_p.exists() and cand_p.is_dir():
+                        return cand_p
+                try:
+                    for child in parent.iterdir():
+                        if child.is_dir() and child.name.lower() in cvar_lower_set:
+                            return child
+                except OSError:
+                    pass
+
+        # Deep search strictly inside run_p
+        try:
+            for child in run_p.rglob("*"):
+                if child.is_dir() and child.name.lower() in cvar_lower_set:
+                    return child
+        except OSError:
+            pass
+
+        # Check if candidate report files exist directly in run_p or passed_candidates
+        for check_dir in (run_p / "passed_candidates", run_p):
+            if check_dir.exists() and check_dir.is_dir():
+                try:
+                    for f in check_dir.iterdir():
+                        if f.is_file():
+                            fn_lower = f.name.lower()
+                            if any(v.lower() in fn_lower for v in cand_variants) and (f.suffix.lower() in ('.htm', '.html', '.csv', '.set')):
+                                return check_dir
+                except OSError:
+                    pass
+
+        return None
+
+    # Gather search roots
+    roots = []
+    def _add_root(p):
+        if p is not None:
+            try:
+                rp = Path(p).resolve()
+                if rp.exists() and rp not in roots:
+                    roots.append(rp)
+            except Exception:
+                pass
+
+    _add_root(base_work_dir)
+    if base_work_dir.parent.exists():
+        _add_root(base_work_dir.parent)
+    _add_root(_SCRIPT_DIR / "optimization_runs")
+    _add_root(_SCRIPT_DIR / "researched_strategies")
+    _add_root(_SCRIPT_DIR / "strategies")
+    _add_root(_SCRIPT_DIR)
+
+    # Try reading config.json for user's work_dir and research_dir
     try:
-        if opt_runs.exists():
-            for sibling in opt_runs.iterdir():
-                if sibling.is_dir() and sibling not in roots:
-                    roots.append(sibling)
-    except OSError:
+        cfg_file = _SCRIPT_DIR / "config.json"
+        if cfg_file.exists():
+            cfg_data = json.loads(cfg_file.read_text(encoding="utf-8"))
+            if cfg_data.get("work_dir"):
+                _add_root(Path(cfg_data["work_dir"]))
+                if Path(cfg_data["work_dir"]).parent.exists():
+                    _add_root(Path(cfg_data["work_dir"]).parent)
+            if cfg_data.get("research_dir"):
+                _add_root(Path(cfg_data["research_dir"]))
+            if cfg_data.get("strategies_dir"):
+                _add_root(Path(cfg_data["strategies_dir"]))
+    except Exception:
         pass
 
-    # If market is specified (e.g. "EURJPY" or "USDJPY"), prioritize market folder
-    if market:
-        m_lower = market.lower()
-        prioritized = []
-        for r in roots:
-            for pat in (f"trb_{m_lower}", m_lower):
-                target_p = r / pat if not r.name.lower().endswith(m_lower) else r
-                if target_p.exists() and target_p.is_dir() and target_p not in prioritized:
-                    prioritized.append(target_p)
-        roots = prioritized + [r for r in roots if r not in prioritized]
+    _add_root(MULTI_MARKET_QUANT_DIR)
+    _add_root(MULTI_MARKET_DIR)
 
-    # 3. Match by target_run if specified
-    if target_run and target_run.strip().lower() not in ("latest", "", "(none)", "(auto)"):
-        clean_run = target_run.strip().replace("\\", "/").rstrip("/")
-        for root in roots:
-            for cand_path in (root / clean_run, root / Path(clean_run).name):
-                if cand_path.exists() and cand_path.is_dir():
-                    for cvar in cand_variants:
-                        for p in (cand_path / "passed_candidates" / cvar,
-                                  cand_path / cvar,
-                                  cand_path / "full_backtest" / cvar):
-                            if p.exists() and p.is_dir():
-                                return p
-        # Search rglob for run folder name
+    # Sibling market directories under optimization_runs
+    for r in list(roots):
+        try:
+            for sibling in r.iterdir():
+                if sibling.is_dir() and not sibling.name.startswith(".") and sibling.name != "Quant_Portfolios":
+                    if sibling not in roots:
+                        roots.append(sibling)
+        except OSError:
+            pass
+
+    # =========================================================================
+    # CASE 1: SPECIFIC RUN WAS SPECIFIED
+    # =========================================================================
+    if is_specific_run:
+        clean_run = target_run_str.replace("\\", "/").rstrip("/")
         run_leaf = Path(clean_run).name
+
+        matched_runs = []
+
+        # 1. Direct path check
+        direct_p = Path(target_run_str)
+        if direct_p.exists() and direct_p.is_dir():
+            matched_runs.append(direct_p)
+
+        # 2. Check relative to roots
+        for root in roots:
+            for test_p in (root / clean_run, root / run_leaf):
+                if test_p.exists() and test_p.is_dir() and test_p not in matched_runs:
+                    matched_runs.append(test_p)
+
+        # 3. Search rglob for run_leaf across roots
         for root in roots:
             try:
                 for match in root.rglob(run_leaf):
-                    if match.is_dir():
-                        for cvar in cand_variants:
-                            for p in (match / "passed_candidates" / cvar,
-                                      match / cvar,
-                                      match / "full_backtest" / cvar):
-                                if p.exists() and p.is_dir():
-                                    return p
+                    if match.is_dir() and match not in matched_runs:
+                        matched_runs.append(match)
             except OSError:
                 pass
 
-    # 4. Fallback search across all candidate folders
+        # Prioritize matching runs by market or EA if known
+        if market:
+            m_low = market.lower()
+            matched_runs.sort(key=lambda p: 0 if m_low in str(p).lower() else 1)
+
+        # Search for the candidate strictly inside matched runs
+        for run_p in matched_runs:
+            cand_p = _find_candidate_in_directory(run_p)
+            if cand_p:
+                return cand_p
+
+        # STRICT PROTECTION: DO NOT FALL BACK TO OTHER RUNS!
+        print(
+            f"      [ERROR] Candidate '{target_cand_str}' was not found in the specified "
+            f"optimization run '{target_run_str}'."
+        )
+        if matched_runs:
+            print(f"      [INFO] Checked run path: {matched_runs[0]}")
+        print(f"      [GUARD] Will NOT substitute '{target_cand_str}' from a different optimization run.")
+        return None
+
+    # =========================================================================
+    # CASE 2: NO SPECIFIC RUN SPECIFIED ("latest" / empty)
+    # =========================================================================
+    if market:
+        m_lower = market.lower()
+        prioritized = [r for r in roots if m_lower in str(r).lower()]
+        roots = prioritized + [r for r in roots if r not in prioritized]
+
+    # Check latest runs first
+    all_runs = []
+    for root in roots:
+        try:
+            for d in root.iterdir():
+                if d.is_dir() and d.name.startswith("run_"):
+                    all_runs.append(d)
+        except OSError:
+            pass
+    all_runs.sort(key=lambda d: d.stat().st_mtime, reverse=True)
+
+    for run_p in all_runs:
+        cand_p = _find_candidate_in_directory(run_p)
+        if cand_p:
+            return cand_p
+
+    # Fallback search across all candidate folders in roots
     for root in roots:
         for cvar in cand_variants:
             try:
@@ -276,8 +391,7 @@ def resolve_candidate_dir(
             except OSError:
                 pass
 
-    # 5. Last resort: delegate to base resolver
-    return _base_resolve_candidate_dir(base_work_dir, target_run, target_cand)
+    return None
 
 
 def find_candidate_report_html(cand_dir: Path, candidate_name: str) -> Path | None:
@@ -667,6 +781,7 @@ def _load_official_trade_stats(html_path: Path) -> dict:
 def load_candidate(base_work_dir: Path, spec: dict) -> dict | None:
     """Resolve, parse and prepare one candidate with multi-market intelligence."""
     run_dir = str(spec.get("run_dir", "")).strip()
+    run_path = str(spec.get("run_path", "")).strip()
     candidate = str(spec.get("candidate", "")).strip()
     weight = float(spec.get("weight", 1.0))
     market = spec.get("market") or spec.get("symbol")
@@ -682,17 +797,22 @@ def load_candidate(base_work_dir: Path, spec: dict) -> dict | None:
         print(f"      [SKIP] {candidate}: weight is 0.00; nothing to contribute.")
         return None
 
+    target_run_identifier = run_path if (run_path and Path(run_path).exists()) else run_dir
+
     cand_dir = resolve_candidate_dir(
         base_work_dir,
-        run_dir,
+        target_run_identifier,
         candidate,
         market=market,
     )
 
     if cand_dir is None:
+        target_display = run_dir
+        if run_path and run_path != run_dir:
+            target_display += f" ({run_path})"
         print(
             f"      [SKIP] Could not resolve {candidate} "
-            f"under run '{run_dir}'."
+            f"under run '{target_display}'."
         )
         return None
 
