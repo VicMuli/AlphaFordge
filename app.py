@@ -519,16 +519,16 @@ def get_all_candidates_summary(work_dir: str, run_filter: str = None) -> list[di
 
     def _inspect_cand(cand_dir: Path, run_name: str = ""):
         cid = cand_dir.name
-        if not cid.startswith("cand_"):
-            return
         trades_file = cand_dir / "trades.csv"
         has_trades = trades_file.exists()
         if not has_trades:
             try:
                 has_trades = any(
                     f.suffix.lower() in (".csv", ".htm", ".html", ".xml") and
-                    ("report" in f.name.lower() or "backtest" in f.name.lower() or "trades" in f.name.lower())
-                    for f in cand_dir.iterdir() if f.is_file()
+                    not f.name.lower().startswith("opt_all_passes") and
+                    not f.name.lower().startswith("correlation") and
+                    not f.name.lower().startswith("chart_")
+                    for f in cand_dir.rglob("*") if f.is_file()
                 )
             except Exception:
                 has_trades = False
@@ -565,10 +565,10 @@ def get_all_candidates_summary(work_dir: str, run_filter: str = None) -> list[di
             pc = rpath / "passed_candidates"
             if pc.exists() and pc.is_dir():
                 for d in sorted(pc.iterdir()):
-                    if d.is_dir() and d.name.startswith("cand_"):
+                    if d.is_dir():
                         _inspect_cand(d, run_filter)
             for d in sorted(rpath.iterdir()):
-                if d.is_dir() and d.name.startswith("cand_"):
+                if d.is_dir():
                     if not any(r["id"] == d.name for r in results):
                         _inspect_cand(d, run_filter)
             return results
@@ -579,12 +579,22 @@ def get_all_candidates_summary(work_dir: str, run_filter: str = None) -> list[di
             if p.is_dir():
                 run_name = p.parent.name
                 for d in sorted(p.iterdir()):
-                    if d.is_dir() and d.name.startswith("cand_"):
+                    if d.is_dir():
                         _inspect_cand(d, run_name)
         for d in base.rglob("cand_*"):
             if d.is_dir() and not any(r["dir"] == d for r in results):
                 run_name = d.parent.name if d.parent.name != "passed_candidates" else d.parent.parent.name
                 _inspect_cand(d, run_name)
+    except Exception:
+        pass
+
+    # Also scan researched_strategies
+    try:
+        res_dir = Path("researched_strategies")
+        if res_dir.exists():
+            for d in sorted(res_dir.iterdir()):
+                if d.is_dir() and not any(r["dir"] == d for r in results):
+                    _inspect_cand(d, "researched_strategies")
     except Exception:
         pass
 
@@ -596,10 +606,13 @@ def find_candidate_path(work_dir: str, candidate_name: str, run_dir: str = None)
     """Resolve candidate directory path given candidate ID and optional run_dir."""
     if not candidate_name:
         return None
-    base = _resolve_work_dir(work_dir)
-    if not base.exists():
-        return None
 
+    # Check direct path
+    p_direct = Path(candidate_name)
+    if p_direct.exists() and p_direct.is_dir():
+        return p_direct
+
+    base = _resolve_work_dir(work_dir)
     if run_dir and run_dir not in ("(Auto-detect across workspace)", "(none)", "latest", ""):
         rpath = find_run_path(work_dir, run_dir)
         if rpath:
@@ -611,16 +624,27 @@ def find_candidate_path(work_dir: str, candidate_name: str, run_dir: str = None)
                 return p2
 
     # Check passed_candidates across base
-    for pc in base.rglob("passed_candidates"):
-        if pc.is_dir():
-            target = pc / candidate_name
-            if target.exists() and target.is_dir():
-                return target
+    if base.exists():
+        for pc in base.rglob("passed_candidates"):
+            if pc.is_dir():
+                target = pc / candidate_name
+                if target.exists() and target.is_dir():
+                    return target
 
-    # Check directly
-    for d in base.rglob(candidate_name):
-        if d.is_dir() and d.name == candidate_name:
-            return d
+        # Check directly in base
+        for d in base.rglob(candidate_name):
+            if d.is_dir() and d.name == candidate_name:
+                return d
+
+    # Check researched_strategies
+    res_dir = Path("researched_strategies")
+    if res_dir.exists():
+        p_res = res_dir / candidate_name
+        if p_res.exists() and p_res.is_dir():
+            return p_res
+        for d in res_dir.rglob(candidate_name):
+            if d.is_dir() and d.name == candidate_name:
+                return d
 
     return None
 
@@ -2431,8 +2455,10 @@ class MonteCarloPanel(BasePanel):
         cb_val = self._cand_var.get().strip() if hasattr(self, "_cand_var") else ""
         if not cb_val or cb_val in ("(none found)", "(scanning...)", "(none)"):
             return ""
-        parts = cb_val.split()
-        return parts[0] if parts else ""
+        # Separate ID from status suffix like " [Ready]" or " [CERTIFIED 57.1%]"
+        if " [" in cb_val:
+            return cb_val.split(" [")[0].strip()
+        return cb_val
 
     def _refresh_candidates_list(self):
         cfg = self.cfg
