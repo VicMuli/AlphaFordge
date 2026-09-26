@@ -5,3 +5,10 @@ __pycache__
 .claude
 optimization_runs/**/run_*
 optimization_runs/trb_usdjpy/run_*
+
+# Compiled MetaTrader binaries
+*.ex5
+
+# Ignore accidental absolute Windows paths created in Linux
+*C:*
+C:\\Users\\**
