@@ -52,6 +52,7 @@ Output written into the portfolio folder:
     montecarlo_results.csv
 """
 
+import os
 import sys
 import json
 import time

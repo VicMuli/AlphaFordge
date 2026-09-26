@@ -52,9 +52,20 @@ Output written into the portfolio folder:
     montecarlo_results.csv
 """
 
+import os
+import sys
 import json
 import time
 from pathlib import Path
+
+# Prevent Windows console UnicodeEncodeError when running on cp1252 / charmap environments
+try:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
 
 import numpy as np
 import pandas as pd
@@ -144,10 +155,42 @@ def resolve_portfolio_dir() -> Path | None:
         return None
 
     p = Path(WORK_DIR) / "Quant_Portfolios" / f"{QUANT_NAME}_Quant_Portfolios" / PORTFOLIO_NAME
-    if not p.exists():
-        print(f"ERROR: Resolved portfolio folder does not exist: {p}")
-        return None
-    return p
+    if p.exists():
+        return p
+
+    # Fallback search across work directories
+    work_path = Path(WORK_DIR)
+    script_dir = Path(__file__).parent.resolve()
+    search_roots = [
+        work_path,
+        work_path.parent,
+        script_dir / "Multi_Market_Quant_Portfolio",
+        script_dir / "MultiMarket portfolio",
+        script_dir / "Quant_Portfolios",
+        script_dir / "optimization_runs",
+        script_dir,
+    ]
+    env_out = os.environ.get("AF_PORTFOLIO_OUTPUT_DIR", "").strip()
+    if env_out:
+        p_env = Path(env_out)
+        if not p_env.is_absolute():
+            p_env = script_dir / env_out
+        if p_env.exists() and p_env not in search_roots:
+            search_roots.insert(0, p_env)
+    for root in search_roots:
+        if root.exists():
+            try:
+                cand = root / PORTFOLIO_NAME
+                if cand.exists() and cand.is_dir() and ((cand / "combined_trades.csv").exists() or (cand / "portfolio_manifest.json").exists()):
+                    return cand
+                for match in root.rglob(PORTFOLIO_NAME):
+                    if match.is_dir() and ((match / "combined_trades.csv").exists() or (match / "portfolio_manifest.json").exists()):
+                        return match
+            except OSError:
+                pass
+
+    print(f"ERROR: Resolved portfolio folder does not exist: {p}")
+    return None
 
 
 def load_portfolio(portfolio_dir: Path):
@@ -788,8 +831,9 @@ def main():
     export.to_csv(portfolio_dir / "montecarlo_results.csv", index=False)
 
     print("  --> Compiling Word report...")
+    safe_port_name = portfolio_name.replace("/", "_").replace("\\", "_")
     doc_path = create_montecarlo_word_doc(
-        doc_path=portfolio_dir / f"{portfolio_name}_MonteCarlo_Report.docx",
+        doc_path=portfolio_dir / f"{safe_port_name}_MonteCarlo_Report.docx",
         portfolio_name=portfolio_name,
         manifest=manifest,
         deposit=deposit,

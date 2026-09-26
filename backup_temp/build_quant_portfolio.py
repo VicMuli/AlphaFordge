@@ -42,6 +42,8 @@ Folder layout:
           portfolio_manifest.json
 """
 
+import os
+import sys
 import json
 import math
 import re
@@ -52,6 +54,15 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+
+# Prevent Windows console UnicodeEncodeError when running on cp1252 / charmap environments
+try:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
 
 try:
     from bs4 import BeautifulSoup
@@ -72,6 +83,7 @@ except ImportError:
 from run_optimization import WORK_DIR, DEPOSIT, CURRENCY, TRAIN_FROM, HOLDOUT_TO
 from report_analysis import analyze
 
+import shutil
 from run_full_backtest import (
     parse_mt5_html_for_deals,
     generate_equity_charts,
@@ -82,7 +94,7 @@ from run_full_backtest import (
     _fmt_pct,
     _fmt_ratio,
     _seconds_to_duration,
-    resolve_candidate_dir,
+    resolve_candidate_dir as _base_resolve_candidate_dir,
 )
 
 
@@ -146,6 +158,11 @@ CANDIDATES = [
 ]
 
 QUANT_PORTFOLIOS_DIR = Path(WORK_DIR) / "Quant_Portfolios"
+_SCRIPT_DIR = Path(__file__).parent.resolve()
+MULTI_MARKET_DIR = _SCRIPT_DIR / "MultiMarket portfolio"
+MULTI_MARKET_QUANT_DIR = _SCRIPT_DIR / "Multi_Market_Quant_Portfolio"
+PORTFOLIO_TYPE = "Standard"  # "Standard" or "MultiMarket"
+TARGET_OUTPUT_DIR = "Multi_Market_Quant_Portfolio"
 
 CORRELATION_PAIRING_THRESHOLD = 0.5
 
@@ -157,8 +174,114 @@ PORTFOLIO_END = HOLDOUT_TO
 # CANDIDATE DISCOVERY
 # ===========================================================================
 
+def resolve_candidate_dir(
+    base_work_dir: Path,
+    target_run: str,
+    target_cand: str,
+    market: str = None,
+) -> Path | None:
+    """
+    Multi-market intelligent candidate resolver.
+    Finds candidates across EURJPY, USDJPY, and any other market directories.
+    """
+    cand_variants = [target_cand]
+    m = re.search(r"(\d+)", target_cand)
+    if m:
+        num = int(m.group(1))
+        for fmt in (f"cand_{num:03d}", f"cand_{num:02d}", f"cand_{num}", f"cand_{num:04d}", f"c_{num:03d}"):
+            if fmt not in cand_variants:
+                cand_variants.append(fmt)
+
+    # 1. Direct path check
+    if target_run and Path(target_run).exists():
+        drun = Path(target_run)
+        for cvar in cand_variants:
+            for p in (drun / "passed_candidates" / cvar, drun / cvar, drun / "full_backtest" / cvar):
+                if p.exists() and p.is_dir():
+                    return p
+        if drun.name in cand_variants:
+            return drun
+
+    # 2. Gather search roots
+    roots = [base_work_dir]
+    opt_runs = _SCRIPT_DIR / "optimization_runs"
+    if opt_runs.exists() and opt_runs not in roots:
+        roots.append(opt_runs)
+    if base_work_dir.parent.exists() and base_work_dir.parent not in roots:
+        roots.append(base_work_dir.parent)
+    if MULTI_MARKET_QUANT_DIR.exists() and MULTI_MARKET_QUANT_DIR not in roots:
+        roots.append(MULTI_MARKET_QUANT_DIR)
+    if MULTI_MARKET_DIR.exists() and MULTI_MARKET_DIR not in roots:
+        roots.append(MULTI_MARKET_DIR)
+
+    # Sibling market directories under optimization_runs
+    try:
+        if opt_runs.exists():
+            for sibling in opt_runs.iterdir():
+                if sibling.is_dir() and sibling not in roots:
+                    roots.append(sibling)
+    except OSError:
+        pass
+
+    # If market is specified (e.g. "EURJPY" or "USDJPY"), prioritize market folder
+    if market:
+        m_lower = market.lower()
+        prioritized = []
+        for r in roots:
+            for pat in (f"trb_{m_lower}", m_lower):
+                target_p = r / pat if not r.name.lower().endswith(m_lower) else r
+                if target_p.exists() and target_p.is_dir() and target_p not in prioritized:
+                    prioritized.append(target_p)
+        roots = prioritized + [r for r in roots if r not in prioritized]
+
+    # 3. Match by target_run if specified
+    if target_run and target_run.strip().lower() not in ("latest", "", "(none)", "(auto)"):
+        clean_run = target_run.strip().replace("\\", "/").rstrip("/")
+        for root in roots:
+            for cand_path in (root / clean_run, root / Path(clean_run).name):
+                if cand_path.exists() and cand_path.is_dir():
+                    for cvar in cand_variants:
+                        for p in (cand_path / "passed_candidates" / cvar,
+                                  cand_path / cvar,
+                                  cand_path / "full_backtest" / cvar):
+                            if p.exists() and p.is_dir():
+                                return p
+        # Search rglob for run folder name
+        run_leaf = Path(clean_run).name
+        for root in roots:
+            try:
+                for match in root.rglob(run_leaf):
+                    if match.is_dir():
+                        for cvar in cand_variants:
+                            for p in (match / "passed_candidates" / cvar,
+                                      match / cvar,
+                                      match / "full_backtest" / cvar):
+                                if p.exists() and p.is_dir():
+                                    return p
+            except OSError:
+                pass
+
+    # 4. Fallback search across all candidate folders
+    for root in roots:
+        for cvar in cand_variants:
+            try:
+                for pc in root.rglob("passed_candidates"):
+                    if pc.is_dir():
+                        p = pc / cvar
+                        if p.exists() and p.is_dir():
+                            return p
+                for p in root.rglob(cvar):
+                    if p.is_dir():
+                        return p
+            except OSError:
+                pass
+
+    # 5. Last resort: delegate to base resolver
+    return _base_resolve_candidate_dir(base_work_dir, target_run, target_cand)
+
+
 def find_candidate_report_html(cand_dir: Path, candidate_name: str) -> Path | None:
-    """Locate the MT5 HTML report produced for this candidate."""
+    """Locate the MT5 HTML report produced for this candidate with recursive fallback."""
     search_dirs = [
         cand_dir / "full_backtest_report",
         cand_dir / "full_backtest",
@@ -173,13 +296,20 @@ def find_candidate_report_html(cand_dir: Path, candidate_name: str) -> Path | No
     ]
 
     found = []
-
     for directory in search_dirs:
         if not directory.exists():
             continue
-
         for pattern in patterns:
             found.extend(directory.glob(pattern))
+
+    # Also recursive search inside cand_dir
+    if not found and cand_dir.exists():
+        try:
+            for p in cand_dir.rglob("*.htm*"):
+                if p.is_file():
+                    found.append(p)
+        except OSError:
+            pass
 
     if not found:
         return None
@@ -194,6 +324,92 @@ def find_candidate_report_html(cand_dir: Path, candidate_name: str) -> Path | No
 
     found = list(unique.values())
     return max(found, key=lambda p: p.stat().st_mtime)
+
+
+def _load_candidate_from_csv(cand_dir: Path, candidate: str, deposit: float = 2500.0):
+    """
+    Fallback deal/trade loader from CSV files when MT5 HTML report is missing or unparseable.
+    """
+    search_files = [
+        cand_dir / "trades.csv",
+        cand_dir / "deals.csv",
+        cand_dir / "combined_trades.csv",
+        cand_dir / "full_backtest_report" / "trades.csv",
+        cand_dir / "full_backtest" / "trades.csv",
+    ]
+    if cand_dir.exists():
+        try:
+            for p in cand_dir.rglob("*.csv"):
+                if p not in search_files and p.is_file():
+                    search_files.append(p)
+        except OSError:
+            pass
+
+    for csv_path in search_files:
+        if not csv_path.exists() or not csv_path.is_file():
+            continue
+        try:
+            df = pd.read_csv(csv_path)
+            if df.empty:
+                continue
+
+            time_col = None
+            for c in ("Time", "time", "Date", "date", "DateTime", "datetime", "Timestamp", "Deal Time", "Open Time"):
+                if c in df.columns:
+                    time_col = c
+                    break
+            if time_col is None:
+                continue
+
+            df["Time"] = pd.to_datetime(df[time_col], errors="coerce")
+            df = df.dropna(subset=["Time"]).sort_values("Time").reset_index(drop=True)
+            if df.empty:
+                continue
+
+            profit_col = None
+            for c in ("NetTradePnl", "NetPnl", "EquityPnl", "Profit", "profit", "Pnl", "pnl", "Net Profit"):
+                if c in df.columns:
+                    profit_col = c
+                    break
+
+            if profit_col:
+                df["NetTradePnl"] = pd.to_numeric(df[profit_col], errors="coerce").fillna(0.0)
+            else:
+                df["NetTradePnl"] = 0.0
+
+            df["Profit"] = pd.to_numeric(df.get("Profit", df["NetTradePnl"]), errors="coerce").fillna(0.0)
+            df["Commission"] = pd.to_numeric(df.get("Commission", 0.0), errors="coerce").fillna(0.0)
+            df["Swap"] = pd.to_numeric(df.get("Swap", 0.0), errors="coerce").fillna(0.0)
+
+            if "Balance" in df.columns:
+                df["Balance"] = pd.to_numeric(df["Balance"], errors="coerce").ffill().fillna(deposit)
+            else:
+                df["Balance"] = float(deposit) + df["NetTradePnl"].cumsum()
+
+            df["IsBalanceOperation"] = False
+            df.attrs["trade_df"] = df.copy()
+
+            pnl = df["NetTradePnl"]
+            wins = pnl[pnl > 0]
+            losses = pnl[pnl < 0]
+            gross_profit = float(wins.sum())
+            gross_loss = float(abs(losses.sum()))
+            pf = (gross_profit / gross_loss) if gross_loss > 0 else (gross_profit if gross_profit > 0 else 0.0)
+
+            official_stats = {
+                "total_net_profit": float(pnl.sum()),
+                "gross_profit": gross_profit,
+                "gross_loss": gross_loss,
+                "profit_factor": pf,
+                "total_trades": int((pnl != 0).sum()) or len(df),
+                "win_trades": int(len(wins)),
+                "loss_trades": int(len(losses)),
+            }
+            return df, official_stats, csv_path
+        except Exception:
+            continue
+
+    return None, None, None
 
 
 def _flatten_metric_dict(obj):
@@ -449,10 +665,11 @@ def _load_official_trade_stats(html_path: Path) -> dict:
 
 
 def load_candidate(base_work_dir: Path, spec: dict) -> dict | None:
-    """Resolve, parse and prepare one candidate."""
-    run_dir = str(spec["run_dir"])
-    candidate = str(spec["candidate"])
+    """Resolve, parse and prepare one candidate with multi-market intelligence."""
+    run_dir = str(spec.get("run_dir", "")).strip()
+    candidate = str(spec.get("candidate", "")).strip()
     weight = float(spec.get("weight", 1.0))
+    market = spec.get("market") or spec.get("symbol")
 
     if weight < 0:
         print(
@@ -469,6 +686,7 @@ def load_candidate(base_work_dir: Path, spec: dict) -> dict | None:
         base_work_dir,
         run_dir,
         candidate,
+        market=market,
     )
 
     if cand_dir is None:
@@ -478,33 +696,48 @@ def load_candidate(base_work_dir: Path, spec: dict) -> dict | None:
         )
         return None
 
+    # Detect market from path if not explicit
+    if not market:
+        path_str = f"{cand_dir} {run_dir}".lower()
+        if "eurjpy" in path_str:
+            market = "EURJPY"
+        elif "usdjpy" in path_str:
+            market = "USDJPY"
+        elif "gbpjpy" in path_str:
+            market = "GBPJPY"
+        elif "audusd" in path_str:
+            market = "AUDUSD"
+        elif "eurusd" in path_str:
+            market = "EURUSD"
+        elif "xauusd" in path_str or "gold" in path_str:
+            market = "XAUUSD"
+        else:
+            m_mkt = re.search(r"trb_([a-zA-Z0-9]+)", path_str)
+            market = m_mkt.group(1).upper() if m_mkt else "TRB"
+
+    candidate_label = spec.get("candidate_label") or f"{candidate} ({market})"
+
     html_path = find_candidate_report_html(cand_dir, candidate)
+    official_stats = {}
+    deals_df = None
 
-    if html_path is None:
-        print(
-            f"      [SKIP] No MT5 HTML report found for {candidate} "
-            f"under {cand_dir}."
-        )
-        print(
-            "             Run run_full_backtest.py for this candidate first."
-        )
-        return None
+    if html_path is not None:
+        official_stats = _load_official_trade_stats(html_path)
+        deals_df = parse_mt5_html_for_deals(html_path)
 
-    # Read MT5's official tester summary first. This is the authoritative
-    # Total Trades value and avoids treating every DEAL/activity row as a trade.
-    official_stats = _load_official_trade_stats(html_path)
-
-    # IMPORTANT:
-    # The same parser used by run_full_backtest.py is used here for the
-    # chronological monetary activity/equity stream.
-    deals_df = parse_mt5_html_for_deals(
-        html_path,
-    )
+    # Fallback to CSV if HTML report missing or returned no deals
+    if deals_df is None or deals_df.empty:
+        csv_df, csv_stats, csv_file = _load_candidate_from_csv(cand_dir, candidate, float(DEPOSIT))
+        if csv_df is not None and not csv_df.empty:
+            deals_df = csv_df
+            if not official_stats:
+                official_stats = csv_stats
+            print(f"      [INFO] Successfully loaded trade data from CSV for {candidate}: {csv_file.name}")
 
     if deals_df is None or deals_df.empty:
         print(
-            f"      [SKIP] Could not parse deal data for {candidate} "
-            f"({html_path.name})."
+            f"      [SKIP] Could not find or parse deal/trade data for {candidate} "
+            f"under {cand_dir}."
         )
         return None
 
@@ -534,11 +767,7 @@ def load_candidate(base_work_dir: Path, spec: dict) -> dict | None:
             errors="coerce",
         ).fillna(0.0)
 
-    # The parsed activity stream can contain duplicate/non-trade rows in
-    # difficult MT5 HTML layouts. For portfolio monetary performance, MT5's
-    # official Total Net Profit is authoritative. We preserve the raw timing
-    # shape but scale the activity P&L so its endpoint equals MT5's reported
-    # candidate profit. If the parser already agrees, the scale is 1.0.
+    # Reconcile P&L scaling
     raw_net_profit = float(raw_trades["NetTradePnl"].sum())
     official_net_profit = official_stats.get("total_net_profit")
     if official_net_profit is not None and abs(raw_net_profit) > 1e-12:
@@ -556,7 +785,7 @@ def load_candidate(base_work_dir: Path, spec: dict) -> dict | None:
         weighted[col] = weighted[col] * weight
 
     print(
-        f"      Parsed deal/activity rows: {len(raw_trades):,} for {candidate}"
+        f"      Parsed deal/activity rows: {len(raw_trades):,} for {candidate_label}"
     )
     print(
         f"      Raw parsed Net P&L: ${raw_net_profit:,.2f} | "
@@ -569,6 +798,8 @@ def load_candidate(base_work_dir: Path, spec: dict) -> dict | None:
     return {
         "run_dir": run_dir,
         "candidate": candidate,
+        "candidate_label": candidate_label,
+        "market": market,
         "weight": weight,
         "cand_dir": cand_dir,
         "html_path": html_path,
@@ -759,20 +990,25 @@ def build_all_completed_trades(loaded: list) -> tuple[pd.DataFrame, dict]:
     methods = {}
 
     for item in loaded:
+        cand_key = item.get("candidate_label", item["candidate"])
         completed, method = build_completed_trade_rows(
             item["trades_raw"],
-            item["candidate"],
+            cand_key,
             item["weight"],
         )
 
         # The deal parser may not expose Position IDs. In that case the
         # official MT5 tester summary remains the authoritative trade count.
         if item.get("official_trade_stats", {}).get("total_trades") is not None:
+            methods[cand_key] = "mt5_official_summary"
             methods[item["candidate"]] = "mt5_official_summary"
         else:
+            methods[cand_key] = method
             methods[item["candidate"]] = method
 
         if completed is not None and not completed.empty:
+            if "Market" not in completed.columns and item.get("market"):
+                completed["Market"] = item["market"]
             frames.append(completed)
 
         item["completed_trades"] = completed
@@ -846,13 +1082,14 @@ def build_correlation_matrix(loaded: list) -> pd.DataFrame:
     series = {}
 
     for item in loaded:
-        series[item["candidate"]] = monthly_pnl_series(
+        cand_key = item.get("candidate_label", item["candidate"])
+        series[cand_key] = monthly_pnl_series(
             item["trades_raw"]
         )
 
     combined = pd.DataFrame(series).fillna(0.0)
 
-    names = [item["candidate"] for item in loaded]
+    names = [item.get("candidate_label", item["candidate"]) for item in loaded]
 
     if combined.shape[1] < 2 or combined.shape[0] < 2:
         return pd.DataFrame(
@@ -902,7 +1139,10 @@ def build_combined_deals(
         if "Position" in item["trades_weighted"].columns:
             t["Position"] = item["trades_weighted"]["Position"]
 
-        t["SourceCandidate"] = item["candidate"]
+        cand_key = item.get("candidate_label", item["candidate"])
+        t["SourceCandidate"] = cand_key
+        if item.get("market"):
+            t["Market"] = item["market"]
 
         frames.append(t)
 
@@ -1643,7 +1883,9 @@ def resolve_portfolio_name(
                     )
 
     if requested:
-        name = requested
+        # Sanitize to strictly a flat folder name - never create subdirectories like TRB_USDJPY/ or TRB_EURJPY/
+        name = re.sub(r"[/\\:]+", "_", requested.strip())
+        name = re.sub(r"_+", "_", name).strip("_")
 
         if (
             quant_dir / name
@@ -1651,11 +1893,11 @@ def resolve_portfolio_name(
             n = 2
 
             while (
-                quant_dir / f"{requested}_v{n}"
+                quant_dir / f"{name}_v{n}"
             ).exists():
                 n += 1
 
-            name = f"{requested}_v{n}"
+            name = f"{name}_v{n}"
 
             print(
                 f"  [INFO] '{requested}' already exists; "
@@ -2034,9 +2276,10 @@ def create_portfolio_word_doc(
 
         cells = comp_table.add_row().cells
 
+        cand_disp = item.get("candidate_label", item["candidate"])
         _set_cell_text(
             cells[0],
-            item["candidate"],
+            cand_disp,
             bold=True,
         )
 
@@ -2070,8 +2313,8 @@ def create_portfolio_word_doc(
         )
 
         avg_c = corr_avg.get(
-            item["candidate"],
-            float("nan"),
+            cand_disp,
+            corr_avg.get(item["candidate"], float("nan")),
         )
 
         _set_cell_text(
@@ -2403,9 +2646,10 @@ def create_portfolio_word_doc(
     )
 
     for item in loaded:
+        cand_disp = item.get("candidate_label", item["candidate"])
         method = trade_methods.get(
-            item["candidate"],
-            "unknown",
+            cand_disp,
+            trade_methods.get(item["candidate"], "unknown"),
         )
 
         completed_count = (
@@ -2683,6 +2927,7 @@ def save_manifest(
 ):
     manifest = {
         "portfolio_name": portfolio_name,
+        "output_dir": str(portfolio_dir.parent),
         "created_utc": pd.Timestamp.now(tz="UTC").isoformat(),
         "deposit": deposit,
         "currency": CURRENCY,
@@ -2709,13 +2954,16 @@ def save_manifest(
             else 0
         )
 
+        cand_key = item.get("candidate_label", item["candidate"])
         manifest["candidates"].append(
             {
                 "candidate": item["candidate"],
+                "candidate_label": cand_key,
+                "market": item.get("market", ""),
                 "run_dir": item["run_dir"],
                 "weight": item["weight"],
                 "candidate_dir": str(item["cand_dir"]),
-                "mt5_report": str(item["html_path"]),
+                "mt5_report": str(item["html_path"]) if item.get("html_path") else "CSV Trade Source",
                 "raw_activity_rows": int(
                     len(item["trades_raw"])
                 ),
@@ -2723,8 +2971,8 @@ def save_manifest(
                     completed_count
                 ),
                 "trade_count_method": trade_methods.get(
-                    item["candidate"],
-                    "unknown",
+                    cand_key,
+                    trade_methods.get(item["candidate"], "unknown"),
                 ),
             }
         )
@@ -2762,26 +3010,50 @@ def main():
         )
         return
 
-    QUANT_PORTFOLIOS_DIR.mkdir(
-        parents=True,
-        exist_ok=True,
+    is_multi_market = (
+        str(PORTFOLIO_TYPE).lower() == "multimarket"
+        or "multimarket" in str(PORTFOLIO_NAME).lower()
+        or "/" in str(PORTFOLIO_NAME)
+        or any(
+            str(s.get("market", "")).upper() in ("EURJPY", "USDJPY", "MULTI")
+            for s in CANDIDATES
+        )
+        or len(set(str(s.get("market", "")).upper() for s in CANDIDATES if s.get("market"))) > 1
     )
 
-    quant_dir = (
-        QUANT_PORTFOLIOS_DIR
-        / f"{QUANT_NAME}_Quant_Portfolios"
+    # Determine destination folder for portfolio results
+    out_dir_setting = (
+        os.environ.get("AF_PORTFOLIO_OUTPUT_DIR", "").strip()
+        or str(TARGET_OUTPUT_DIR).strip()
     )
 
-    existed = quant_dir.exists()
-
-    quant_dir.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
+    if out_dir_setting:
+        custom_out = Path(out_dir_setting)
+        if custom_out.is_absolute():
+            quant_dir = custom_out
+        else:
+            quant_dir = _SCRIPT_DIR / out_dir_setting
+        quant_dir.mkdir(parents=True, exist_ok=True)
+    elif is_multi_market:
+        # Default destination for MultiMarket portfolio: Multi_Market_Quant_Portfolio
+        quant_dir = _SCRIPT_DIR / "Multi_Market_Quant_Portfolio"
+        quant_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        QUANT_PORTFOLIOS_DIR.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+        quant_dir = (
+            QUANT_PORTFOLIOS_DIR
+            / f"{QUANT_NAME}_Quant_Portfolios"
+        )
+        quant_dir.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
 
     print(
         f"  Quant folder:      {quant_dir} "
-        f"({'existing' if existed else 'created'})"
     )
 
     portfolio_name = resolve_portfolio_name(
@@ -3156,10 +3428,12 @@ def main():
         "  --> Compiling Word report..."
     )
 
+    safe_portfolio_name = portfolio_name.replace("/", "_").replace("\\", "_")
+
     doc_path = create_portfolio_word_doc(
         doc_path=(
             portfolio_dir
-            / f"{portfolio_name}_Report.docx"
+            / f"{safe_portfolio_name}_Report.docx"
         ),
         portfolio_name=portfolio_name,
         loaded=loaded,

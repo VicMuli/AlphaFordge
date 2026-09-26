@@ -97,6 +97,11 @@ except Exception:
 
 import pandas as pd
 
+try:
+    from ea_translator import translate_to_mql5
+except ImportError:
+    translate_to_mql5 = None
+
 from mt5_optimizer import (
     generate_optimization_set_file,
     run_optimization,
@@ -1022,13 +1027,16 @@ def run_mt5_strategy_search(
         pip_size = float(fixed_params.get("InpPipSize", 0.0001 if "JPY" not in symbol_key else 0.01))
         ea_filename = str(ea_dir / f"ORB_{symbol_key}_{sid:03d}.mq5")
         try:
-            translate_to_mql5(
-                ea_variant,
-                ea_spec,
-                symbol=symbol_key,
-                pip_size=pip_size,
-                output_path=ea_filename,
-            )
+            if callable(translate_to_mql5):
+                translate_to_mql5(
+                    ea_variant,
+                    ea_spec,
+                    symbol=symbol_key,
+                    pip_size=pip_size,
+                    output_path=ea_filename,
+                )
+            else:
+                print(f"    INFO: EA translator not available; skipping .mq5 generation for {ea_filename}")
         except Exception as exc:
             print(f"    WARNING: EA generation failed: {exc}")
 
