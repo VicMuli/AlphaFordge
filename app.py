@@ -3020,12 +3020,32 @@ class FullBacktestPanel(BasePanel):
         if not run or not cand or cand == "(none found)":
             messagebox.showwarning("Missing", "Select a run and candidate.")
             return
+
+        # Dynamically detect active_ea and expert from run_meta.json of the selected run
+        active_ea = self.cfg.get("active_ea", "")
+        expert = self.cfg.get("expert", "")
+        run_path = find_run_path(self.cfg.get("work_dir", ""), run)
+        if run_path:
+            meta_file = run_path / "run_meta.json"
+            if meta_file.exists():
+                try:
+                    with open(meta_file, "r", encoding="utf-8") as mf:
+                        mdata = json.load(mf)
+                        if mdata.get("ea"):
+                            active_ea = mdata["ea"]
+                        if mdata.get("expert"):
+                            expert = mdata["expert"]
+                except Exception:
+                    pass
+
         patch_script(SCRIPT_DIR / "run_full_backtest.py", {
             "TARGET_RUN_DIR": run,
             "TARGET_CANDIDATE": cand,
             "TARGET_SYMBOL": market,
         })
         env_extra = {
+            "AF_ACTIVE_EA": active_ea,
+            "AF_EXPERT":    expert,
             "AF_SYMBOL":   market,
             "AF_BT_START": self._from_var.get().strip() or self.cfg.get("train_from", ""),
             "AF_BT_END":   self._to_var.get().strip() or self.cfg.get("holdout_to", ""),
@@ -3043,14 +3063,18 @@ class FullBacktestPanel(BasePanel):
         if run and cand:
             run_path = find_run_path(cfg.get("work_dir",""), run)
             if run_path:
-                d = run_path / "passed_candidates" / cand / "full_backtest"
-                if not d.exists():
-                    d = run_path / cand / "full_backtest_report"
-                if not d.exists():
-                    d = run_path / cand
-                if d.exists():
-                    os.startfile(str(d))
-                    return
+                paths_to_check = [
+                    run_path / "passed_candidates" / cand / "full_backtest_report",
+                    run_path / "passed_candidates" / cand / "full_backtest",
+                    run_path / "passed_candidates" / cand,
+                    run_path / cand / "full_backtest_report",
+                    run_path / cand / "full_backtest",
+                    run_path / cand,
+                ]
+                for d in paths_to_check:
+                    if d.exists() and d.is_dir():
+                        open_in_file_manager(d)
+                        return
         messagebox.showinfo("Not found", "Output folder not found.")
 
 

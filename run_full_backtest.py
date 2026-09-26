@@ -1385,11 +1385,16 @@ def main():
         print("  ERROR: Backtest failed or report was not generated.")
         return
 
-    print(f"  --> MT5 HTML Report: {report_html}")
+    # Use the archived copy of the report inside report_folder to guarantee we are reading the exact file generated and copied!
+    report_archived = report_folder / Path(report_html).name
+    if not report_archived.exists():
+        report_archived = Path(report_html)
+
+    print(f"  --> MT5 HTML Report (Archived): {report_archived}")
 
     print("  --> Analyzing MT5 Summary Metrics...")
     try:
-        raw_metrics = analyze(report_html)
+        raw_metrics = analyze(report_archived)
         if not isinstance(raw_metrics, dict):
             raw_metrics = {}
     except Exception as exc:
@@ -1397,7 +1402,7 @@ def main():
         raw_metrics = {}
 
     # Merge Table 0 summary metrics directly to guarantee 100% alignment with HTML report
-    summary_table = parse_mt5_summary_table(Path(report_html))
+    summary_table = parse_mt5_summary_table(Path(report_archived))
     for k, v in summary_table.items():
         if k not in raw_metrics:
             raw_metrics[k] = v
@@ -1407,7 +1412,7 @@ def main():
             raw_metrics["summary_raw"] = summary_table
 
     print("  --> Extracting Deal Data for Drawdown, Charts & Heatmap...")
-    deals_df = parse_mt5_html_for_deals(Path(report_html), deposit=float(DEPOSIT_OVERRIDE))
+    deals_df = parse_mt5_html_for_deals(Path(report_archived), deposit=float(DEPOSIT_OVERRIDE))
 
     derived = calculate_derived_metrics(deals_df, float(DEPOSIT_OVERRIDE)) if deals_df is not None else {}
     if derived:

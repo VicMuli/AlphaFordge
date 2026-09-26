@@ -15,6 +15,7 @@ import sys
 import datetime
 import json
 import time
+import re
 from pathlib import Path
 
 # Prevent Windows console UnicodeEncodeError when running on cp1252 / charmap environments
