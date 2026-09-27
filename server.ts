@@ -22,12 +22,14 @@ async function startServer() {
       let newVal: string;
       if (typeof val === 'string') {
         const isNum = !isNaN(Number(val)) && val.trim() !== '';
-        newVal = isNum ? val : JSON.stringify(val);
+        // If string contains Windows backslashes, normalize to forward slashes to prevent escape sequences in Python
+        const cleanVal = val.replace(/\\/g, '/');
+        newVal = isNum ? cleanVal : JSON.stringify(cleanVal);
       } else {
         newVal = String(val);
       }
       const pattern = new RegExp(`^(${varName}\\s*=\\s*).*$`, 'm');
-      text = text.replace(pattern, `$1${newVal}`);
+      text = text.replace(pattern, () => `${varName} = ${newVal}`);
     }
     return text;
   }
@@ -339,7 +341,15 @@ async function startServer() {
         text = patchScriptText(text, patches);
       }
       if (candidates && Array.isArray(candidates)) {
-        text = text.replace(/CANDIDATES\s*=\s*\[[\s\S]*?\]/, `CANDIDATES = ${JSON.stringify(candidates, null, 4)}`);
+        // Deep-clean all candidate string values to replace backslashes with forward slashes
+        const normalizedCandidates = candidates.map((cand: any) => {
+          const cleanCand: Record<string, any> = {};
+          for (const [k, v] of Object.entries(cand)) {
+            cleanCand[k] = typeof v === 'string' ? v.replace(/\\/g, '/') : v;
+          }
+          return cleanCand;
+        });
+        text = text.replace(/CANDIDATES\s*=\s*\[[\s\S]*?\]/, () => `CANDIDATES = ${JSON.stringify(normalizedCandidates, null, 4)}`);
       }
       await fs.writeFile(sp, text, 'utf-8');
       res.json({ status: "ok" });

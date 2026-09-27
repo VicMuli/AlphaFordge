@@ -780,8 +780,8 @@ def _load_official_trade_stats(html_path: Path) -> dict:
 
 def load_candidate(base_work_dir: Path, spec: dict) -> dict | None:
     """Resolve, parse and prepare one candidate with multi-market intelligence."""
-    run_dir = str(spec.get("run_dir", "")).strip()
-    run_path = str(spec.get("run_path", "")).strip()
+    run_dir = str(spec.get("run_dir", "")).strip().replace("\\", "/")
+    run_path = str(spec.get("run_path", "")).strip().replace("\\", "/")
     candidate = str(spec.get("candidate", "")).strip()
     weight = float(spec.get("weight", 1.0))
     market = spec.get("market") or spec.get("symbol")

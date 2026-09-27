@@ -481,7 +481,9 @@ def patch_script(script_path: Path, patches: dict):
                     float(val)
                     new_val = str(val)
                 except ValueError:
-                    new_val = repr(val)
+                    # Windows paths: normalize backslashes to forward slashes to avoid \U \t \n syntax errors in Python
+                    val_clean = val.replace("\\", "/")
+                    new_val = repr(val_clean)
             else:
                 new_val = str(val)
             pattern  = rf"^({re.escape(var)}\s*=\s*).*$"
@@ -3262,13 +3264,14 @@ class PortfolioPanel(BasePanel):
             c = cand_e.get().strip() if hasattr(cand_e, "get") else ""
             w = wgt_e.get().strip() if hasattr(wgt_e, "get") else "1.0"
             if r and c and c != "(none found)":
-                item = {"run_dir": r, "candidate": c, "weight": float(w or 1.0)}
+                r_clean = r.replace("\\", "/")
+                item = {"run_dir": r_clean, "candidate": c, "weight": float(w or 1.0)}
                 rp = find_run_path(wdir, r)
                 if rp:
-                    item["run_path"] = str(rp)
-                    path_str = str(rp).lower()
+                    item["run_path"] = str(rp).replace("\\", "/")
+                    path_str = str(rp).lower().replace("\\", "/")
                 else:
-                    path_str = f"{r} {c}".lower()
+                    path_str = f"{r_clean} {c}".lower()
                 for mkt in ("eurjpy", "usdjpy", "gbpjpy", "audusd", "eurusd", "xauusd", "btcusd"):
                     if mkt in path_str:
                         item["market"] = mkt.upper()
@@ -3298,21 +3301,29 @@ class PortfolioPanel(BasePanel):
 
         # Patch build_quant_portfolio.py
         cfg        = self.cfg
-        cands_repr = json.dumps(cands, indent=4)
+        # Sanitize all strings in cands so forward slashes are strictly used
+        clean_cands = []
+        for cand in cands:
+            clean_item = {}
+            for k, v in cand.items():
+                clean_item[k] = v.replace("\\", "/") if isinstance(v, str) else v
+            clean_cands.append(clean_item)
+
+        cands_repr = json.dumps(clean_cands, indent=4)
         script     = SCRIPT_DIR / "build_quant_portfolio.py"
         patches = {
             "PORTFOLIO_NAME":    port_name,
             "QUANT_NAME":        cfg.get("quant_name","TRB"),
             "PORTFOLIO_TYPE":    "MultiMarket" if is_multi_market else "SingleMarket",
-            "TARGET_OUTPUT_DIR": out_dir,
+            "TARGET_OUTPUT_DIR": out_dir.replace("\\", "/"),
         }
         patch_script(script, patches)
-        # Also patch the CANDIDATES list (special multi-line replacement)
+        # Also patch the CANDIDATES list using a lambda to prevent backslash escape unescaping
         try:
             text = script.read_text(encoding="utf-8")
             text = re.sub(
                 r"CANDIDATES\s*=\s*\[.*?\]",
-                f"CANDIDATES = {cands_repr}",
+                lambda m: f"CANDIDATES = {cands_repr}",
                 text, flags=re.DOTALL
             )
             script.write_text(text, encoding="utf-8")
@@ -3321,7 +3332,7 @@ class PortfolioPanel(BasePanel):
 
         self.log_clear(self._log)
         self.run_script("build_quant_portfolio.py", self._log,
-                        env_extra={"AF_PORTFOLIO_OUTPUT_DIR": out_dir},
+                        env_extra={"AF_PORTFOLIO_OUTPUT_DIR": out_dir.replace("\\", "/")},
                         on_done=self._refresh_portfolios)
 
     def _refresh_portfolios(self):

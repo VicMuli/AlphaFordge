@@ -131,9 +131,11 @@ export default function Portfolio({ config }: { config: any }) {
           break;
         }
       }
+      const cleanRunPath = runObj?.path ? runObj.path.replace(/\\/g, '/') : undefined;
+      const cleanRunDir = row.runDir.replace(/\\/g, '/');
       return {
-        run_dir: row.runDir,
-        run_path: runObj?.path,
+        run_dir: cleanRunDir,
+        ...(cleanRunPath ? { run_path: cleanRunPath } : {}),
         candidate: row.candidate,
         weight: parseFloat(row.weight) || 1.0,
         ...(detectedMarket ? { market: detectedMarket } : {}),
