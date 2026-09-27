@@ -51,6 +51,54 @@ from mt5_optimizer import sync_ea_to_mt5, _read_latest_mt5_tester_log
 TEMPLATE_PATH = Path(__file__).parent / "tester_template.ini"
 
 
+def normalize_mt5_date(val: str, default: str = "2013.01.01", is_end: bool = False) -> str:
+    """
+    Normalizes any date string (e.g. '2013', '2013-01-01', '2013/01/01', '2013.01.01',
+    '2013-2026', '2026', '2026.07.03') into MT5's required 'YYYY.MM.DD' format.
+    """
+    if not val or not str(val).strip():
+        return default
+
+    s = str(val).strip()
+
+    # If user provided a range in one value, e.g. "2013-2026" or "2013 to 2026" or "2013..2026"
+    for sep in [" to ", " - ", " -> ", ".."]:
+        if sep in s:
+            parts = s.split(sep)
+            s = parts[1].strip() if is_end else parts[0].strip()
+            break
+    else:
+        m_range = re.match(r"^(\d{4})\s*[-/]\s*(\d{4})$", s)
+        if m_range:
+            s = m_range.group(2) if is_end else m_range.group(1)
+
+    # 4-digit year only: e.g. "2013" -> "2013.01.01", "2026" -> "2026.12.31"
+    if re.match(r"^\d{4}$", s):
+        return f"{s}.12.31" if is_end else f"{s}.01.01"
+
+    # Replace hyphens or slashes with dots
+    s_clean = s.replace("-", ".").replace("/", ".")
+    parts = s_clean.split(".")
+    if len(parts) == 3:
+        p0, p1, p2 = parts[0].strip(), parts[1].strip(), parts[2].strip()
+        # YYYY.MM.DD
+        if len(p0) == 4 and p1.isdigit() and p2.isdigit():
+            return f"{p0}.{int(p1):02d}.{int(p2):02d}"
+        # DD.MM.YYYY
+        if len(p2) == 4 and p0.isdigit() and p1.isdigit():
+            return f"{p2}.{int(p1):02d}.{int(p0):02d}"
+
+    # Fallback to general parsing if available
+    try:
+        import pandas as _pd
+        dt = _pd.to_datetime(s)
+        return dt.strftime("%Y.%m.%d")
+    except Exception:
+        pass
+
+    return default
+
+
 def _generate_ini(work_dir: Path, **kwargs) -> Path:
     template = TEMPLATE_PATH.read_text()
     ini_content = template.format(**kwargs)
@@ -157,6 +205,11 @@ def run_single_backtest(
     # Synchronize compiled EA (.ex5) to MT5 Experts directory if needed
     expert_filename = sync_ea_to_mt5(expert, terminal_data_dir, terminal_path)
 
+    # Normalize dates to MT5 required YYYY.MM.DD format so MT5 doesn't fall back to GUI defaults (e.g. current year only)
+    norm_from = normalize_mt5_date(from_date, default="2013.01.01", is_end=False)
+    norm_to   = normalize_mt5_date(to_date, default="2026.07.03", is_end=True)
+    print(f"  [MT5 Tester Dates] FromDate={norm_from} | ToDate={norm_to} (Input: {from_date} -> {to_date})")
+
     # Where MT5 will actually write the report — extension varies (.htm or .html)
     # depending on build, so we watch both candidates rather than assuming one.
     report_html = Path(terminal_data_dir) / f"{report_name}.html"
@@ -172,8 +225,8 @@ def run_single_backtest(
         set_file=Path(set_file).name,
         symbol=symbol,
         period=period,
-        from_date=from_date,
-        to_date=to_date,
+        from_date=norm_from,
+        to_date=norm_to,
         deposit=deposit,
         currency=currency,
         leverage=leverage,

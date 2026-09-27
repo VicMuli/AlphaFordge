@@ -22,6 +22,34 @@ export default function FullBacktest({ config }: { config: any }) {
   const [riskPct, setRiskPct] = useState<string>('');
   const [loading, setLoading] = useState(false);
 
+  const normalizeMt5Date = (val: string, fallback: string, isEnd: boolean): string => {
+    if (!val || !val.trim()) return fallback;
+    let s = val.trim();
+    for (const sep of [' to ', ' - ', ' -> ', '..']) {
+      if (s.includes(sep)) {
+        const parts = s.split(sep);
+        s = isEnd ? parts[1].trim() : parts[0].trim();
+        break;
+      }
+    }
+    const rangeMatch = s.match(/^(\d{4})\s*[-/]\s*(\d{4})$/);
+    if (rangeMatch) {
+      s = isEnd ? rangeMatch[2] : rangeMatch[1];
+    }
+    if (/^\d{4}$/.test(s)) {
+      return isEnd ? `${s}.12.31` : `${s}.01.01`;
+    }
+    const clean = s.replace(/[-/]/g, '.');
+    const parts = clean.split('.');
+    if (parts.length === 3) {
+      const [p0, p1, p2] = parts.map(p => p.trim());
+      if (p0.length === 4 && /^\d+$/.test(p1) && /^\d+$/.test(p2)) {
+        return `${p0}.${p1.padStart(2, '0')}.${p2.padStart(2, '0')}`;
+      }
+    }
+    return fallback;
+  };
+
   const fetchSetFiles = async (run: string, candidate: string) => {
     if (!candidate) {
       setSetFiles([]);
@@ -117,6 +145,9 @@ export default function FullBacktest({ config }: { config: any }) {
   };
 
   const handleRun = () => {
+    const normFrom = normalizeMt5Date(fromDate, '2013.01.01', false);
+    const normTo = normalizeMt5Date(toDate, '2026.07.03', true);
+
     runScript('run_full_backtest.py', {
       patch: {
         patches: {
@@ -125,14 +156,16 @@ export default function FullBacktest({ config }: { config: any }) {
           TARGET_SYMBOL: selectedMarket || 'USDJPY',
           TARGET_EA: selectedEa || 'TRB',
           TARGET_SET_FILE: selectedSetFile || '',
+          TARGET_FROM_DATE: normFrom,
+          TARGET_TO_DATE: normTo,
         }
       },
       envOverrides: {
         AF_ACTIVE_EA: selectedEa || 'TRB',
         AF_SET_FILE: selectedSetFile || '',
         AF_SYMBOL: selectedMarket || 'USDJPY',
-        AF_BT_START: fromDate,
-        AF_BT_END: toDate,
+        AF_BT_START: normFrom,
+        AF_BT_END: normTo,
         AF_DEPOSIT: deposit,
         AF_LOT_SIZE: lotSize,
         AF_RISK_PCT: riskPct,

@@ -75,7 +75,7 @@ from run_optimization import (
     HOLDOUT_TO,
     WORK_DIR,
 )
-from mt5_runner import run_single_backtest
+from mt5_runner import run_single_backtest, normalize_mt5_date
 from report_analysis import analyze
 
 
@@ -90,9 +90,15 @@ TARGET_CANDIDATE = 'cand_007'
 TARGET_SYMBOL = 'USDJPY'
 TARGET_EA = ''
 TARGET_SET_FILE = ''
+TARGET_FROM_DATE = '2013.01.01'
+TARGET_TO_DATE = '2026.07.03'
 
-BT_START = os.environ.get("AF_BT_START", TRAIN_FROM)
-BT_END   = os.environ.get("AF_BT_END", HOLDOUT_TO)
+# Resolve start and end dates with robust fallbacks and strict MT5 YYYY.MM.DD formatting
+_raw_start = (os.environ.get("AF_BT_START") or TARGET_FROM_DATE or TRAIN_FROM or "2013.01.01").strip()
+_raw_end   = (os.environ.get("AF_BT_END") or TARGET_TO_DATE or HOLDOUT_TO or "2026.07.03").strip()
+BT_START = normalize_mt5_date(_raw_start, default="2013.01.01", is_end=False)
+BT_END   = normalize_mt5_date(_raw_end, default="2026.07.03", is_end=True)
+
 DEPOSIT_OVERRIDE = os.environ.get("AF_DEPOSIT", str(DEPOSIT))
 SYMBOL_OVERRIDE = os.environ.get("AF_SYMBOL", TARGET_SYMBOL if TARGET_SYMBOL else SYMBOL)
 EA_OVERRIDE = os.environ.get("AF_ACTIVE_EA", TARGET_EA).strip()
@@ -1351,6 +1357,7 @@ def locate_or_build_set_file(cand_dir: Path, requested_set_file: str = "") -> Pa
 
 
 def main():
+    global BT_START, BT_END
     base_work_dir = Path(WORK_DIR)
     target_cand_dir = resolve_candidate_dir(base_work_dir, TARGET_RUN_DIR, TARGET_CANDIDATE)
 
@@ -1360,6 +1367,29 @@ def main():
 
     if target_cand_dir is None or not target_cand_dir.exists():
         return
+
+    # Dynamic date range resolution: environment -> TARGET constants -> run_meta.json -> defaults
+    run_start = (os.environ.get("AF_BT_START") or TARGET_FROM_DATE).strip()
+    run_end   = (os.environ.get("AF_BT_END") or TARGET_TO_DATE).strip()
+
+    if not run_start or not run_end:
+        for sdir in (target_cand_dir, target_cand_dir.parent, target_cand_dir.parent.parent):
+            meta_file = sdir / "run_meta.json"
+            if meta_file.exists():
+                try:
+                    with open(meta_file, "r", encoding="utf-8") as mf:
+                        mdata = json.load(mf)
+                        if not run_start and mdata.get("train_from"):
+                            run_start = mdata["train_from"]
+                        if not run_end and mdata.get("holdout_to"):
+                            run_end = mdata["holdout_to"]
+                        if run_start and run_end:
+                            break
+                except Exception:
+                    pass
+
+    BT_START = normalize_mt5_date(run_start or TRAIN_FROM, default="2013.01.01", is_end=False)
+    BT_END   = normalize_mt5_date(run_end or HOLDOUT_TO, default="2026.07.03", is_end=True)
 
     print(f"  Target Directory:  {target_cand_dir.parent.name}")
     print(f"  Target Candidate:  {TARGET_CANDIDATE}")

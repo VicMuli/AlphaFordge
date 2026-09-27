@@ -19,6 +19,17 @@ except ImportError:
     print("ERROR: customtkinter not installed.\nRun:  pip install customtkinter")
     sys.exit(1)
 
+try:
+    from mt5_runner import normalize_mt5_date
+except ImportError:
+    def normalize_mt5_date(val: str, default: str = "2013.01.01", is_end: bool = False) -> str:
+        if not val or not str(val).strip():
+            return default
+        s = str(val).strip().replace("-", ".").replace("/", ".")
+        if re.match(r"^\d{4}$", s):
+            return f"{s}.12.31" if is_end else f"{s}.01.01"
+        return s if re.match(r"^\d{4}\.\d{1,2}\.\d{1,2}$", s) else default
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Theme
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -3136,12 +3147,12 @@ class FullBacktestPanel(BasePanel):
         ovr.grid(row=5, column=0, columnspan=2, sticky="ew", padx=20, pady=(6, 6))
         make_label(ovr, "From Date", font=FB, color=C["sub"]).pack(side="left", padx=(0,8))
         self._from_var = make_entry(ovr, width=100)
-        self._from_var.insert(0, cfg.get("train_from", ""))
+        self._from_var.insert(0, cfg.get("train_from", "2013.01.01") or "2013.01.01")
         self._from_var.pack(side="left", padx=(0,16))
         
         make_label(ovr, "To Date", font=FB, color=C["sub"]).pack(side="left", padx=(0,8))
         self._to_var = make_entry(ovr, width=100)
-        self._to_var.insert(0, cfg.get("holdout_to", ""))
+        self._to_var.insert(0, cfg.get("holdout_to", "2026.07.03") or "2026.07.03")
         self._to_var.pack(side="left", padx=(0,16))
         
         make_label(ovr, "Deposit", font=FB, color=C["sub"]).pack(side="left", padx=(0,8))
@@ -3197,7 +3208,7 @@ class FullBacktestPanel(BasePanel):
         else:
             self._cand_var.set("(none found)")
 
-        # Auto-detect EA from run directory if available and suggest in dropdown
+        # Auto-detect EA and date range from run directory if available
         run_path = find_run_path(cfg.get("work_dir", ""), run_dir_val)
         if run_path:
             meta_file = run_path / "run_meta.json"
@@ -3212,6 +3223,20 @@ class FullBacktestPanel(BasePanel):
                                 avail.insert(0, detected_ea)
                                 self._ea_cb.configure(values=avail)
                             self._ea_var.set(detected_ea)
+
+                        # Sync From Date and To Date from run metadata if present
+                        r_from = mdata.get("train_from")
+                        r_to = mdata.get("holdout_to")
+                        if r_from and hasattr(self, "_from_var"):
+                            cur_from = self._from_var.get().strip()
+                            if not cur_from or cur_from in ("2013.01.01", "2013"):
+                                self._from_var.delete(0, "end")
+                                self._from_var.insert(0, r_from)
+                        if r_to and hasattr(self, "_to_var"):
+                            cur_to = self._to_var.get().strip()
+                            if not cur_to or cur_to in ("2026.07.03", "2026"):
+                                self._to_var.delete(0, "end")
+                                self._to_var.insert(0, r_to)
                 except Exception:
                     pass
 
@@ -3274,20 +3299,47 @@ class FullBacktestPanel(BasePanel):
                 except Exception:
                     pass
 
+        raw_from = self._from_var.get().strip() or self.cfg.get("train_from", "2013.01.01")
+        raw_to   = self._to_var.get().strip() or self.cfg.get("holdout_to", "2026.07.03")
+
+        # Handle range syntax if entered in From Date (e.g. "2013-2026", "2013 to 2026", "2013..2026")
+        for sep in [" to ", " - ", " -> ", ".."]:
+            if sep in raw_from:
+                parts = raw_from.split(sep)
+                raw_from = parts[0].strip()
+                raw_to = parts[1].strip()
+                break
+        else:
+            m_range = re.match(r"^(\d{4})\s*[-/]\s*(\d{4})$", raw_from)
+            if m_range:
+                raw_from = m_range.group(1)
+                raw_to = m_range.group(2)
+
+        norm_from = normalize_mt5_date(raw_from, default="2013.01.01", is_end=False)
+        norm_to   = normalize_mt5_date(raw_to, default="2026.07.03", is_end=True)
+
+        # Reflect normalized dates back in UI for clarity
+        self._from_var.delete(0, "end")
+        self._from_var.insert(0, norm_from)
+        self._to_var.delete(0, "end")
+        self._to_var.insert(0, norm_to)
+
         patch_script(SCRIPT_DIR / "run_full_backtest.py", {
             "TARGET_RUN_DIR": run,
             "TARGET_CANDIDATE": cand,
             "TARGET_SYMBOL": market,
             "TARGET_EA": selected_ea,
             "TARGET_SET_FILE": selected_set,
+            "TARGET_FROM_DATE": norm_from,
+            "TARGET_TO_DATE": norm_to,
         })
         env_extra = {
             "AF_ACTIVE_EA": selected_ea,
             "AF_EXPERT":    expert,
             "AF_SET_FILE":  selected_set,
             "AF_SYMBOL":    market,
-            "AF_BT_START":  self._from_var.get().strip() or self.cfg.get("train_from", ""),
-            "AF_BT_END":    self._to_var.get().strip() or self.cfg.get("holdout_to", ""),
+            "AF_BT_START":  norm_from,
+            "AF_BT_END":    norm_to,
             "AF_DEPOSIT":   self._dep_var.get().strip() or self.cfg.get("deposit", "2500"),
             "AF_LOT_SIZE":  self._lot_var.get().strip(),
             "AF_RISK_PCT":  self._risk_var.get().strip(),
