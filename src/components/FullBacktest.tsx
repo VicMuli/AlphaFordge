@@ -10,6 +10,10 @@ export default function FullBacktest({ config }: { config: any }) {
   const [selectedRun, setSelectedRun] = useState<string>('');
   const [candidates, setCandidates] = useState<string[]>([]);
   const [selectedCand, setSelectedCand] = useState<string>('');
+  const [eas, setEas] = useState<string[]>(['TRB', 'ORB']);
+  const [selectedEa, setSelectedEa] = useState<string>(config?.active_ea || 'TRB');
+  const [setFiles, setSetFiles] = useState<string[]>([]);
+  const [selectedSetFile, setSelectedSetFile] = useState<string>('');
   const [selectedMarket, setSelectedMarket] = useState<string>(config.symbol || 'USDJPY');
   const [fromDate, setFromDate] = useState<string>(config.train_from || '2013.01.01');
   const [toDate, setToDate] = useState<string>(config.holdout_to || '2026.07.03');
@@ -17,6 +21,30 @@ export default function FullBacktest({ config }: { config: any }) {
   const [lotSize, setLotSize] = useState<string>('');
   const [riskPct, setRiskPct] = useState<string>('');
   const [loading, setLoading] = useState(false);
+
+  const fetchSetFiles = async (run: string, candidate: string) => {
+    if (!candidate) {
+      setSetFiles([]);
+      setSelectedSetFile('');
+      return;
+    }
+    try {
+      const res = await fetch(`/api/candidate-set-files?run=${encodeURIComponent(run)}&candidate=${encodeURIComponent(candidate)}`);
+      if (res.ok) {
+        const data = await res.json();
+        const files: string[] = data.setFiles || [];
+        setSetFiles(files);
+        if (files.length > 0) {
+          setSelectedSetFile(files[0]);
+        } else {
+          const num = candidate.replace('cand_', '');
+          setSelectedSetFile(`c${num}_full.set`);
+        }
+      }
+    } catch (e) {
+      console.error('Error fetching set files:', e);
+    }
+  };
 
   const fetchLists = async () => {
     setLoading(true);
@@ -26,14 +54,24 @@ export default function FullBacktest({ config }: { config: any }) {
         const data = await res.json();
         const runList = data.runsDetailed || [];
         setRuns(runList);
+        if (data.availableEas && data.availableEas.length > 0) {
+          setEas(data.availableEas);
+          if (!selectedEa || !data.availableEas.includes(selectedEa)) {
+            setSelectedEa(data.availableEas[0]);
+          }
+        }
         if (runList.length > 0) {
           const first = runList[0];
           setSelectedRun(first.name);
           setCandidates(first.candidates || []);
           if (first.candidates && first.candidates.length > 0) {
-            setSelectedCand(first.candidates[0]);
+            const firstCand = first.candidates[0];
+            setSelectedCand(firstCand);
+            fetchSetFiles(first.name, firstCand);
           } else {
             setSelectedCand('');
+            setSetFiles([]);
+            setSelectedSetFile('');
           }
         }
       }
@@ -53,6 +91,7 @@ export default function FullBacktest({ config }: { config: any }) {
       if (config.train_from) setFromDate(config.train_from);
       if (config.holdout_to) setToDate(config.holdout_to);
       if (config.deposit) setDeposit(config.deposit);
+      if (config.active_ea && !selectedEa) setSelectedEa(config.active_ea);
     }
   }, [config]);
 
@@ -62,10 +101,19 @@ export default function FullBacktest({ config }: { config: any }) {
     const cands = found ? found.candidates : [];
     setCandidates(cands || []);
     if (cands && cands.length > 0) {
-      setSelectedCand(cands[0]);
+      const cand = cands[0];
+      setSelectedCand(cand);
+      fetchSetFiles(runName, cand);
     } else {
       setSelectedCand('');
+      setSetFiles([]);
+      setSelectedSetFile('');
     }
+  };
+
+  const handleCandChange = (cand: string) => {
+    setSelectedCand(cand);
+    fetchSetFiles(selectedRun, cand);
   };
 
   const handleRun = () => {
@@ -75,9 +123,13 @@ export default function FullBacktest({ config }: { config: any }) {
           TARGET_RUN_DIR: selectedRun || 'latest',
           TARGET_CANDIDATE: selectedCand || 'cand_001',
           TARGET_SYMBOL: selectedMarket || 'USDJPY',
+          TARGET_EA: selectedEa || 'TRB',
+          TARGET_SET_FILE: selectedSetFile || '',
         }
       },
       envOverrides: {
+        AF_ACTIVE_EA: selectedEa || 'TRB',
+        AF_SET_FILE: selectedSetFile || '',
         AF_SYMBOL: selectedMarket || 'USDJPY',
         AF_BT_START: fromDate,
         AF_BT_END: toDate,
@@ -120,7 +172,7 @@ export default function FullBacktest({ config }: { config: any }) {
             <label className="text-[#8b95a6] w-36 text-right text-xs font-semibold">Candidate</label>
             <select 
               value={selectedCand} 
-              onChange={e => setSelectedCand(e.target.value)}
+              onChange={e => handleCandChange(e.target.value)}
               className="bg-[#1a2235] border border-[#2d3748] text-[#f9fafb] rounded-lg px-3 py-2 flex-1 text-sm focus:outline-none focus:border-[#f59e0b]"
             >
               {candidates.length > 0 ? (
@@ -130,6 +182,38 @@ export default function FullBacktest({ config }: { config: any }) {
               ) : (
                 <option value="cand_001">cand_001 (default)</option>
               )}
+            </select>
+          </div>
+
+          <div className="flex items-center gap-4">
+            <label className="text-[#8b95a6] w-36 text-right text-xs font-semibold">Candidate .set File</label>
+            <select 
+              value={selectedSetFile} 
+              onChange={e => setSelectedSetFile(e.target.value)}
+              className="bg-[#1a2235] border border-[#2d3748] text-[#f9fafb] rounded-lg px-3 py-2 flex-1 text-sm focus:outline-none focus:border-[#f59e0b]"
+            >
+              {setFiles.length > 0 ? (
+                setFiles.map(f => (
+                  <option key={f} value={f}>{f}</option>
+                ))
+              ) : (
+                <option value={selectedSetFile || `c001_full.set`}>
+                  {selectedSetFile || `c001_full.set`} (default)
+                </option>
+              )}
+            </select>
+          </div>
+
+          <div className="flex items-center gap-4">
+            <label className="text-[#8b95a6] w-36 text-right text-xs font-semibold">Strategy / EA</label>
+            <select 
+              value={selectedEa} 
+              onChange={e => setSelectedEa(e.target.value)}
+              className="bg-[#1a2235] border border-[#2d3748] text-[#f9fafb] rounded-lg px-3 py-2 flex-1 text-sm focus:outline-none focus:border-[#f59e0b]"
+            >
+              {eas.map(ea => (
+                <option key={ea} value={ea}>{ea}</option>
+              ))}
             </select>
           </div>
 

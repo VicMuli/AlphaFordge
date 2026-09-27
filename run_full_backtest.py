@@ -88,11 +88,58 @@ import os
 TARGET_RUN_DIR = 'run_20260911_094409'
 TARGET_CANDIDATE = 'cand_007'
 TARGET_SYMBOL = 'USDJPY'
+TARGET_EA = ''
+TARGET_SET_FILE = ''
 
 BT_START = os.environ.get("AF_BT_START", TRAIN_FROM)
 BT_END   = os.environ.get("AF_BT_END", HOLDOUT_TO)
 DEPOSIT_OVERRIDE = os.environ.get("AF_DEPOSIT", str(DEPOSIT))
 SYMBOL_OVERRIDE = os.environ.get("AF_SYMBOL", TARGET_SYMBOL if TARGET_SYMBOL else SYMBOL)
+EA_OVERRIDE = os.environ.get("AF_ACTIVE_EA", TARGET_EA).strip()
+EXPERT_OVERRIDE = os.environ.get("AF_EXPERT", "").strip()
+SET_FILE_OVERRIDE = os.environ.get("AF_SET_FILE", TARGET_SET_FILE).strip()
+
+
+def resolve_ea_expert(ea_name: str) -> str:
+    """Resolve an EA name or partial name to its .ex5 filename."""
+    if not ea_name:
+        return ""
+    if ea_name.lower().endswith(".ex5"):
+        return ea_name
+
+    clean_ea = re.sub(r'\.(ex5|mq5)$', '', ea_name, flags=re.IGNORECASE).strip().lower()
+    search_dirs = [
+        Path(WORK_DIR).parent / "researched_strategies",
+        Path(WORK_DIR).parent / "strategies",
+        Path(WORK_DIR).parent,
+        Path("researched_strategies"),
+        Path("strategies"),
+    ]
+    if TERMINAL_DATA_DIR:
+        search_dirs.append(Path(TERMINAL_DATA_DIR) / "MQL5" / "Experts")
+
+    for sdir in search_dirs:
+        if not sdir.exists():
+            continue
+        try:
+            for f in sdir.glob("*.ex5"):
+                low = f.stem.lower()
+                if low == clean_ea or low.startswith(clean_ea) or clean_ea.startswith(low):
+                    return f.name
+            for sub in sdir.iterdir():
+                if sub.is_dir() and not sub.name.startswith("."):
+                    sub_low = sub.name.lower()
+                    if sub_low == clean_ea or sub_low.startswith(clean_ea) or clean_ea.startswith(sub_low) or clean_ea in sub_low:
+                        ex5s = list(sub.glob("*.ex5"))
+                        if ex5s:
+                            return ex5s[0].name
+                        mq5s = list(sub.glob("*.mq5"))
+                        if mq5s:
+                            return mq5s[0].stem + ".ex5"
+        except OSError:
+            pass
+
+    return f"{ea_name}.ex5"
 
 # ===========================================================================
 # HTML / DATA HELPERS
@@ -1253,7 +1300,31 @@ def resolve_candidate_dir(base_work_dir: Path, target_run: str, target_cand: str
     return None
 
 
-def locate_or_build_set_file(cand_dir: Path) -> Path | None:
+def locate_or_build_set_file(cand_dir: Path, requested_set_file: str = "") -> Path | None:
+    # 1. If explicit requested_set_file is provided (either from TARGET_SET_FILE or AF_SET_FILE)
+    if requested_set_file and requested_set_file not in ("(none)", "(auto)", "(auto-detect / build)", "(none found)"):
+        clean_name = requested_set_file.split(" (")[0].strip()
+
+        # Check direct path in candidate directory
+        p_cand = cand_dir / clean_name
+        if p_cand.exists() and p_cand.is_file():
+            print(f"  [Selected .set File]: {p_cand.name}")
+            return p_cand
+
+        # Check subdirectories in candidate directory
+        found = list(cand_dir.rglob(clean_name))
+        if found and found[0].is_file():
+            print(f"  [Selected .set File]: {found[0].name}")
+            return found[0]
+
+        # Check absolute or relative path
+        p_abs = Path(clean_name)
+        if p_abs.exists() and p_abs.is_file():
+            print(f"  [Selected .set File]: {p_abs.name}")
+            return p_abs
+
+        print(f"  [Notice] Specified set file '{requested_set_file}' not found in candidate folder, using fallback.")
+
     cand_name = cand_dir.name
     cand_n = cand_name.replace("cand_", "")
     target_set_path = cand_dir / f"c{cand_n}_full.set"
@@ -1292,10 +1363,14 @@ def main():
 
     print(f"  Target Directory:  {target_cand_dir.parent.name}")
     print(f"  Target Candidate:  {TARGET_CANDIDATE}")
+    if EA_OVERRIDE:
+        print(f"  Target EA:         {EA_OVERRIDE}")
+    if SET_FILE_OVERRIDE:
+        print(f"  Target .set File:  {SET_FILE_OVERRIDE}")
     print(f"  Backtest Range:    {BT_START} -> {BT_END}")
     print(f"  Initial Deposit:   {DEPOSIT_OVERRIDE} {CURRENCY}")
 
-    source_set_file = locate_or_build_set_file(target_cand_dir)
+    source_set_file = locate_or_build_set_file(target_cand_dir, requested_set_file=SET_FILE_OVERRIDE)
     if not source_set_file:
         print("ERROR: Could not locate or build a .set file.")
         return
@@ -1331,31 +1406,39 @@ def main():
     report_folder.mkdir(parents=True, exist_ok=True)
     report_name = f"Full_BT_{TARGET_CANDIDATE}"
 
-    # Auto-detect expert from candidate directory, run_meta.json, or run.ini
-    expert_to_run = os.environ.get("AF_EXPERT") or EXPERT
-    for sdir in (target_cand_dir, target_cand_dir.parent, target_cand_dir.parent.parent):
-        meta_file = sdir / "run_meta.json"
-        if meta_file.exists():
-            try:
-                with open(meta_file, "r", encoding="utf-8") as mf:
-                    mdata = json.load(mf)
-                    if mdata.get("expert"):
-                        expert_to_run = mdata["expert"]
+    # Determine expert from user override, EA override, candidate directory, run_meta.json, run.ini, or config EXPERT
+    expert_to_run = EXPERT_OVERRIDE
+    if not expert_to_run and EA_OVERRIDE:
+        expert_to_run = resolve_ea_expert(EA_OVERRIDE)
+
+    if not expert_to_run:
+        expert_to_run = os.environ.get("AF_EXPERT") or EXPERT
+        for sdir in (target_cand_dir, target_cand_dir.parent, target_cand_dir.parent.parent):
+            meta_file = sdir / "run_meta.json"
+            if meta_file.exists():
+                try:
+                    with open(meta_file, "r", encoding="utf-8") as mf:
+                        mdata = json.load(mf)
+                        if mdata.get("expert"):
+                            expert_to_run = mdata["expert"]
+                            break
+                        elif mdata.get("ea"):
+                            expert_to_run = resolve_ea_expert(mdata["ea"])
+                            break
+                except Exception:
+                    pass
+            ini_file = sdir / "run.ini"
+            if ini_file.exists():
+                try:
+                    ini_text = ini_file.read_text(encoding="utf-16", errors="ignore")
+                    if not ini_text.strip():
+                        ini_text = ini_file.read_text(encoding="utf-8", errors="ignore")
+                    m_exp = re.search(r"Expert\s*=\s*(.+)", ini_text)
+                    if m_exp:
+                        expert_to_run = m_exp.group(1).strip()
                         break
-            except Exception:
-                pass
-        ini_file = sdir / "run.ini"
-        if ini_file.exists():
-            try:
-                ini_text = ini_file.read_text(encoding="utf-16", errors="ignore")
-                if not ini_text.strip():
-                    ini_text = ini_file.read_text(encoding="utf-8", errors="ignore")
-                m_exp = re.search(r"Expert\s*=\s*(.+)", ini_text)
-                if m_exp:
-                    expert_to_run = m_exp.group(1).strip()
-                    break
-            except Exception:
-                pass
+                except Exception:
+                    pass
 
     from mt5_optimizer import sync_ea_to_mt5
     expert_to_run = sync_ea_to_mt5(expert_to_run, TERMINAL_DATA_DIR, TERMINAL_PATH)

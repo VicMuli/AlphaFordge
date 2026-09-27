@@ -651,6 +651,129 @@ def find_candidate_path(work_dir: str, candidate_name: str, run_dir: str = None)
     return None
 
 
+def get_candidate_set_files(work_dir: str, candidate_name: str, run_dir: str = None) -> list:
+    """Find all .set files available in the specified candidate folder."""
+    cand_path = find_candidate_path(work_dir, candidate_name, run_dir)
+    if not cand_path or not cand_path.exists():
+        return []
+
+    set_files = []
+    try:
+        # Check direct files
+        for f in cand_path.iterdir():
+            if f.is_file() and f.suffix.lower() == ".set":
+                set_files.append(f.name)
+        # Check subdirectories if direct files not found or to be comprehensive
+        for f in cand_path.rglob("*.set"):
+            if f.is_file() and f.name not in set_files:
+                set_files.append(f.name)
+        for f in cand_path.rglob("*.SET"):
+            if f.is_file() and f.name not in set_files:
+                set_files.append(f.name)
+    except OSError:
+        pass
+
+    cand_n = candidate_name.replace("cand_", "").strip()
+    pref_full = f"c{cand_n}_full.set"
+    pref_name = f"{candidate_name}.set"
+
+    # Prioritize standard names
+    sorted_sets = sorted(list(set(set_files)))
+    if pref_full in sorted_sets:
+        sorted_sets.remove(pref_full)
+        sorted_sets.insert(0, pref_full)
+    elif pref_name in sorted_sets:
+        sorted_sets.remove(pref_name)
+        sorted_sets.insert(0, pref_name)
+
+    return sorted_sets
+
+
+def get_available_eas(cfg: dict = None) -> list:
+    """Scan and return a list of available EA names from researched_strategies, strategies, and config."""
+    eas = set()
+    if cfg:
+        active = cfg.get("active_ea")
+        if active:
+            eas.add(active.strip())
+        expert = cfg.get("expert")
+        if expert:
+            ea_clean = re.sub(r'\.(ex5|mq5)$', '', expert, flags=re.IGNORECASE).strip()
+            if ea_clean:
+                eas.add(ea_clean)
+
+    search_dirs = [
+        SCRIPT_DIR / "researched_strategies",
+        SCRIPT_DIR / "strategies",
+    ]
+    if cfg and cfg.get("research_dir"):
+        search_dirs.append(Path(cfg["research_dir"]))
+
+    for sdir in search_dirs:
+        if sdir.exists() and sdir.is_dir():
+            try:
+                for d in sdir.iterdir():
+                    if d.is_dir() and not d.name.startswith("."):
+                        eas.add(d.name)
+                    elif d.is_file() and d.suffix.lower() in (".ex5", ".mq5"):
+                        eas.add(d.stem)
+            except OSError:
+                pass
+
+    if not eas:
+        eas = {"TRB", "ORB"}
+
+    res = sorted(list(eas))
+    if cfg and cfg.get("active_ea") in res:
+        res.remove(cfg["active_ea"])
+        res.insert(0, cfg["active_ea"])
+    return res
+
+
+def resolve_ea_expert(ea_name: str, cfg: dict = None) -> str:
+    """Resolve an EA name or filename to the matching .ex5 executable filename."""
+    if not ea_name:
+        return (cfg or {}).get("expert", "")
+    if ea_name.lower().endswith(".ex5"):
+        return ea_name
+
+    clean_ea = re.sub(r'\.(ex5|mq5)$', '', ea_name, flags=re.IGNORECASE).strip().lower()
+    search_dirs = [
+        SCRIPT_DIR / "researched_strategies",
+        SCRIPT_DIR / "strategies",
+        SCRIPT_DIR,
+    ]
+    if cfg and cfg.get("research_dir"):
+        search_dirs.insert(0, Path(cfg["research_dir"]))
+    if cfg and cfg.get("terminal_data_dir"):
+        search_dirs.append(Path(cfg["terminal_data_dir"]) / "MQL5" / "Experts")
+
+    for sdir in search_dirs:
+        if not sdir.exists():
+            continue
+        try:
+            for f in sdir.glob("*.ex5"):
+                low = f.stem.lower()
+                if low == clean_ea or low.startswith(clean_ea) or clean_ea.startswith(low):
+                    return f.name
+            for sub in sdir.iterdir():
+                if sub.is_dir() and not sub.name.startswith("."):
+                    sub_low = sub.name.lower()
+                    if sub_low == clean_ea or sub_low.startswith(clean_ea) or clean_ea.startswith(sub_low) or clean_ea in sub_low:
+                        ex5s = list(sub.glob("*.ex5"))
+                        if ex5s:
+                            return ex5s[0].name
+                        mq5s = list(sub.glob("*.mq5"))
+                        if mq5s:
+                            return mq5s[0].stem + ".ex5"
+        except OSError:
+            pass
+
+    if cfg and cfg.get("expert") and clean_ea in cfg.get("expert", "").lower():
+        return cfg["expert"]
+    return f"{ea_name}.ex5"
+
+
 import tkinter as tk
 
 def _add_context_menu(widget, is_text=False):
@@ -2960,7 +3083,7 @@ class FullBacktestPanel(BasePanel):
         self._run_cb = ctk.CTkComboBox(sel, values=run_dirs or ["(none)"], variable=self._run_var,
                                         width=340, font=FB, fg_color=C["inp"],
                                         border_color=C["border"], button_color=C["accent"],
-                                        command=self._refresh_cands)
+                                        command=self._on_run_changed)
         self._run_cb.grid(row=0, column=1, padx=(0,20), pady=(16,6), sticky="w")
 
         # Candidate
@@ -2969,9 +3092,31 @@ class FullBacktestPanel(BasePanel):
         self._cand_var = ctk.StringVar()
         self._cand_cb  = ctk.CTkComboBox(sel, values=[], variable=self._cand_var,
                                           width=340, font=FB, fg_color=C["inp"],
-                                          border_color=C["border"], button_color=C["accent"])
+                                          border_color=C["border"], button_color=C["accent"],
+                                          command=self._on_cand_changed)
         self._cand_cb.grid(row=1, column=1, padx=(0,20), pady=6, sticky="w")
-        self._refresh_cands(self._run_var.get())
+
+        # Candidate .set file
+        make_label(sel, "Candidate .set File", font=FB, color=C["sub"]).grid(
+            row=2, column=0, sticky="w", padx=(20,8), pady=6)
+        self._set_file_var = ctk.StringVar()
+        self._set_file_cb  = ctk.CTkComboBox(sel, values=[], variable=self._set_file_var,
+                                             width=340, font=FB, fg_color=C["inp"],
+                                             border_color=C["border"], button_color=C["accent"])
+        self._set_file_cb.grid(row=2, column=1, padx=(0,20), pady=6, sticky="w")
+
+        # Strategy / EA
+        make_label(sel, "Strategy / EA", font=FB, color=C["sub"]).grid(
+            row=3, column=0, sticky="w", padx=(20,8), pady=6)
+        available_eas = get_available_eas(cfg)
+        default_ea = cfg.get("active_ea", "TRB")
+        if default_ea not in available_eas and default_ea:
+            available_eas.insert(0, default_ea)
+        self._ea_var = ctk.StringVar(value=default_ea)
+        self._ea_cb = ctk.CTkComboBox(sel, values=available_eas or ["TRB"], variable=self._ea_var,
+                                      width=340, font=FB, fg_color=C["inp"],
+                                      border_color=C["border"], button_color=C["accent"])
+        self._ea_cb.grid(row=3, column=1, padx=(0,20), pady=6, sticky="w")
 
         # Market / Symbol
         MARKETS = ["USDJPY", "EURJPY", "EURUSD", "GBPUSD", "XAUUSD"]
@@ -2980,15 +3125,15 @@ class FullBacktestPanel(BasePanel):
             default_sym = "USDJPY"
         self._market_var = ctk.StringVar(value=default_sym)
         make_label(sel, "Market / Symbol", font=FB, color=C["sub"]).grid(
-            row=2, column=0, sticky="w", padx=(20,8), pady=6)
+            row=4, column=0, sticky="w", padx=(20,8), pady=6)
         self._market_cb = ctk.CTkComboBox(sel, values=MARKETS, variable=self._market_var,
                                           width=340, font=FB, fg_color=C["inp"],
                                           border_color=C["border"], button_color=C["accent"])
-        self._market_cb.grid(row=2, column=1, padx=(0,20), pady=6, sticky="w")
+        self._market_cb.grid(row=4, column=1, padx=(0,20), pady=6, sticky="w")
 
         # Overrides
         ovr = ctk.CTkFrame(sel, fg_color="transparent")
-        ovr.grid(row=3, column=0, columnspan=2, sticky="ew", padx=20, pady=(6, 6))
+        ovr.grid(row=5, column=0, columnspan=2, sticky="ew", padx=20, pady=(6, 6))
         make_label(ovr, "From Date", font=FB, color=C["sub"]).pack(side="left", padx=(0,8))
         self._from_var = make_entry(ovr, width=100)
         self._from_var.insert(0, cfg.get("train_from", ""))
@@ -3014,14 +3159,17 @@ class FullBacktestPanel(BasePanel):
         self._risk_var.insert(0, cfg.get("risk_pct", ""))
         self._risk_var.pack(side="left")
 
+        # Initial candidates and set files population
+        self._refresh_cands(self._run_var.get())
+
         # Buttons
         btn_row = ctk.CTkFrame(sel, fg_color="transparent")
-        btn_row.grid(row=4, column=0, columnspan=2, sticky="ew", padx=20, pady=(16,16))
+        btn_row.grid(row=6, column=0, columnspan=2, sticky="ew", padx=20, pady=(16,16))
         make_btn(btn_row, "▶  Run Full Backtest", self._run, width=200).pack(side="left")
         make_btn(btn_row, "📂 Open Output",
                  self._open_out, color=C["card"], hover=C["hover"], width=150).pack(side="left", padx=(12,0))
         make_btn(btn_row, "⟳ Refresh",
-                 lambda: self._refresh_cands(self._run_var.get()),
+                 self._refresh_all,
                  color=C["card"], hover=C["hover"], width=110).pack(side="left", padx=(12,0))
 
         # Log
@@ -3034,33 +3182,93 @@ class FullBacktestPanel(BasePanel):
         self._log = make_log(log_card, height=280)
         self._log.grid(row=1, column=0, sticky="nsew", padx=16, pady=(0,16))
 
+    def _on_run_changed(self, run_dir_val):
+        self._refresh_cands(run_dir_val)
+
+    def _on_cand_changed(self, cand_val=None):
+        self._refresh_set_files()
+
     def _refresh_cands(self, run_dir_val):
         cfg   = self.cfg
         cands = get_candidates(cfg.get("work_dir",""), run_dir_val)
         self._cand_cb.configure(values=cands or ["(none found)"])
         if cands:
             self._cand_var.set(cands[0])
+        else:
+            self._cand_var.set("(none found)")
 
-    def _run(self):
-        run    = self._run_var.get()
-        cand   = self._cand_var.get()
-        market = self._market_var.get().strip() or "USDJPY"
-        if not run or not cand or cand == "(none found)":
-            messagebox.showwarning("Missing", "Select a run and candidate.")
-            return
-
-        # Dynamically detect active_ea and expert from run_meta.json of the selected run
-        active_ea = self.cfg.get("active_ea", "")
-        expert = self.cfg.get("expert", "")
-        run_path = find_run_path(self.cfg.get("work_dir", ""), run)
+        # Auto-detect EA from run directory if available and suggest in dropdown
+        run_path = find_run_path(cfg.get("work_dir", ""), run_dir_val)
         if run_path:
             meta_file = run_path / "run_meta.json"
             if meta_file.exists():
                 try:
                     with open(meta_file, "r", encoding="utf-8") as mf:
                         mdata = json.load(mf)
-                        if mdata.get("ea"):
-                            active_ea = mdata["ea"]
+                        detected_ea = mdata.get("ea")
+                        if detected_ea:
+                            avail = list(self._ea_cb.cget("values"))
+                            if detected_ea not in avail:
+                                avail.insert(0, detected_ea)
+                                self._ea_cb.configure(values=avail)
+                            self._ea_var.set(detected_ea)
+                except Exception:
+                    pass
+
+        self._refresh_set_files()
+
+    def _refresh_set_files(self):
+        cfg = self.cfg
+        run = self._run_var.get().strip() if hasattr(self, "_run_var") else ""
+        cand = self._cand_var.get().strip() if hasattr(self, "_cand_var") else ""
+        if not cand or cand == "(none found)":
+            self._set_file_cb.configure(values=["(none found)"])
+            self._set_file_var.set("(none found)")
+            return
+
+        set_files = get_candidate_set_files(cfg.get("work_dir", ""), cand, run)
+        if set_files:
+            self._set_file_cb.configure(values=set_files)
+            current = self._set_file_var.get().strip() if hasattr(self, "_set_file_var") else ""
+            if current in set_files:
+                self._set_file_var.set(current)
+            else:
+                self._set_file_var.set(set_files[0])
+        else:
+            cand_n = cand.replace("cand_", "").strip()
+            fallback = [f"c{cand_n}_full.set", "(auto-detect / build)"]
+            self._set_file_cb.configure(values=fallback)
+            self._set_file_var.set(fallback[0])
+
+    def _refresh_all(self):
+        cfg = self.cfg
+        run_dirs = get_run_dirs(cfg.get("work_dir",""))
+        self._run_cb.configure(values=run_dirs or ["(none)"])
+        if run_dirs and (not self._run_var.get() or self._run_var.get() not in run_dirs):
+            self._run_var.set(run_dirs[0])
+        eas = get_available_eas(cfg)
+        self._ea_cb.configure(values=eas or ["TRB"])
+        self._refresh_cands(self._run_var.get())
+
+    def _run(self):
+        run    = self._run_var.get().strip()
+        cand   = self._cand_var.get().strip()
+        selected_ea  = self._ea_var.get().strip() or self.cfg.get("active_ea", "TRB")
+        selected_set = self._set_file_var.get().strip()
+        market = self._market_var.get().strip() or "USDJPY"
+        if not run or not cand or cand == "(none found)":
+            messagebox.showwarning("Missing", "Select a run and candidate.")
+            return
+
+        # Resolve expert file for the selected EA
+        expert = resolve_ea_expert(selected_ea, self.cfg)
+        run_path = find_run_path(self.cfg.get("work_dir", ""), run)
+        if run_path and not expert:
+            meta_file = run_path / "run_meta.json"
+            if meta_file.exists():
+                try:
+                    with open(meta_file, "r", encoding="utf-8") as mf:
+                        mdata = json.load(mf)
                         if mdata.get("expert"):
                             expert = mdata["expert"]
                 except Exception:
@@ -3070,16 +3278,19 @@ class FullBacktestPanel(BasePanel):
             "TARGET_RUN_DIR": run,
             "TARGET_CANDIDATE": cand,
             "TARGET_SYMBOL": market,
+            "TARGET_EA": selected_ea,
+            "TARGET_SET_FILE": selected_set,
         })
         env_extra = {
-            "AF_ACTIVE_EA": active_ea,
+            "AF_ACTIVE_EA": selected_ea,
             "AF_EXPERT":    expert,
-            "AF_SYMBOL":   market,
-            "AF_BT_START": self._from_var.get().strip() or self.cfg.get("train_from", ""),
-            "AF_BT_END":   self._to_var.get().strip() or self.cfg.get("holdout_to", ""),
-            "AF_DEPOSIT":  self._dep_var.get().strip() or self.cfg.get("deposit", "2500"),
-            "AF_LOT_SIZE": self._lot_var.get().strip(),
-            "AF_RISK_PCT": self._risk_var.get().strip(),
+            "AF_SET_FILE":  selected_set,
+            "AF_SYMBOL":    market,
+            "AF_BT_START":  self._from_var.get().strip() or self.cfg.get("train_from", ""),
+            "AF_BT_END":    self._to_var.get().strip() or self.cfg.get("holdout_to", ""),
+            "AF_DEPOSIT":   self._dep_var.get().strip() or self.cfg.get("deposit", "2500"),
+            "AF_LOT_SIZE":  self._lot_var.get().strip(),
+            "AF_RISK_PCT":  self._risk_var.get().strip(),
         }
         self.log_clear(self._log)
         self.run_script("run_full_backtest.py", self._log, env_extra=env_extra)

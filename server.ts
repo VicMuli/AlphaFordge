@@ -514,6 +514,19 @@ async function startServer() {
 
       const totalPassed = runs.reduce((sum, r) => sum + r.passedCandidates, 0);
 
+      const eaSet = new Set<string>();
+      if (cfg.active_ea) eaSet.add(cfg.active_ea);
+      researchedItems.filter(r => r.isDir).forEach(r => eaSet.add(r.name));
+      strategyItems.forEach(s => {
+        const clean = s.name.replace(/\.(ex5|mq5)$/i, '');
+        if (clean) eaSet.add(clean);
+      });
+      if (eaSet.size === 0) {
+        eaSet.add("TRB");
+        eaSet.add("ORB");
+      }
+      const availableEas = Array.from(eaSet);
+
       res.json({
         runs: runs.map(r => r.name),
         runsDetailed: runs,
@@ -521,9 +534,89 @@ async function startServer() {
         totalRuns: runs.length,
         totalPassed,
         portfolios,
+        availableEas,
         researchedStrategies: researchedItems,
         strategyFiles: strategyItems,
       });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Get available .set files for a candidate in an optimization run
+  app.get("/api/candidate-set-files", async (req, res) => {
+    try {
+      const { run, candidate } = req.query;
+      const candStr = String(candidate || '').trim();
+      const runStr = String(run || '').trim();
+      if (!candStr) {
+        return res.json({ setFiles: [] });
+      }
+      const cwd = process.cwd();
+      const optRunsDir = path.join(cwd, 'optimization_runs');
+
+      let targetCandDir = '';
+      const candidatesToCheck: string[] = [];
+      if (runStr && runStr !== 'latest') {
+        candidatesToCheck.push(
+          path.join(optRunsDir, runStr, 'passed_candidates', candStr),
+          path.join(optRunsDir, runStr, candStr)
+        );
+      }
+      candidatesToCheck.push(
+        path.join(optRunsDir, 'passed_candidates', candStr),
+        path.join(optRunsDir, candStr)
+      );
+
+      for (const p of candidatesToCheck) {
+        if (existsSync(p)) {
+          targetCandDir = p;
+          break;
+        }
+      }
+
+      if (!targetCandDir && existsSync(optRunsDir)) {
+        function searchForCand(dir: string, depth = 0): string | null {
+          if (depth > 4) return null;
+          try {
+            const entries = readdirSync(dir, { withFileTypes: true });
+            for (const e of entries) {
+              if (e.isDirectory()) {
+                const sub = path.join(dir, e.name);
+                if (e.name === candStr) return sub;
+                const found = searchForCand(sub, depth + 1);
+                if (found) return found;
+              }
+            }
+          } catch {}
+          return null;
+        }
+        targetCandDir = searchForCand(optRunsDir) || '';
+      }
+
+      const setFiles: string[] = [];
+      if (targetCandDir && existsSync(targetCandDir)) {
+        try {
+          const files = await fs.readdir(targetCandDir);
+          for (const f of files) {
+            if (f.toLowerCase().endsWith('.set')) {
+              setFiles.push(f);
+            }
+          }
+        } catch {}
+      }
+
+      const candNum = candStr.replace('cand_', '');
+      const pref = `c${candNum}_full.set`;
+      if (setFiles.includes(pref)) {
+        const idx = setFiles.indexOf(pref);
+        setFiles.splice(idx, 1);
+        setFiles.unshift(pref);
+      } else if (setFiles.length === 0) {
+        setFiles.push(`c${candNum}_full.set`);
+      }
+
+      res.json({ setFiles, candidateDir: targetCandDir });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
