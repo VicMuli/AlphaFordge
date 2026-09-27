@@ -144,16 +144,31 @@ export default function FullBacktest({ config }: { config: any }) {
     fetchSetFiles(selectedRun, cand);
   };
 
+  const resolveMarketSymbol = (market: string): string => {
+    const map: Record<string, string> = {
+      'EURUSD': 'EURUSD dukascopy',
+      'GBPUSD': 'GBPUSD dukascopy',
+      'USDJPY': 'USDJPY Dukascopy',
+      'EURJPY': 'EURJPY Dukascopy',
+      'XAUUSD': 'XAUUSD dukascopy',
+    };
+    const m = (market || 'USDJPY').trim();
+    if (m.toLowerCase().includes('dukascopy')) return m;
+    const key = m.split(' ')[0].toUpperCase();
+    return map[key] || m;
+  };
+
   const handleRun = () => {
     const normFrom = normalizeMt5Date(fromDate, '2013.01.01', false);
     const normTo = normalizeMt5Date(toDate, '2026.07.03', true);
+    const resolvedSymbol = resolveMarketSymbol(selectedMarket);
 
     runScript('run_full_backtest.py', {
       patch: {
         patches: {
           TARGET_RUN_DIR: selectedRun || 'latest',
           TARGET_CANDIDATE: selectedCand || 'cand_001',
-          TARGET_SYMBOL: selectedMarket || 'USDJPY',
+          TARGET_SYMBOL: resolvedSymbol,
           TARGET_EA: selectedEa || 'TRB',
           TARGET_SET_FILE: selectedSetFile || '',
           TARGET_FROM_DATE: normFrom,
@@ -163,7 +178,7 @@ export default function FullBacktest({ config }: { config: any }) {
       envOverrides: {
         AF_ACTIVE_EA: selectedEa || 'TRB',
         AF_SET_FILE: selectedSetFile || '',
-        AF_SYMBOL: selectedMarket || 'USDJPY',
+        AF_SYMBOL: resolvedSymbol,
         AF_BT_START: normFrom,
         AF_BT_END: normTo,
         AF_DEPOSIT: deposit,

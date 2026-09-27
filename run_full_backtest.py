@@ -75,7 +75,7 @@ from run_optimization import (
     HOLDOUT_TO,
     WORK_DIR,
 )
-from mt5_runner import run_single_backtest, normalize_mt5_date
+from mt5_runner import run_single_backtest, normalize_mt5_date, resolve_mt5_symbol
 from report_analysis import analyze
 
 
@@ -94,8 +94,8 @@ TARGET_FROM_DATE = '2013.01.01'
 TARGET_TO_DATE = '2026.07.03'
 
 # Resolve start and end dates with robust fallbacks and strict MT5 YYYY.MM.DD formatting
-_raw_start = (os.environ.get("AF_BT_START") or TARGET_FROM_DATE or TRAIN_FROM or "2013.01.01").strip()
-_raw_end   = (os.environ.get("AF_BT_END") or TARGET_TO_DATE or HOLDOUT_TO or "2026.07.03").strip()
+_raw_start = str(os.environ.get("AF_BT_START") or TARGET_FROM_DATE or TRAIN_FROM or "2013.01.01").strip()
+_raw_end   = str(os.environ.get("AF_BT_END") or TARGET_TO_DATE or HOLDOUT_TO or "2026.07.03").strip()
 BT_START = normalize_mt5_date(_raw_start, default="2013.01.01", is_end=False)
 BT_END   = normalize_mt5_date(_raw_end, default="2026.07.03", is_end=True)
 
@@ -1369,27 +1369,29 @@ def main():
         return
 
     # Dynamic date range resolution: environment -> TARGET constants -> run_meta.json -> defaults
-    run_start = (os.environ.get("AF_BT_START") or TARGET_FROM_DATE).strip()
-    run_end   = (os.environ.get("AF_BT_END") or TARGET_TO_DATE).strip()
+    run_start = str(os.environ.get("AF_BT_START") or TARGET_FROM_DATE or "").strip()
+    run_end   = str(os.environ.get("AF_BT_END") or TARGET_TO_DATE or "").strip()
 
-    if not run_start or not run_end:
-        for sdir in (target_cand_dir, target_cand_dir.parent, target_cand_dir.parent.parent):
-            meta_file = sdir / "run_meta.json"
-            if meta_file.exists():
-                try:
-                    with open(meta_file, "r", encoding="utf-8") as mf:
-                        mdata = json.load(mf)
-                        if not run_start and mdata.get("train_from"):
-                            run_start = mdata["train_from"]
-                        if not run_end and mdata.get("holdout_to"):
-                            run_end = mdata["holdout_to"]
-                        if run_start and run_end:
-                            break
-                except Exception:
-                    pass
+    for sdir in (target_cand_dir, target_cand_dir.parent, target_cand_dir.parent.parent):
+        meta_file = sdir / "run_meta.json"
+        if meta_file.exists():
+            try:
+                with open(meta_file, "r", encoding="utf-8") as mf:
+                    mdata = json.load(mf)
+                    if (not run_start or run_start in ("2026", "2026.01.01", "2026.12.31")) and mdata.get("train_from"):
+                        run_start = mdata["train_from"]
+                    if not run_end and mdata.get("holdout_to"):
+                        run_end = mdata["holdout_to"]
+                    if run_start and run_end:
+                        break
+            except Exception:
+                pass
 
     BT_START = normalize_mt5_date(run_start or TRAIN_FROM, default="2013.01.01", is_end=False)
     BT_END   = normalize_mt5_date(run_end or HOLDOUT_TO, default="2026.07.03", is_end=True)
+
+    # Resolve symbol to MT5 custom symbol with 2013-2026 historical data
+    symbol_to_run = resolve_mt5_symbol(SYMBOL_OVERRIDE, work_dir=target_cand_dir, terminal_data_dir=TERMINAL_DATA_DIR)
 
     print(f"  Target Directory:  {target_cand_dir.parent.name}")
     print(f"  Target Candidate:  {TARGET_CANDIDATE}")
@@ -1397,6 +1399,7 @@ def main():
         print(f"  Target EA:         {EA_OVERRIDE}")
     if SET_FILE_OVERRIDE:
         print(f"  Target .set File:  {SET_FILE_OVERRIDE}")
+    print(f"  Target Symbol:     {symbol_to_run} (Input: {SYMBOL_OVERRIDE})")
     print(f"  Backtest Range:    {BT_START} -> {BT_END}")
     print(f"  Initial Deposit:   {DEPOSIT_OVERRIDE} {CURRENCY}")
 
@@ -1473,14 +1476,14 @@ def main():
     from mt5_optimizer import sync_ea_to_mt5
     expert_to_run = sync_ea_to_mt5(expert_to_run, TERMINAL_DATA_DIR, TERMINAL_PATH)
 
-    print(f"\n  --> Launching MetaTrader 5 Full Backtest (EA: {expert_to_run} | Market: {SYMBOL_OVERRIDE})...")
+    print(f"\n  --> Launching MetaTrader 5 Full Backtest (EA: {expert_to_run} | Market: {symbol_to_run})...")
     try:
         report_html = run_single_backtest(
             terminal_path=TERMINAL_PATH,
             terminal_data_dir=TERMINAL_DATA_DIR,
             expert=expert_to_run,
             set_file=temp_set_name,
-            symbol=SYMBOL_OVERRIDE,
+            symbol=symbol_to_run,
             period=PERIOD,
             from_date=BT_START,
             to_date=BT_END,

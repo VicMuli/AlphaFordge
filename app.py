@@ -20,7 +20,7 @@ except ImportError:
     sys.exit(1)
 
 try:
-    from mt5_runner import normalize_mt5_date
+    from mt5_runner import normalize_mt5_date, resolve_mt5_symbol
 except ImportError:
     def normalize_mt5_date(val: str, default: str = "2013.01.01", is_end: bool = False) -> str:
         if not val or not str(val).strip():
@@ -29,6 +29,15 @@ except ImportError:
         if re.match(r"^\d{4}$", s):
             return f"{s}.12.31" if is_end else f"{s}.01.01"
         return s if re.match(r"^\d{4}\.\d{1,2}\.\d{1,2}$", s) else default
+
+    def resolve_mt5_symbol(symbol: str, work_dir=None, terminal_data_dir=None) -> str:
+        s = (symbol or "").strip()
+        if not s:
+            return "USDJPY Dukascopy"
+        if "dukascopy" in s.lower():
+            return s
+        m = {"USDJPY": "USDJPY Dukascopy", "EURUSD": "EURUSD dukascopy", "GBPUSD": "GBPUSD dukascopy", "EURJPY": "EURJPY Dukascopy", "XAUUSD": "XAUUSD dukascopy"}
+        return m.get(s.split()[0].upper(), s)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Theme
@@ -488,13 +497,17 @@ def patch_script(script_path: Path, patches: dict):
         text = script_path.read_text(encoding="utf-8")
         for var, val in patches.items():
             if isinstance(val, str):
-                try:
-                    float(val)
-                    new_val = str(val)
-                except ValueError:
-                    # Windows paths: normalize backslashes to forward slashes to avoid \U \t \n syntax errors in Python
+                if any(k in var for k in ("DATE", "SYMBOL", "CANDIDATE", "RUN", "EA", "FILE", "DIR")):
                     val_clean = val.replace("\\", "/")
                     new_val = repr(val_clean)
+                else:
+                    try:
+                        float(val)
+                        new_val = str(val)
+                    except ValueError:
+                        # Windows paths: normalize backslashes to forward slashes to avoid \U \t \n syntax errors in Python
+                        val_clean = val.replace("\\", "/")
+                        new_val = repr(val_clean)
             else:
                 new_val = str(val)
             pattern  = rf"^({re.escape(var)}\s*=\s*).*$"
@@ -3224,19 +3237,25 @@ class FullBacktestPanel(BasePanel):
                                 self._ea_cb.configure(values=avail)
                             self._ea_var.set(detected_ea)
 
+                        # Auto-detect market/symbol from run metadata
+                        detected_sym = mdata.get("symbol_key") or mdata.get("symbol")
+                        if detected_sym:
+                            sym_key = detected_sym.split()[0].upper()
+                            avail_syms = list(self._market_cb.cget("values"))
+                            if sym_key not in avail_syms:
+                                avail_syms.append(sym_key)
+                                self._market_cb.configure(values=avail_syms)
+                            self._market_var.set(sym_key)
+
                         # Sync From Date and To Date from run metadata if present
                         r_from = mdata.get("train_from")
                         r_to = mdata.get("holdout_to")
                         if r_from and hasattr(self, "_from_var"):
-                            cur_from = self._from_var.get().strip()
-                            if not cur_from or cur_from in ("2013.01.01", "2013"):
-                                self._from_var.delete(0, "end")
-                                self._from_var.insert(0, r_from)
+                            self._from_var.delete(0, "end")
+                            self._from_var.insert(0, r_from)
                         if r_to and hasattr(self, "_to_var"):
-                            cur_to = self._to_var.get().strip()
-                            if not cur_to or cur_to in ("2026.07.03", "2026"):
-                                self._to_var.delete(0, "end")
-                                self._to_var.insert(0, r_to)
+                            self._to_var.delete(0, "end")
+                            self._to_var.insert(0, r_to)
                 except Exception:
                     pass
 
@@ -3299,6 +3318,9 @@ class FullBacktestPanel(BasePanel):
                 except Exception:
                     pass
 
+        # Resolve symbol to full custom symbol (e.g. USDJPY Dukascopy) with 2013-2026 history
+        resolved_symbol = resolve_mt5_symbol(market, work_dir=run_path)
+
         raw_from = self._from_var.get().strip() or self.cfg.get("train_from", "2013.01.01")
         raw_to   = self._to_var.get().strip() or self.cfg.get("holdout_to", "2026.07.03")
 
@@ -3327,7 +3349,7 @@ class FullBacktestPanel(BasePanel):
         patch_script(SCRIPT_DIR / "run_full_backtest.py", {
             "TARGET_RUN_DIR": run,
             "TARGET_CANDIDATE": cand,
-            "TARGET_SYMBOL": market,
+            "TARGET_SYMBOL": resolved_symbol,
             "TARGET_EA": selected_ea,
             "TARGET_SET_FILE": selected_set,
             "TARGET_FROM_DATE": norm_from,
@@ -3337,7 +3359,7 @@ class FullBacktestPanel(BasePanel):
             "AF_ACTIVE_EA": selected_ea,
             "AF_EXPERT":    expert,
             "AF_SET_FILE":  selected_set,
-            "AF_SYMBOL":    market,
+            "AF_SYMBOL":    resolved_symbol,
             "AF_BT_START":  norm_from,
             "AF_BT_END":    norm_to,
             "AF_DEPOSIT":   self._dep_var.get().strip() or self.cfg.get("deposit", "2500"),

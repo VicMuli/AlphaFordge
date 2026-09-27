@@ -100,6 +100,81 @@ def normalize_mt5_date(val: str, default: str = "2013.01.01", is_end: bool = Fal
     return default
 
 
+def resolve_mt5_symbol(symbol: str, work_dir: Path = None, terminal_data_dir: str = None) -> str:
+    """
+    Resolves a raw market string (e.g. 'USDJPY') to the actual MT5 custom symbol that
+    contains the complete 2013-2026 Dukascopy historical dataset (e.g. 'USDJPY Dukascopy').
+    Broker live symbols like bare 'USDJPY' only contain short recent history (current year only).
+    """
+    SYMBOL_MAP = {
+        "EURUSD": "EURUSD dukascopy",
+        "GBPUSD": "GBPUSD dukascopy",
+        "USDJPY": "USDJPY Dukascopy",
+        "EURJPY": "EURJPY Dukascopy",
+        "XAUUSD": "XAUUSD dukascopy",
+    }
+    raw = (symbol or "").strip()
+    if not raw:
+        return "USDJPY Dukascopy"
+
+    # If already a custom symbol
+    if "dukascopy" in raw.lower():
+        return raw
+
+    sym_key = raw.split()[0].upper()
+
+    # 1. Search work_dir and parent directories for run_meta.json or run.ini
+    if work_dir:
+        wpath = Path(work_dir)
+        search_dirs = [wpath]
+        for p in wpath.parents:
+            search_dirs.append(p)
+            if p.name in ("optimization_runs", "researched_strategies"):
+                break
+        for sdir in search_dirs:
+            meta_file = sdir / "run_meta.json"
+            if meta_file.exists():
+                try:
+                    import json
+                    with open(meta_file, "r", encoding="utf-8") as mf:
+                        mdata = json.load(mf)
+                        msym = mdata.get("symbol")
+                        if msym and (sym_key in msym.upper() or not sym_key):
+                            return msym.strip()
+                except Exception:
+                    pass
+            ini_file = sdir / "run.ini"
+            if ini_file.exists():
+                try:
+                    text = ini_file.read_text(encoding="utf-16", errors="ignore")
+                    if not text.strip():
+                        text = ini_file.read_text(encoding="utf-8", errors="ignore")
+                    m = re.search(r"^Symbol\s*=\s*(.+)$", text, flags=re.MULTILINE)
+                    if m:
+                        isym = m.group(1).strip()
+                        if sym_key in isym.upper() or not sym_key:
+                            return isym
+                except Exception:
+                    pass
+
+    # 2. Check terminal_data_dir custom bases
+    if terminal_data_dir:
+        custom_base = Path(terminal_data_dir) / "bases" / "Custom" / "history"
+        if custom_base.exists():
+            try:
+                for cdir in custom_base.iterdir():
+                    if cdir.is_dir() and sym_key in cdir.name.upper():
+                        return cdir.name
+            except Exception:
+                pass
+
+    # 3. Use standard Dukascopy custom symbol mapping
+    if sym_key in SYMBOL_MAP:
+        return SYMBOL_MAP[sym_key]
+
+    return raw
+
+
 def _generate_ini(work_dir: Path, **kwargs) -> Path:
     template = TEMPLATE_PATH.read_text()
     ini_content = template.format(**kwargs)
@@ -206,10 +281,13 @@ def run_single_backtest(
     # Synchronize compiled EA (.ex5) to MT5 Experts directory if needed
     expert_filename = sync_ea_to_mt5(expert, terminal_data_dir, terminal_path)
 
+    # Resolve symbol to Custom Symbol (e.g. USDJPY Dukascopy) with complete 2013-2026 data
+    norm_symbol = resolve_mt5_symbol(symbol, work_dir=work_dir, terminal_data_dir=terminal_data_dir)
+
     # Normalize dates to MT5 required YYYY.MM.DD format so MT5 doesn't fall back to GUI defaults (e.g. current year only)
     norm_from = normalize_mt5_date(from_date, default="2013.01.01", is_end=False)
     norm_to   = normalize_mt5_date(to_date, default="2026.07.03", is_end=True)
-    print(f"  [MT5 Tester Dates] FromDate={norm_from} | ToDate={norm_to} (Input: {from_date} -> {to_date})")
+    print(f"  [MT5 Tester Setup] Symbol={norm_symbol} (Raw: {symbol}) | FromDate={norm_from} | ToDate={norm_to} (Input: {from_date} -> {to_date})")
 
     # Where MT5 will actually write the report — extension varies (.htm or .html)
     # depending on build, so we watch both candidates rather than assuming one.
@@ -224,7 +302,7 @@ def run_single_backtest(
         server=server,
         expert=expert_filename,
         set_file=Path(set_file).name,
-        symbol=symbol,
+        symbol=norm_symbol,
         period=period,
         from_date=norm_from,
         to_date=norm_to,
