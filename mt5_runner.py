@@ -367,13 +367,27 @@ def run_single_backtest(
     report_htm = Path(terminal_data_dir) / f"{report_name}.htm"
     candidates = [report_html, report_htm]
 
+    # Ensure set_file is synchronized to MT5 Profiles/Tester directory if provided
+    set_filename = ""
+    if set_file:
+        set_p = Path(set_file)
+        set_filename = set_p.name
+        if set_p.exists():
+            try:
+                prof_tester = Path(terminal_data_dir) / "MQL5" / "Profiles" / "Tester"
+                prof_tester.mkdir(parents=True, exist_ok=True)
+                (prof_tester / set_filename).write_bytes(set_p.read_bytes())
+                (work_dir / set_filename).write_bytes(set_p.read_bytes())
+            except Exception as e:
+                print(f"  [WARN] Failed to sync set file to Profiles/Tester: {e}")
+
     ini_path = _generate_ini(
         work_dir,
         login=login,
         password=password,
         server=server,
         expert=expert_filename,
-        set_file=Path(set_file).name,
+        set_file=set_filename,
         symbol=norm_symbol,
         period=period,
         from_date=norm_from,

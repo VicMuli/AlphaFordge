@@ -76,6 +76,17 @@ def run_strategy_screener(
     if not expert.lower().endswith(".ex5"):
         expert += ".ex5"
 
+    # Check for custom screener inputs set file
+    if not set_file:
+        custom_set = screener_dir / "screener_inputs.set"
+        if custom_set.exists():
+            set_file = str(custom_set)
+            print(f"  ⚙ Strategy Inputs: Using custom parameters ({custom_set.name})")
+        else:
+            print("  ⚙ Strategy Inputs: Using EA compiled defaults")
+    else:
+        print(f"  ⚙ Strategy Inputs: {Path(set_file).name}")
+
     norm_from = normalize_mt5_date(from_date, default="2013.01.01", is_end=False)
     norm_to = normalize_mt5_date(to_date, default="2026.07.03", is_end=True)
 

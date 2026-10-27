@@ -1,7 +1,7 @@
 From 97a54c622a65e130d3acc8b4b0a47b5526da1042 Mon Sep 17 00:00:00 2001
 From: VicMuli <victormuli100@gmail.com>
 Date: Tue, 27 Oct 2026 08:06:19 +0000
-Subject: [PATCH 1/3] feat: restore Strategy Screener and Market Data tabs in
+Subject: [PATCH 1/4] feat: restore Strategy Screener and Market Data tabs in
  app.py and web preview
 
 ---
@@ -946,7 +946,7 @@ index 0000000..da5521e
 From d8bc869e6b6466d283c0bdf2e253c4213c85721c Mon Sep 17 00:00:00 2001
 From: VicMuli <victormuli100@gmail.com>
 Date: Tue, 27 Oct 2026 08:27:37 +0000
-Subject: [PATCH 2/3] feat: restore HistData M1 and tick downloader into
+Subject: [PATCH 2/4] feat: restore HistData M1 and tick downloader into
  market_data/<pair> folders in app.py and web preview
 
 ---
@@ -2957,7 +2957,7 @@ index da5521e..6bf40d5 100644
 From e9067916085f4401ae73c75331a34f2281bb9285 Mon Sep 17 00:00:00 2001
 From: VicMuli <victormuli100@gmail.com>
 Date: Tue, 27 Oct 2026 08:42:46 +0000
-Subject: [PATCH 3/3] fix(gui): support font parameter and resolve kwargs
+Subject: [PATCH 3/4] fix(gui): support font parameter and resolve kwargs
  collision in make_entry and UI helpers
 
 ---
@@ -3036,6 +3036,1021 @@ index a05737d..21a7eda 100644
      tb.configure(state="disabled")
      _add_context_menu(tb, is_text=True)
      return tb
+-- 
+2.34.1
+
+
+From 1cce8050896792cb43f6589ea685e3f46c182a65 Mon Sep 17 00:00:00 2001
+From: VicMuli <victormuli100@gmail.com>
+Date: Tue, 27 Oct 2026 09:12:18 +0000
+Subject: [PATCH 4/4] feat(screener): add strategy parameters and indicator
+ inputs modification to Strategy Screener
+
+---
+ app.py                              | 205 +++++++++++-
+ mt5_runner.py                       |  16 +-
+ run_screener.py                     |  11 +
+ server.ts                           | 178 +++++++++++
+ src/components/StrategyScreener.tsx | 474 +++++++++++++++++++++++++++-
+ 5 files changed, 878 insertions(+), 6 deletions(-)
+
+diff --git a/app.py b/app.py
+index 21a7eda..1c43f2f 100644
+--- a/app.py
++++ b/app.py
+@@ -1288,15 +1288,19 @@ class StrategyScreenerPanel(BasePanel):
+         self._ea_cb = ctk.CTkComboBox(r0, values=available_eas or ["TRB"], variable=self._ea_var,
+                                       width=160, font=FB, fg_color=C["inp"],
+                                       border_color=C["border"], button_color=C["accent"],
+-                                      command=lambda _: self._load_screener_results())
+-        self._ea_cb.pack(side="left", padx=(0, 20))
++                                      command=lambda _: (self._update_inputs_badge(), self._load_screener_results()))
++        self._ea_cb.pack(side="left", padx=(0, 16))
++
++        make_btn(r0, "⚙ Parameters & Indicators", self._open_inputs_dialog, color=C["card"], hover=C["hover"], width=205).pack(side="left", padx=(0, 8))
++        self._inputs_badge = make_label(r0, "Compiled MQL5 Defaults", font=FSM, color=C["sub"])
++        self._inputs_badge.pack(side="left", padx=(0, 20))
+ 
+         make_label(r0, "Timeframe", font=FB, color=C["sub"]).pack(side="left", padx=(0, 8))
+         self._period_var = ctk.StringVar(value=cfg.get("period", "M15"))
+         self._period_cb = ctk.CTkComboBox(r0, values=["M1", "M5", "M15", "M30", "H1", "H4", "D1"],
+-                                          variable=self._period_var, width=100, font=FB,
++                                          variable=self._period_var, width=95, font=FB,
+                                           fg_color=C["inp"], border_color=C["border"], button_color=C["accent"])
+-        self._period_cb.pack(side="left", padx=(0, 20))
++        self._period_cb.pack(side="left", padx=(0, 16))
+ 
+         make_label(r0, "Deposit ($)", font=FB, color=C["sub"]).pack(side="left", padx=(0, 8))
+         self._dep_var = make_entry(r0, width=90)
+@@ -1397,6 +1401,7 @@ class StrategyScreenerPanel(BasePanel):
+         self._log = make_log(log_card, height=200)
+         self._log.grid(row=1, column=0, sticky="nsew", padx=16, pady=(0, 16))
+ 
++        self._update_inputs_badge()
+         self._load_screener_results()
+ 
+     def _select_majors(self):
+@@ -1475,12 +1480,204 @@ class StrategyScreenerPanel(BasePanel):
+             "AF_DEPOSIT":   dep,
+         }
+ 
++        # Check for custom screener parameter set file
++        custom_set = SCRIPT_DIR / "researched_strategies" / ea / "screener" / "screener_inputs.set"
++        if custom_set.exists():
++            env_extra["AF_SET_FILE"] = str(custom_set)
++
+         self.log_clear(self._log)
+         def on_done():
+             self._load_screener_results()
+ 
+         self.run_script("run_screener.py", self._log, env_extra=env_extra, on_done=on_done)
+ 
++    def _update_inputs_badge(self):
++        ea = self._ea_var.get().strip() if hasattr(self, "_ea_var") else "TRB"
++        set_path = SCRIPT_DIR / "researched_strategies" / ea / "screener" / "screener_inputs.set"
++        if hasattr(self, "_inputs_badge"):
++            if set_path.exists():
++                self._inputs_badge.configure(text="✔ Custom (screener_inputs.set)", text_color=C["success"])
++            else:
++                self._inputs_badge.configure(text="⚙ Compiled MQL5 Defaults", text_color=C["sub"])
++
++    def _open_inputs_dialog(self):
++        ea = self._ea_var.get().strip()
++        dlg = ctk.CTkToplevel(self)
++        dlg.title(f"Strategy Parameters & Indicators — {ea}")
++        dlg.geometry("860x700")
++        dlg.configure(fg_color=C["bg"])
++        dlg.grab_set()
++
++        make_section_header(dlg, f"⚙ {ea} Strategy Parameters & Indicators",
++            f"Customize indicator filter switches and parameter values for multi-pair screening"
++        ).pack(fill="x", padx=24, pady=(20, 10))
++
++        scroll = ctk.CTkScrollableFrame(dlg, fg_color=C["panel"], corner_radius=10)
++        scroll.pack(fill="both", expand=True, padx=24, pady=10)
++
++        # 1. Parse MQL5 config
++        import mql5_parser
++        parsed = mql5_parser.get_strategy_mql5_config(ea)
++
++        # 2. Check for saved screener_inputs.json
++        screener_dir = SCRIPT_DIR / "researched_strategies" / ea / "screener"
++        screener_dir.mkdir(parents=True, exist_ok=True)
++        inputs_json = screener_dir / "screener_inputs.json"
++        saved_data = {}
++        if inputs_json.exists():
++            try:
++                with open(inputs_json, "r", encoding="utf-8") as f:
++                    saved_data = json.load(f)
++            except Exception:
++                pass
++
++        saved_toggles = {}
++        if saved_data.get("indicators"):
++            for ind in saved_data["indicators"]:
++                saved_toggles[ind.get("toggleParam")] = ind.get("enabled", True)
++
++        saved_params = saved_data.get("params", {})
++
++        # Switchboard Header
++        ctk.CTkLabel(scroll, text="🎛️ INDICATOR FILTER SWITCHBOARD", font=FH3, text_color=C["accent"]).pack(anchor="w", padx=12, pady=(10, 6))
++
++        ind_vars = {}
++        ind_frame = ctk.CTkFrame(scroll, fg_color="#141c2e", corner_radius=8)
++        ind_frame.pack(fill="x", padx=10, pady=(0, 16))
++
++        indicators = parsed.get("indicators", [])
++        if not indicators:
++            ctk.CTkLabel(ind_frame, text="No explicit indicator switches found in strategy source code.", font=FSM, text_color=C["sub"]).pack(anchor="w", padx=12, pady=10)
++        else:
++            for ind in indicators:
++                tp = ind.get("toggleParam")
++                name = ind.get("name", tp)
++                def_enabled = ind.get("enabled", True)
++                cur_val = saved_toggles.get(tp, def_enabled)
++                var = ctk.BooleanVar(value=bool(cur_val))
++                ind_vars[tp] = var
++
++                row = ctk.CTkFrame(ind_frame, fg_color="transparent")
++                row.pack(fill="x", padx=12, pady=4)
++
++                cb = ctk.CTkCheckBox(row, text=f"{name} ({tp})", variable=var,
++                                     font=FB, fg_color=C["accent"], hover_color=C["hover"],
++                                     text_color=C["text"])
++                cb.pack(side="left")
++
++        # Parameters Header
++        ctk.CTkLabel(scroll, text="⚙️ STRATEGY EXECUTION & RISK PARAMETERS", font=FH3, text_color=C["accent"]).pack(anchor="w", padx=12, pady=(10, 6))
++
++        param_entries = {}
++        params_container = ctk.CTkFrame(scroll, fg_color="#141c2e", corner_radius=8)
++        params_container.pack(fill="x", padx=10, pady=(0, 16))
++        params_container.columnconfigure((1, 3), weight=1)
++
++        raw_params = parsed.get("params", [])
++        for pi, p in enumerate(raw_params):
++            pname = p.get("name")
++            plabel = p.get("label", pname)
++            ptype = p.get("type", "double")
++            def_val = p.get("fixedValue", 0)
++            cur_val = saved_params.get(pname, def_val)
++
++            r_idx = pi // 2
++            c_idx = (pi % 2) * 2
++
++            lbl_txt = f"{pname} ({ptype}):"
++            ctk.CTkLabel(params_container, text=lbl_txt, font=FSM, text_color=C["text"], anchor="w").grid(
++                row=r_idx, column=c_idx, padx=(12, 6), pady=6, sticky="w"
++            )
++
++            e = make_entry(params_container, width=150)
++            e.insert(0, str(cur_val))
++            e.grid(row=r_idx, column=c_idx + 1, padx=(0, 16), pady=6, sticky="ew")
++            param_entries[pname] = (e, def_val, ptype)
++
++        # Action Buttons row
++        btn_row = ctk.CTkFrame(dlg, fg_color="transparent")
++        btn_row.pack(fill="x", padx=24, pady=(10, 20))
++
++        def _save_inputs():
++            out_indicators = []
++            for tp, var in ind_vars.items():
++                out_indicators.append({"toggleParam": tp, "enabled": var.get()})
++
++            out_params = {}
++            for pname, (entry_widget, def_val, ptype) in param_entries.items():
++                val_str = entry_widget.get().strip()
++                try:
++                    if ptype in ("int", "ulong", "long"):
++                        val = int(val_str)
++                    elif ptype in ("double", "float"):
++                        val = float(val_str)
++                    elif ptype == "bool":
++                        val = val_str.lower() in ("1", "true")
++                    else:
++                        val = val_str
++                except Exception:
++                    val = val_str
++                out_params[pname] = val
++
++            payload = {
++                "ea": ea,
++                "indicators": out_indicators,
++                "params": out_params,
++                "updated_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
++            }
++
++            with open(inputs_json, "w", encoding="utf-8") as f:
++                json.dump(payload, f, indent=2)
++
++            # Generate MT5 .set file
++            set_file_path = screener_dir / "screener_inputs.set"
++            set_lines = [
++                f"; AlphaForge Strategy Screener Parameter File",
++                f"; EA: {ea}",
++                f"; Generated: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}",
++                "",
++                "; --- Indicator Filters ---",
++            ]
++            for ind in out_indicators:
++                set_lines.append(f"{ind['toggleParam']}={1 if ind['enabled'] else 0}")
++            set_lines.append("")
++            set_lines.append("; --- Parameters ---")
++            for k, v in out_params.items():
++                out_v = 1 if v is True else (0 if v is False else v)
++                set_lines.append(f"{k}={out_v}")
++
++            set_content = "\n".join(set_lines) + "\n"
++            with open(set_file_path, "w", encoding="utf-8") as f:
++                f.write(set_content)
++
++            # Sync to MT5 Profiles/Tester if exists
++            tdir = self.cfg.get("terminal_data_dir")
++            if tdir:
++                try:
++                    prof_dir = Path(tdir) / "MQL5" / "Profiles" / "Tester"
++                    prof_dir.mkdir(parents=True, exist_ok=True)
++                    (prof_dir / "screener_inputs.set").write_text(set_content, encoding="utf-8")
++                except Exception:
++                    pass
++
++            self._update_inputs_badge()
++            dlg.destroy()
++            messagebox.showinfo("Saved", f"Strategy inputs saved successfully for {ea}!\nGenerated: screener_inputs.set")
++
++        def _reset_inputs():
++            if messagebox.askyesno("Reset Inputs", f"Reset all parameters and indicators for {ea} to compiled defaults?"):
++                set_file_path = screener_dir / "screener_inputs.set"
++                if inputs_json.exists():
++                    inputs_json.unlink()
++                if set_file_path.exists():
++                    set_file_path.unlink()
++                self._update_inputs_badge()
++                dlg.destroy()
++
++        make_btn(btn_row, "✔  Save & Apply to Screener", _save_inputs, width=220).pack(side="left")
++        make_btn(btn_row, "⟳ Reset Defaults", _reset_inputs, color=C["card"], hover=C["hover"], width=140).pack(side="left", padx=(12, 0))
++        make_btn(btn_row, "Cancel", dlg.destroy, color=C["sidebar"], hover=C["hover"], width=100).pack(side="right")
++
+     def _load_screener_results(self):
+         ea = self._ea_var.get().strip() if hasattr(self, "_ea_var") else "TRB"
+         manifest_path = SCRIPT_DIR / "researched_strategies" / ea / "screener" / "screener_manifest.json"
+diff --git a/mt5_runner.py b/mt5_runner.py
+index bef82cd..9648190 100644
+--- a/mt5_runner.py
++++ b/mt5_runner.py
+@@ -367,13 +367,27 @@ def run_single_backtest(
+     report_htm = Path(terminal_data_dir) / f"{report_name}.htm"
+     candidates = [report_html, report_htm]
+ 
++    # Ensure set_file is synchronized to MT5 Profiles/Tester directory if provided
++    set_filename = ""
++    if set_file:
++        set_p = Path(set_file)
++        set_filename = set_p.name
++        if set_p.exists():
++            try:
++                prof_tester = Path(terminal_data_dir) / "MQL5" / "Profiles" / "Tester"
++                prof_tester.mkdir(parents=True, exist_ok=True)
++                (prof_tester / set_filename).write_bytes(set_p.read_bytes())
++                (work_dir / set_filename).write_bytes(set_p.read_bytes())
++            except Exception as e:
++                print(f"  [WARN] Failed to sync set file to Profiles/Tester: {e}")
++
+     ini_path = _generate_ini(
+         work_dir,
+         login=login,
+         password=password,
+         server=server,
+         expert=expert_filename,
+-        set_file=Path(set_file).name,
++        set_file=set_filename,
+         symbol=norm_symbol,
+         period=period,
+         from_date=norm_from,
+diff --git a/run_screener.py b/run_screener.py
+index cc0ac39..bc02cbf 100644
+--- a/run_screener.py
++++ b/run_screener.py
+@@ -76,6 +76,17 @@ def run_strategy_screener(
+     if not expert.lower().endswith(".ex5"):
+         expert += ".ex5"
+ 
++    # Check for custom screener inputs set file
++    if not set_file:
++        custom_set = screener_dir / "screener_inputs.set"
++        if custom_set.exists():
++            set_file = str(custom_set)
++            print(f"  ⚙ Strategy Inputs: Using custom parameters ({custom_set.name})")
++        else:
++            print("  ⚙ Strategy Inputs: Using EA compiled defaults")
++    else:
++        print(f"  ⚙ Strategy Inputs: {Path(set_file).name}")
++
+     norm_from = normalize_mt5_date(from_date, default="2013.01.01", is_end=False)
+     norm_to = normalize_mt5_date(to_date, default="2026.07.03", is_end=True)
+ 
+diff --git a/server.ts b/server.ts
+index 375408d..52db8c3 100644
+--- a/server.ts
++++ b/server.ts
+@@ -654,6 +654,184 @@ async function startServer() {
+     }
+   });
+ 
++  // Get Strategy Inputs & Indicators for Screener
++  app.get("/api/screener-strategy-inputs", async (req, res) => {
++    try {
++      const ea = (req.query.ea as string) || "TRB";
++      const screenerDir = path.join(process.cwd(), 'researched_strategies', ea, 'screener');
++      const inputsJsonPath = path.join(screenerDir, 'screener_inputs.json');
++      const setFilePath = path.join(screenerDir, 'screener_inputs.set');
++
++      // Run mql5_parser to get strategy definitions
++      execFile('python3', [path.join(process.cwd(), 'mql5_parser.py'), ea], async (err, stdout) => {
++        let parsed: any = { indicators: [], params: [] };
++        if (!err && stdout) {
++          try {
++            parsed = JSON.parse(stdout.trim());
++          } catch {}
++        }
++
++        let customData: any = null;
++        let hasCustomInputs = false;
++        if (existsSync(inputsJsonPath)) {
++          try {
++            customData = JSON.parse(await fs.readFile(inputsJsonPath, 'utf-8'));
++            hasCustomInputs = true;
++          } catch {}
++        }
++
++        let indicators = parsed.indicators || [];
++        let params = parsed.params || [];
++
++        if (customData) {
++          // Merge custom indicator toggles
++          if (customData.indicators && Array.isArray(customData.indicators)) {
++            const toggleMap = new Map<string, boolean>(customData.indicators.map((i: any) => [i.toggleParam, !!i.enabled]));
++            indicators = indicators.map((ind: any) => ({
++              ...ind,
++              enabled: toggleMap.has(ind.toggleParam) ? toggleMap.get(ind.toggleParam)! : ind.enabled
++            }));
++          }
++
++          // Merge custom parameter values
++          if (customData.params && typeof customData.params === 'object') {
++            params = params.map((p: any) => {
++              if (customData.params[p.name] !== undefined) {
++                return {
++                  ...p,
++                  currentValue: customData.params[p.name],
++                  isModified: customData.params[p.name] !== p.fixedValue
++                };
++              }
++              return { ...p, currentValue: p.fixedValue, isModified: false };
++            });
++          }
++        } else {
++          params = params.map((p: any) => ({
++            ...p,
++            currentValue: p.fixedValue,
++            isModified: false
++          }));
++        }
++
++        res.json({
++          status: "ok",
++          ea,
++          mq5File: parsed.mq5_file || null,
++          indicators,
++          params,
++          hasCustomInputs,
++          setFileExists: existsSync(setFilePath),
++          lastModified: customData?.updated_at || null
++        });
++      });
++    } catch (e: any) {
++      res.status(500).json({ error: e.message });
++    }
++  });
++
++  // Save Strategy Inputs & Indicators and generate MT5 .set file
++  app.post("/api/screener-strategy-inputs", async (req, res) => {
++    try {
++      const { ea, indicators, params } = req.body;
++      const targetEa = ea || "TRB";
++      const screenerDir = path.join(process.cwd(), 'researched_strategies', targetEa, 'screener');
++      if (!existsSync(screenerDir)) {
++        await fs.mkdir(screenerDir, { recursive: true });
++      }
++
++      const inputsJsonPath = path.join(screenerDir, 'screener_inputs.json');
++      const setFilePath = path.join(screenerDir, 'screener_inputs.set');
++
++      const payload = {
++        ea: targetEa,
++        indicators: indicators || [],
++        params: params || {},
++        updated_at: new Date().toISOString()
++      };
++
++      await fs.writeFile(inputsJsonPath, JSON.stringify(payload, null, 2), 'utf-8');
++
++      // Build MT5 .set file content
++      const setLines: string[] = [
++        `; AlphaForge Strategy Screener Parameter File`,
++        `; EA: ${targetEa}`,
++        `; Generated: ${new Date().toISOString()}`,
++        `; Format: MT5 Tester Set File`,
++        ``,
++        `; --- Indicator Filters & Toggles ---`
++      ];
++
++      if (Array.isArray(indicators)) {
++        for (const ind of indicators) {
++          if (ind.toggleParam) {
++            setLines.push(`${ind.toggleParam}=${ind.enabled ? 1 : 0}`);
++          }
++        }
++      }
++
++      setLines.push(``, `; --- Strategy Parameters ---`);
++      if (params && typeof params === 'object') {
++        for (const [key, val] of Object.entries(params)) {
++          let outVal = val;
++          if (typeof val === 'boolean') {
++            outVal = val ? 1 : 0;
++          }
++          setLines.push(`${key}=${outVal}`);
++        }
++      }
++
++      const setFileContent = setLines.join('\n') + '\n';
++      await fs.writeFile(setFilePath, setFileContent, 'utf-8');
++
++      // Also sync to terminal_data_dir/MQL5/Profiles/Tester if configured
++      try {
++        const configPath = path.join(process.cwd(), 'config.json');
++        if (existsSync(configPath)) {
++          const cfg = JSON.parse(await fs.readFile(configPath, 'utf-8'));
++          if (cfg.terminal_data_dir) {
++            const mt5Profiles = path.join(cfg.terminal_data_dir, 'MQL5', 'Profiles', 'Tester');
++            if (existsSync(mt5Profiles)) {
++              await fs.writeFile(path.join(mt5Profiles, 'screener_inputs.set'), setFileContent, 'utf-8');
++            }
++          }
++        }
++      } catch (syncErr) {
++        console.warn('Failed to sync set file to MT5 Profiles/Tester:', syncErr);
++      }
++
++      res.json({
++        status: "ok",
++        message: `Saved inputs and generated screener_inputs.set for ${targetEa}`,
++        setFilePath
++      });
++    } catch (e: any) {
++      res.status(500).json({ error: e.message });
++    }
++  });
++
++  // Reset Strategy Inputs & Indicators for Screener back to defaults
++  app.post("/api/screener-strategy-inputs/reset", async (req, res) => {
++    try {
++      const { ea } = req.body;
++      const targetEa = ea || "TRB";
++      const screenerDir = path.join(process.cwd(), 'researched_strategies', targetEa, 'screener');
++      const inputsJsonPath = path.join(screenerDir, 'screener_inputs.json');
++      const setFilePath = path.join(screenerDir, 'screener_inputs.set');
++
++      if (existsSync(inputsJsonPath)) {
++        await fs.unlink(inputsJsonPath);
++      }
++      if (existsSync(setFilePath)) {
++        await fs.unlink(setFilePath);
++      }
++
++      res.json({ status: "ok", message: `Reset strategy inputs for ${targetEa} to defaults` });
++    } catch (e: any) {
++      res.status(500).json({ error: e.message });
++    }
++  });
++
+   // Market Data & HistData Storage Inspector API
+   app.get("/api/market-data", async (req, res) => {
+     try {
+diff --git a/src/components/StrategyScreener.tsx b/src/components/StrategyScreener.tsx
+index 551b9f3..c949f16 100644
+--- a/src/components/StrategyScreener.tsx
++++ b/src/components/StrategyScreener.tsx
+@@ -15,7 +15,21 @@ import {
+   Layers,
+   ArrowUpDown,
+   Percent,
+-  Clock
++  Clock,
++  Settings2,
++  Sliders,
++  ToggleLeft,
++  ToggleRight,
++  Save,
++  RotateCcw,
++  Search,
++  Shield,
++  Target,
++  Activity,
++  ChevronDown,
++  ChevronUp,
++  Sparkles,
++  Filter
+ } from 'lucide-react';
+ import { useScriptRunner } from '../useScriptRunner';
+ 
+@@ -96,12 +110,129 @@ export default function StrategyScreener({ config }: { config: any }) {
+     }
+   };
+ 
++  // Strategy Parameters & Indicators state
++  const [showInputsEditor, setShowInputsEditor] = useState<boolean>(false);
++  const [loadingInputs, setLoadingInputs] = useState<boolean>(false);
++  const [savingInputs, setSavingInputs] = useState<boolean>(false);
++  const [strategyIndicators, setStrategyIndicators] = useState<any[]>([]);
++  const [strategyParams, setStrategyParams] = useState<any[]>([]);
++  const [hasCustomInputs, setHasCustomInputs] = useState<boolean>(false);
++  const [setFileExists, setSetFileExists] = useState<boolean>(false);
++  const [paramSearch, setParamSearch] = useState<string>('');
++  const [paramCategory, setParamCategory] = useState<string>('all');
++  const [saveSuccessMsg, setSaveSuccessMsg] = useState<string | null>(null);
++
++  const fetchStrategyInputs = async (eaName: string) => {
++    setLoadingInputs(true);
++    try {
++      const res = await fetch(`/api/screener-strategy-inputs?ea=${encodeURIComponent(eaName)}`);
++      if (res.ok) {
++        const data = await res.json();
++        setStrategyIndicators(data.indicators || []);
++        setStrategyParams(data.params || []);
++        setHasCustomInputs(!!data.hasCustomInputs);
++        setSetFileExists(!!data.setFileExists);
++      }
++    } catch (err) {
++      console.error('Failed to load strategy inputs:', err);
++    } finally {
++      setLoadingInputs(false);
++    }
++  };
++
+   useEffect(() => {
+     if (selectedEa) {
+       fetchScreenerResults(selectedEa);
++      fetchStrategyInputs(selectedEa);
+     }
+   }, [selectedEa]);
+ 
++  const handleToggleIndicator = (toggleParam: string) => {
++    setStrategyIndicators(prev => prev.map(ind => 
++      ind.toggleParam === toggleParam ? { ...ind, enabled: !ind.enabled } : ind
++    ));
++  };
++
++  const handleParamChange = (paramName: string, val: any) => {
++    setStrategyParams(prev => prev.map(p => {
++      if (p.name === paramName) {
++        let parsedVal = val;
++        if (p.type === 'int' || p.type === 'ulong' || p.type === 'long') {
++          const num = parseInt(val, 10);
++          parsedVal = isNaN(num) ? val : num;
++        } else if (p.type === 'double' || p.type === 'float') {
++          const num = parseFloat(val);
++          parsedVal = isNaN(num) ? val : num;
++        } else if (p.type === 'bool') {
++          parsedVal = val === true || val === 'true' || val === 1;
++        }
++        return {
++          ...p,
++          currentValue: parsedVal,
++          isModified: parsedVal !== p.fixedValue
++        };
++      }
++      return p;
++    }));
++  };
++
++  const handleSaveInputs = async () => {
++    setSavingInputs(true);
++    setSaveSuccessMsg(null);
++    try {
++      const paramDict: Record<string, any> = {};
++      strategyParams.forEach(p => {
++        paramDict[p.name] = p.currentValue !== undefined ? p.currentValue : p.fixedValue;
++      });
++
++      const res = await fetch('/api/screener-strategy-inputs', {
++        method: 'POST',
++        headers: { 'Content-Type': 'application/json' },
++        body: JSON.stringify({
++          ea: selectedEa,
++          indicators: strategyIndicators.map(i => ({
++            toggleParam: i.toggleParam,
++            enabled: !!i.enabled
++          })),
++          params: paramDict
++        })
++      });
++
++      if (res.ok) {
++        setHasCustomInputs(true);
++        setSetFileExists(true);
++        setSaveSuccessMsg('Parameters & indicator inputs saved to screener_inputs.set');
++        setTimeout(() => setSaveSuccessMsg(null), 4000);
++      }
++    } catch (err: any) {
++      console.error('Save error:', err);
++      alert('Error saving strategy inputs: ' + err.message);
++    } finally {
++      setSavingInputs(false);
++    }
++  };
++
++  const handleResetInputs = async () => {
++    if (!confirm(`Reset all parameters and indicators for ${selectedEa} back to compiled MQL5 defaults?`)) {
++      return;
++    }
++    setSavingInputs(true);
++    try {
++      await fetch('/api/screener-strategy-inputs/reset', {
++        method: 'POST',
++        headers: { 'Content-Type': 'application/json' },
++        body: JSON.stringify({ ea: selectedEa })
++      });
++      await fetchStrategyInputs(selectedEa);
++      setSaveSuccessMsg('Reset to strategy defaults');
++      setTimeout(() => setSaveSuccessMsg(null), 3000);
++    } catch (err: any) {
++      console.error('Reset error:', err);
++    } finally {
++      setSavingInputs(false);
++    }
++  };
++
+   // Toggle symbol selection
+   const toggleSymbol = (sym: string) => {
+     setSelectedSymbols(prev => 
+@@ -267,6 +398,17 @@ export default function StrategyScreener({ config }: { config: any }) {
+     };
+   }, [results]);
+ 
++  // Filtered parameters for strategy configuration
++  const filteredParams = useMemo(() => {
++    return strategyParams.filter(p => {
++      const matchCat = paramCategory === 'all' || p.category === paramCategory;
++      const matchQuery = !paramSearch.trim() || 
++        p.name.toLowerCase().includes(paramSearch.toLowerCase()) || 
++        (p.label && p.label.toLowerCase().includes(paramSearch.toLowerCase()));
++      return matchCat && matchQuery;
++    });
++  }, [strategyParams, paramCategory, paramSearch]);
++
+   return (
+     <div className="flex flex-col h-full space-y-4">
+       <SectionHeader 
+@@ -334,6 +476,336 @@ export default function StrategyScreener({ config }: { config: any }) {
+           </div>
+         </div>
+ 
++        {/* Strategy Parameters & Indicator Inputs Bar & Collapsible Drawer */}
++        <div className="mb-5 bg-[#0f172a] border border-[#2d3748] rounded-xl p-4 shadow-inner">
++          <div className="flex flex-wrap items-center justify-between gap-3">
++            <div className="flex items-center gap-3">
++              <div className="w-9 h-9 rounded-lg bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400">
++                <Sliders className="w-4 h-4" />
++              </div>
++              <div>
++                <div className="flex items-center gap-2">
++                  <span className="text-xs font-bold text-white tracking-wide">
++                    Strategy Parameters & Indicator Switchboard
++                  </span>
++                  <span className="text-[10px] px-2 py-0.5 rounded font-mono font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">
++                    {selectedEa}
++                  </span>
++                  {setFileExists || hasCustomInputs ? (
++                    <span className="text-[10px] px-2 py-0.5 rounded font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
++                      <CheckCircle2 className="w-3 h-3" />
++                      Customized (screener_inputs.set)
++                    </span>
++                  ) : (
++                    <span className="text-[10px] px-2 py-0.5 rounded font-medium bg-blue-500/10 text-blue-400 border border-blue-500/30 flex items-center gap-1">
++                      <Sparkles className="w-3 h-3" />
++                      Compiled MQL5 Defaults
++                    </span>
++                  )}
++                </div>
++                <div className="flex items-center gap-3 mt-1 text-[11px] text-[#8b95a6]">
++                  <span>
++                    Active Filters: <strong className="text-emerald-400">{strategyIndicators.filter(i => i.enabled).length}/{strategyIndicators.length}</strong>
++                  </span>
++                  <span>•</span>
++                  <span>
++                    Parameters: <strong className="text-white">{strategyParams.length}</strong>
++                    {strategyParams.filter(p => p.isModified).length > 0 && (
++                      <span className="text-amber-400 ml-1 font-medium">({strategyParams.filter(p => p.isModified).length} modified)</span>
++                    )}
++                  </span>
++                </div>
++              </div>
++            </div>
++
++            <div className="flex items-center gap-2">
++              {(hasCustomInputs || setFileExists) && (
++                <button
++                  onClick={handleResetInputs}
++                  disabled={savingInputs}
++                  className="px-2.5 py-1.5 text-[11px] font-medium bg-red-500/10 hover:bg-red-500/20 text-red-300 border border-red-500/30 rounded-lg flex items-center gap-1.5 transition-colors"
++                  title="Reset to default compiled values"
++                >
++                  <RotateCcw className="w-3 h-3" />
++                  Reset Defaults
++                </button>
++              )}
++              <button
++                onClick={() => setShowInputsEditor(!showInputsEditor)}
++                className="px-3 py-1.5 text-xs font-semibold bg-[#1e293b] hover:bg-[#283548] text-amber-400 border border-amber-500/30 rounded-lg flex items-center gap-1.5 transition-all shadow-sm"
++              >
++                <Settings2 className="w-3.5 h-3.5" />
++                {showInputsEditor ? 'Hide Parameter Editor' : 'Modify Parameters & Indicators'}
++                {showInputsEditor ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
++              </button>
++            </div>
++          </div>
++
++          {/* Expanded Configuration Drawer */}
++          {showInputsEditor && (
++            <div className="mt-4 pt-4 border-t border-[#232f46] space-y-5 animate-in fade-in duration-200">
++              {/* Save message notification */}
++              {saveSuccessMsg && (
++                <div className="p-3 bg-emerald-500/15 border border-emerald-500/40 rounded-lg text-emerald-300 text-xs flex items-center gap-2">
++                  <CheckCircle2 className="w-4 h-4 text-emerald-400" />
++                  <span>{saveSuccessMsg}</span>
++                </div>
++              )}
++
++              {/* Indicator Filter Switchboard */}
++              <div>
++                <div className="flex items-center justify-between mb-2.5">
++                  <span className="text-xs font-bold text-white flex items-center gap-2 uppercase tracking-wider">
++                    <Activity className="w-3.5 h-3.5 text-amber-400" />
++                    Indicator Filter Switchboard
++                  </span>
++                  <div className="flex items-center gap-2 text-[11px]">
++                    <button
++                      onClick={() => setStrategyIndicators(prev => prev.map(i => ({ ...i, enabled: true })))}
++                      className="text-cyan-400 hover:underline"
++                    >
++                      Enable All Filters
++                    </button>
++                    <span className="text-slate-600">|</span>
++                    <button
++                      onClick={() => setStrategyIndicators(prev => prev.map(i => ({ ...i, enabled: false })))}
++                      className="text-slate-400 hover:underline"
++                    >
++                      Disable All Filters
++                    </button>
++                  </div>
++                </div>
++
++                {loadingInputs ? (
++                  <div className="p-6 text-center text-xs text-[#8b95a6]">Loading strategy inputs from MQL5...</div>
++                ) : strategyIndicators.length === 0 ? (
++                  <div className="p-3 bg-[#162032] border border-[#232f46] rounded-lg text-xs text-[#8b95a6]">
++                    No explicit indicator filter switches found in {selectedEa}.mq5 source code.
++                  </div>
++                ) : (
++                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5">
++                    {strategyIndicators.map(ind => (
++                      <div
++                        key={ind.toggleParam || ind.id}
++                        onClick={() => handleToggleIndicator(ind.toggleParam)}
++                        className={`p-3 rounded-lg border cursor-pointer transition-all flex items-start justify-between gap-3 ${
++                          ind.enabled
++                            ? 'bg-emerald-950/20 border-emerald-500/40 text-white shadow-sm'
++                            : 'bg-[#162032] border-[#232f46] text-slate-400 hover:border-slate-600'
++                        }`}
++                      >
++                        <div className="space-y-1">
++                          <div className="flex items-center gap-2">
++                            <span className="text-xs font-semibold text-white">
++                              {ind.name || ind.toggleParam}
++                            </span>
++                          </div>
++                          <div className="text-[10px] font-mono text-[#8b95a6]">
++                            {ind.toggleParam}
++                          </div>
++                          {ind.paramNames && ind.paramNames.length > 0 && (
++                            <div className="flex flex-wrap gap-1 mt-1">
++                              {ind.paramNames.map((pName: string) => (
++                                <span key={pName} className="text-[9px] px-1.5 py-0.2 bg-[#0f172a] text-cyan-300 rounded border border-cyan-800/40">
++                                  {pName}
++                                </span>
++                              ))}
++                            </div>
++                          )}
++                        </div>
++
++                        <button
++                          type="button"
++                          className="mt-0.5 text-lg transition-transform active:scale-95"
++                        >
++                          {ind.enabled ? (
++                            <ToggleRight className="w-6 h-6 text-emerald-400" />
++                          ) : (
++                            <ToggleLeft className="w-6 h-6 text-slate-600" />
++                          )}
++                        </button>
++                      </div>
++                    ))}
++                  </div>
++                )}
++              </div>
++
++              {/* Strategy Parameters Editor */}
++              <div>
++                <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
++                  <span className="text-xs font-bold text-white flex items-center gap-2 uppercase tracking-wider">
++                    <Target className="w-3.5 h-3.5 text-amber-400" />
++                    Strategy & Execution Parameters ({filteredParams.length})
++                  </span>
++
++                  <div className="flex flex-wrap items-center gap-2">
++                    {/* Category filter pills */}
++                    <div className="flex items-center bg-[#162032] p-0.5 rounded-lg border border-[#232f46] text-[11px]">
++                      {[
++                        { id: 'all', label: 'All' },
++                        { id: 'risk', label: 'Risk' },
++                        { id: 'core', label: 'Core' },
++                        { id: 'indicator', label: 'Indicators' },
++                        { id: 'timing', label: 'Timing' },
++                      ].map(cat => (
++                        <button
++                          key={cat.id}
++                          onClick={() => setParamCategory(cat.id)}
++                          className={`px-2.5 py-1 rounded-md transition-colors ${
++                            paramCategory === cat.id
++                              ? 'bg-amber-400 text-slate-950 font-bold'
++                              : 'text-slate-400 hover:text-white'
++                          }`}
++                        >
++                          {cat.label}
++                        </button>
++                      ))}
++                    </div>
++
++                    {/* Search box */}
++                    <div className="relative">
++                      <Search className="w-3 h-3 text-slate-500 absolute left-2.5 top-2.5" />
++                      <input
++                        type="text"
++                        placeholder="Search params..."
++                        value={paramSearch}
++                        onChange={e => setParamSearch(e.target.value)}
++                        className="bg-[#162032] border border-[#232f46] text-white text-xs pl-7 pr-2.5 py-1 rounded-lg focus:outline-none focus:border-amber-400 w-36"
++                      />
++                    </div>
++                  </div>
++                </div>
++
++                {loadingInputs ? (
++                  <div className="p-6 text-center text-xs text-[#8b95a6]">Loading parameters...</div>
++                ) : filteredParams.length === 0 ? (
++                  <div className="p-4 bg-[#162032] border border-[#232f46] rounded-lg text-xs text-[#8b95a6] text-center">
++                    No parameters found matching the current search or category filter.
++                  </div>
++                ) : (
++                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 max-h-[380px] overflow-y-auto pr-1">
++                    {filteredParams.map(p => {
++                      const curVal = p.currentValue !== undefined ? p.currentValue : p.fixedValue;
++                      const isNum = p.type === 'double' || p.type === 'float' || p.type === 'int' || p.type === 'ulong' || p.type === 'long';
++                      const step = p.type === 'double' || p.type === 'float' ? '0.05' : '1';
++
++                      return (
++                        <div
++                          key={p.name}
++                          className={`p-3 rounded-lg border transition-all ${
++                            p.isModified
++                              ? 'bg-amber-950/15 border-amber-500/40'
++                              : 'bg-[#162032] border-[#232f46]'
++                          }`}
++                        >
++                          <div className="flex items-start justify-between gap-1 mb-1.5">
++                            <label className="text-xs font-semibold text-white truncate" title={p.label || p.name}>
++                              {p.name}
++                            </label>
++                            <div className="flex items-center gap-1">
++                              <span className="text-[9px] px-1 py-0.2 bg-[#0f172a] text-slate-400 rounded uppercase font-mono">
++                                {p.type}
++                              </span>
++                              {p.isModified && (
++                                <span className="text-[9px] px-1.5 py-0.2 bg-amber-500/20 text-amber-300 font-bold rounded">
++                                  Edited
++                                </span>
++                              )}
++                            </div>
++                          </div>
++
++                          <div className="text-[10px] text-[#8b95a6] line-clamp-1 mb-2" title={p.description || p.label}>
++                            {p.description || p.label || p.name}
++                          </div>
++
++                          <div className="flex items-center gap-2">
++                            {typeof p.fixedValue === 'boolean' || p.type === 'bool' ? (
++                              <select
++                                value={String(curVal)}
++                                onChange={e => handleParamChange(p.name, e.target.value === 'true')}
++                                className="w-full bg-[#0f172a] border border-[#2d3748] text-white rounded px-2.5 py-1 text-xs focus:outline-none focus:border-amber-400"
++                              >
++                                <option value="true">True (Enabled)</option>
++                                <option value="false">False (Disabled)</option>
++                              </select>
++                            ) : isNum ? (
++                              <input
++                                type="number"
++                                step={step}
++                                value={curVal !== undefined ? curVal : ''}
++                                onChange={e => handleParamChange(p.name, e.target.value)}
++                                className="w-full bg-[#0f172a] border border-[#2d3748] text-white font-mono rounded px-2.5 py-1 text-xs focus:outline-none focus:border-amber-400"
++                              />
++                            ) : (
++                              <input
++                                type="text"
++                                value={curVal !== undefined ? curVal : ''}
++                                onChange={e => handleParamChange(p.name, e.target.value)}
++                                className="w-full bg-[#0f172a] border border-[#2d3748] text-white font-mono rounded px-2.5 py-1 text-xs focus:outline-none focus:border-amber-400"
++                              />
++                            )}
++
++                            {p.isModified && (
++                              <button
++                                type="button"
++                                onClick={() => handleParamChange(p.name, p.fixedValue)}
++                                className="text-[10px] px-1.5 py-1 text-slate-400 hover:text-amber-400 rounded hover:bg-[#0f172a]"
++                                title={`Revert to default: ${p.fixedValue}`}
++                              >
++                                <RotateCcw className="w-3 h-3" />
++                              </button>
++                            )}
++                          </div>
++
++                          <div className="mt-1.5 text-[10px] text-slate-500 font-mono flex items-center justify-between">
++                            <span>Default: {String(p.fixedValue)}</span>
++                            {p.range && (
++                              <span>Range: [{p.range.start}..{p.range.stop}]</span>
++                            )}
++                          </div>
++                        </div>
++                      );
++                    })}
++                  </div>
++                )}
++              </div>
++
++              {/* Bottom Action Footer */}
++              <div className="pt-3 border-t border-[#232f46] flex flex-wrap items-center justify-between gap-3">
++                <div className="text-[11px] text-[#8b95a6] flex items-center gap-1.5">
++                  <Shield className="w-3.5 h-3.5 text-amber-400" />
++                  <span>
++                    Saved inputs automatically compile into <code className="text-amber-300 font-mono">screener_inputs.set</code> and apply to all screened pairs.
++                  </span>
++                </div>
++
++                <div className="flex items-center gap-2">
++                  <button
++                    onClick={handleResetInputs}
++                    disabled={savingInputs}
++                    className="px-3 py-1.5 text-xs text-slate-300 hover:text-white bg-[#1e293b] hover:bg-[#283548] border border-[#334155] rounded-lg transition-colors flex items-center gap-1.5"
++                  >
++                    <RotateCcw className="w-3.5 h-3.5" />
++                    Reset Defaults
++                  </button>
++                  <button
++                    onClick={handleSaveInputs}
++                    disabled={savingInputs}
++                    className="px-4 py-1.5 text-xs font-bold text-slate-950 bg-amber-400 hover:bg-amber-300 rounded-lg transition-colors flex items-center gap-1.5 shadow-md"
++                  >
++                    {savingInputs ? (
++                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
++                    ) : (
++                      <Save className="w-3.5 h-3.5" />
++                    )}
++                    Save & Apply to Screener
++                  </button>
++                </div>
++              </div>
++            </div>
++          )}
++        </div>
++
+         {/* Pairs Selection Area */}
+         <div className="space-y-3 mb-5">
+           <div className="flex flex-wrap items-center justify-between gap-2">
 -- 
 2.34.1
 

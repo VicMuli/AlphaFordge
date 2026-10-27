@@ -654,6 +654,184 @@ async function startServer() {
     }
   });
 
+  // Get Strategy Inputs & Indicators for Screener
+  app.get("/api/screener-strategy-inputs", async (req, res) => {
+    try {
+      const ea = (req.query.ea as string) || "TRB";
+      const screenerDir = path.join(process.cwd(), 'researched_strategies', ea, 'screener');
+      const inputsJsonPath = path.join(screenerDir, 'screener_inputs.json');
+      const setFilePath = path.join(screenerDir, 'screener_inputs.set');
+
+      // Run mql5_parser to get strategy definitions
+      execFile('python3', [path.join(process.cwd(), 'mql5_parser.py'), ea], async (err, stdout) => {
+        let parsed: any = { indicators: [], params: [] };
+        if (!err && stdout) {
+          try {
+            parsed = JSON.parse(stdout.trim());
+          } catch {}
+        }
+
+        let customData: any = null;
+        let hasCustomInputs = false;
+        if (existsSync(inputsJsonPath)) {
+          try {
+            customData = JSON.parse(await fs.readFile(inputsJsonPath, 'utf-8'));
+            hasCustomInputs = true;
+          } catch {}
+        }
+
+        let indicators = parsed.indicators || [];
+        let params = parsed.params || [];
+
+        if (customData) {
+          // Merge custom indicator toggles
+          if (customData.indicators && Array.isArray(customData.indicators)) {
+            const toggleMap = new Map<string, boolean>(customData.indicators.map((i: any) => [i.toggleParam, !!i.enabled]));
+            indicators = indicators.map((ind: any) => ({
+              ...ind,
+              enabled: toggleMap.has(ind.toggleParam) ? toggleMap.get(ind.toggleParam)! : ind.enabled
+            }));
+          }
+
+          // Merge custom parameter values
+          if (customData.params && typeof customData.params === 'object') {
+            params = params.map((p: any) => {
+              if (customData.params[p.name] !== undefined) {
+                return {
+                  ...p,
+                  currentValue: customData.params[p.name],
+                  isModified: customData.params[p.name] !== p.fixedValue
+                };
+              }
+              return { ...p, currentValue: p.fixedValue, isModified: false };
+            });
+          }
+        } else {
+          params = params.map((p: any) => ({
+            ...p,
+            currentValue: p.fixedValue,
+            isModified: false
+          }));
+        }
+
+        res.json({
+          status: "ok",
+          ea,
+          mq5File: parsed.mq5_file || null,
+          indicators,
+          params,
+          hasCustomInputs,
+          setFileExists: existsSync(setFilePath),
+          lastModified: customData?.updated_at || null
+        });
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Save Strategy Inputs & Indicators and generate MT5 .set file
+  app.post("/api/screener-strategy-inputs", async (req, res) => {
+    try {
+      const { ea, indicators, params } = req.body;
+      const targetEa = ea || "TRB";
+      const screenerDir = path.join(process.cwd(), 'researched_strategies', targetEa, 'screener');
+      if (!existsSync(screenerDir)) {
+        await fs.mkdir(screenerDir, { recursive: true });
+      }
+
+      const inputsJsonPath = path.join(screenerDir, 'screener_inputs.json');
+      const setFilePath = path.join(screenerDir, 'screener_inputs.set');
+
+      const payload = {
+        ea: targetEa,
+        indicators: indicators || [],
+        params: params || {},
+        updated_at: new Date().toISOString()
+      };
+
+      await fs.writeFile(inputsJsonPath, JSON.stringify(payload, null, 2), 'utf-8');
+
+      // Build MT5 .set file content
+      const setLines: string[] = [
+        `; AlphaForge Strategy Screener Parameter File`,
+        `; EA: ${targetEa}`,
+        `; Generated: ${new Date().toISOString()}`,
+        `; Format: MT5 Tester Set File`,
+        ``,
+        `; --- Indicator Filters & Toggles ---`
+      ];
+
+      if (Array.isArray(indicators)) {
+        for (const ind of indicators) {
+          if (ind.toggleParam) {
+            setLines.push(`${ind.toggleParam}=${ind.enabled ? 1 : 0}`);
+          }
+        }
+      }
+
+      setLines.push(``, `; --- Strategy Parameters ---`);
+      if (params && typeof params === 'object') {
+        for (const [key, val] of Object.entries(params)) {
+          let outVal = val;
+          if (typeof val === 'boolean') {
+            outVal = val ? 1 : 0;
+          }
+          setLines.push(`${key}=${outVal}`);
+        }
+      }
+
+      const setFileContent = setLines.join('\n') + '\n';
+      await fs.writeFile(setFilePath, setFileContent, 'utf-8');
+
+      // Also sync to terminal_data_dir/MQL5/Profiles/Tester if configured
+      try {
+        const configPath = path.join(process.cwd(), 'config.json');
+        if (existsSync(configPath)) {
+          const cfg = JSON.parse(await fs.readFile(configPath, 'utf-8'));
+          if (cfg.terminal_data_dir) {
+            const mt5Profiles = path.join(cfg.terminal_data_dir, 'MQL5', 'Profiles', 'Tester');
+            if (existsSync(mt5Profiles)) {
+              await fs.writeFile(path.join(mt5Profiles, 'screener_inputs.set'), setFileContent, 'utf-8');
+            }
+          }
+        }
+      } catch (syncErr) {
+        console.warn('Failed to sync set file to MT5 Profiles/Tester:', syncErr);
+      }
+
+      res.json({
+        status: "ok",
+        message: `Saved inputs and generated screener_inputs.set for ${targetEa}`,
+        setFilePath
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Reset Strategy Inputs & Indicators for Screener back to defaults
+  app.post("/api/screener-strategy-inputs/reset", async (req, res) => {
+    try {
+      const { ea } = req.body;
+      const targetEa = ea || "TRB";
+      const screenerDir = path.join(process.cwd(), 'researched_strategies', targetEa, 'screener');
+      const inputsJsonPath = path.join(screenerDir, 'screener_inputs.json');
+      const setFilePath = path.join(screenerDir, 'screener_inputs.set');
+
+      if (existsSync(inputsJsonPath)) {
+        await fs.unlink(inputsJsonPath);
+      }
+      if (existsSync(setFilePath)) {
+        await fs.unlink(setFilePath);
+      }
+
+      res.json({ status: "ok", message: `Reset strategy inputs for ${targetEa} to defaults` });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // Market Data & HistData Storage Inspector API
   app.get("/api/market-data", async (req, res) => {
     try {

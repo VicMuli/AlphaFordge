@@ -1288,15 +1288,19 @@ class StrategyScreenerPanel(BasePanel):
         self._ea_cb = ctk.CTkComboBox(r0, values=available_eas or ["TRB"], variable=self._ea_var,
                                       width=160, font=FB, fg_color=C["inp"],
                                       border_color=C["border"], button_color=C["accent"],
-                                      command=lambda _: self._load_screener_results())
-        self._ea_cb.pack(side="left", padx=(0, 20))
+                                      command=lambda _: (self._update_inputs_badge(), self._load_screener_results()))
+        self._ea_cb.pack(side="left", padx=(0, 16))
+
+        make_btn(r0, "⚙ Parameters & Indicators", self._open_inputs_dialog, color=C["card"], hover=C["hover"], width=205).pack(side="left", padx=(0, 8))
+        self._inputs_badge = make_label(r0, "Compiled MQL5 Defaults", font=FSM, color=C["sub"])
+        self._inputs_badge.pack(side="left", padx=(0, 20))
 
         make_label(r0, "Timeframe", font=FB, color=C["sub"]).pack(side="left", padx=(0, 8))
         self._period_var = ctk.StringVar(value=cfg.get("period", "M15"))
         self._period_cb = ctk.CTkComboBox(r0, values=["M1", "M5", "M15", "M30", "H1", "H4", "D1"],
-                                          variable=self._period_var, width=100, font=FB,
+                                          variable=self._period_var, width=95, font=FB,
                                           fg_color=C["inp"], border_color=C["border"], button_color=C["accent"])
-        self._period_cb.pack(side="left", padx=(0, 20))
+        self._period_cb.pack(side="left", padx=(0, 16))
 
         make_label(r0, "Deposit ($)", font=FB, color=C["sub"]).pack(side="left", padx=(0, 8))
         self._dep_var = make_entry(r0, width=90)
@@ -1397,6 +1401,7 @@ class StrategyScreenerPanel(BasePanel):
         self._log = make_log(log_card, height=200)
         self._log.grid(row=1, column=0, sticky="nsew", padx=16, pady=(0, 16))
 
+        self._update_inputs_badge()
         self._load_screener_results()
 
     def _select_majors(self):
@@ -1475,11 +1480,203 @@ class StrategyScreenerPanel(BasePanel):
             "AF_DEPOSIT":   dep,
         }
 
+        # Check for custom screener parameter set file
+        custom_set = SCRIPT_DIR / "researched_strategies" / ea / "screener" / "screener_inputs.set"
+        if custom_set.exists():
+            env_extra["AF_SET_FILE"] = str(custom_set)
+
         self.log_clear(self._log)
         def on_done():
             self._load_screener_results()
 
         self.run_script("run_screener.py", self._log, env_extra=env_extra, on_done=on_done)
+
+    def _update_inputs_badge(self):
+        ea = self._ea_var.get().strip() if hasattr(self, "_ea_var") else "TRB"
+        set_path = SCRIPT_DIR / "researched_strategies" / ea / "screener" / "screener_inputs.set"
+        if hasattr(self, "_inputs_badge"):
+            if set_path.exists():
+                self._inputs_badge.configure(text="✔ Custom (screener_inputs.set)", text_color=C["success"])
+            else:
+                self._inputs_badge.configure(text="⚙ Compiled MQL5 Defaults", text_color=C["sub"])
+
+    def _open_inputs_dialog(self):
+        ea = self._ea_var.get().strip()
+        dlg = ctk.CTkToplevel(self)
+        dlg.title(f"Strategy Parameters & Indicators — {ea}")
+        dlg.geometry("860x700")
+        dlg.configure(fg_color=C["bg"])
+        dlg.grab_set()
+
+        make_section_header(dlg, f"⚙ {ea} Strategy Parameters & Indicators",
+            f"Customize indicator filter switches and parameter values for multi-pair screening"
+        ).pack(fill="x", padx=24, pady=(20, 10))
+
+        scroll = ctk.CTkScrollableFrame(dlg, fg_color=C["panel"], corner_radius=10)
+        scroll.pack(fill="both", expand=True, padx=24, pady=10)
+
+        # 1. Parse MQL5 config
+        import mql5_parser
+        parsed = mql5_parser.get_strategy_mql5_config(ea)
+
+        # 2. Check for saved screener_inputs.json
+        screener_dir = SCRIPT_DIR / "researched_strategies" / ea / "screener"
+        screener_dir.mkdir(parents=True, exist_ok=True)
+        inputs_json = screener_dir / "screener_inputs.json"
+        saved_data = {}
+        if inputs_json.exists():
+            try:
+                with open(inputs_json, "r", encoding="utf-8") as f:
+                    saved_data = json.load(f)
+            except Exception:
+                pass
+
+        saved_toggles = {}
+        if saved_data.get("indicators"):
+            for ind in saved_data["indicators"]:
+                saved_toggles[ind.get("toggleParam")] = ind.get("enabled", True)
+
+        saved_params = saved_data.get("params", {})
+
+        # Switchboard Header
+        ctk.CTkLabel(scroll, text="🎛️ INDICATOR FILTER SWITCHBOARD", font=FH3, text_color=C["accent"]).pack(anchor="w", padx=12, pady=(10, 6))
+
+        ind_vars = {}
+        ind_frame = ctk.CTkFrame(scroll, fg_color="#141c2e", corner_radius=8)
+        ind_frame.pack(fill="x", padx=10, pady=(0, 16))
+
+        indicators = parsed.get("indicators", [])
+        if not indicators:
+            ctk.CTkLabel(ind_frame, text="No explicit indicator switches found in strategy source code.", font=FSM, text_color=C["sub"]).pack(anchor="w", padx=12, pady=10)
+        else:
+            for ind in indicators:
+                tp = ind.get("toggleParam")
+                name = ind.get("name", tp)
+                def_enabled = ind.get("enabled", True)
+                cur_val = saved_toggles.get(tp, def_enabled)
+                var = ctk.BooleanVar(value=bool(cur_val))
+                ind_vars[tp] = var
+
+                row = ctk.CTkFrame(ind_frame, fg_color="transparent")
+                row.pack(fill="x", padx=12, pady=4)
+
+                cb = ctk.CTkCheckBox(row, text=f"{name} ({tp})", variable=var,
+                                     font=FB, fg_color=C["accent"], hover_color=C["hover"],
+                                     text_color=C["text"])
+                cb.pack(side="left")
+
+        # Parameters Header
+        ctk.CTkLabel(scroll, text="⚙️ STRATEGY EXECUTION & RISK PARAMETERS", font=FH3, text_color=C["accent"]).pack(anchor="w", padx=12, pady=(10, 6))
+
+        param_entries = {}
+        params_container = ctk.CTkFrame(scroll, fg_color="#141c2e", corner_radius=8)
+        params_container.pack(fill="x", padx=10, pady=(0, 16))
+        params_container.columnconfigure((1, 3), weight=1)
+
+        raw_params = parsed.get("params", [])
+        for pi, p in enumerate(raw_params):
+            pname = p.get("name")
+            plabel = p.get("label", pname)
+            ptype = p.get("type", "double")
+            def_val = p.get("fixedValue", 0)
+            cur_val = saved_params.get(pname, def_val)
+
+            r_idx = pi // 2
+            c_idx = (pi % 2) * 2
+
+            lbl_txt = f"{pname} ({ptype}):"
+            ctk.CTkLabel(params_container, text=lbl_txt, font=FSM, text_color=C["text"], anchor="w").grid(
+                row=r_idx, column=c_idx, padx=(12, 6), pady=6, sticky="w"
+            )
+
+            e = make_entry(params_container, width=150)
+            e.insert(0, str(cur_val))
+            e.grid(row=r_idx, column=c_idx + 1, padx=(0, 16), pady=6, sticky="ew")
+            param_entries[pname] = (e, def_val, ptype)
+
+        # Action Buttons row
+        btn_row = ctk.CTkFrame(dlg, fg_color="transparent")
+        btn_row.pack(fill="x", padx=24, pady=(10, 20))
+
+        def _save_inputs():
+            out_indicators = []
+            for tp, var in ind_vars.items():
+                out_indicators.append({"toggleParam": tp, "enabled": var.get()})
+
+            out_params = {}
+            for pname, (entry_widget, def_val, ptype) in param_entries.items():
+                val_str = entry_widget.get().strip()
+                try:
+                    if ptype in ("int", "ulong", "long"):
+                        val = int(val_str)
+                    elif ptype in ("double", "float"):
+                        val = float(val_str)
+                    elif ptype == "bool":
+                        val = val_str.lower() in ("1", "true")
+                    else:
+                        val = val_str
+                except Exception:
+                    val = val_str
+                out_params[pname] = val
+
+            payload = {
+                "ea": ea,
+                "indicators": out_indicators,
+                "params": out_params,
+                "updated_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+            }
+
+            with open(inputs_json, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2)
+
+            # Generate MT5 .set file
+            set_file_path = screener_dir / "screener_inputs.set"
+            set_lines = [
+                f"; AlphaForge Strategy Screener Parameter File",
+                f"; EA: {ea}",
+                f"; Generated: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}",
+                "",
+                "; --- Indicator Filters ---",
+            ]
+            for ind in out_indicators:
+                set_lines.append(f"{ind['toggleParam']}={1 if ind['enabled'] else 0}")
+            set_lines.append("")
+            set_lines.append("; --- Parameters ---")
+            for k, v in out_params.items():
+                out_v = 1 if v is True else (0 if v is False else v)
+                set_lines.append(f"{k}={out_v}")
+
+            set_content = "\n".join(set_lines) + "\n"
+            with open(set_file_path, "w", encoding="utf-8") as f:
+                f.write(set_content)
+
+            # Sync to MT5 Profiles/Tester if exists
+            tdir = self.cfg.get("terminal_data_dir")
+            if tdir:
+                try:
+                    prof_dir = Path(tdir) / "MQL5" / "Profiles" / "Tester"
+                    prof_dir.mkdir(parents=True, exist_ok=True)
+                    (prof_dir / "screener_inputs.set").write_text(set_content, encoding="utf-8")
+                except Exception:
+                    pass
+
+            self._update_inputs_badge()
+            dlg.destroy()
+            messagebox.showinfo("Saved", f"Strategy inputs saved successfully for {ea}!\nGenerated: screener_inputs.set")
+
+        def _reset_inputs():
+            if messagebox.askyesno("Reset Inputs", f"Reset all parameters and indicators for {ea} to compiled defaults?"):
+                set_file_path = screener_dir / "screener_inputs.set"
+                if inputs_json.exists():
+                    inputs_json.unlink()
+                if set_file_path.exists():
+                    set_file_path.unlink()
+                self._update_inputs_badge()
+                dlg.destroy()
+
+        make_btn(btn_row, "✔  Save & Apply to Screener", _save_inputs, width=220).pack(side="left")
+        make_btn(btn_row, "⟳ Reset Defaults", _reset_inputs, color=C["card"], hover=C["hover"], width=140).pack(side="left", padx=(12, 0))
+        make_btn(btn_row, "Cancel", dlg.destroy, color=C["sidebar"], hover=C["hover"], width=100).pack(side="right")
 
     def _load_screener_results(self):
         ea = self._ea_var.get().strip() if hasattr(self, "_ea_var") else "TRB"

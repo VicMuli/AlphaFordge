@@ -15,7 +15,21 @@ import {
   Layers,
   ArrowUpDown,
   Percent,
-  Clock
+  Clock,
+  Settings2,
+  Sliders,
+  ToggleLeft,
+  ToggleRight,
+  Save,
+  RotateCcw,
+  Search,
+  Shield,
+  Target,
+  Activity,
+  ChevronDown,
+  ChevronUp,
+  Sparkles,
+  Filter
 } from 'lucide-react';
 import { useScriptRunner } from '../useScriptRunner';
 
@@ -96,11 +110,128 @@ export default function StrategyScreener({ config }: { config: any }) {
     }
   };
 
+  // Strategy Parameters & Indicators state
+  const [showInputsEditor, setShowInputsEditor] = useState<boolean>(false);
+  const [loadingInputs, setLoadingInputs] = useState<boolean>(false);
+  const [savingInputs, setSavingInputs] = useState<boolean>(false);
+  const [strategyIndicators, setStrategyIndicators] = useState<any[]>([]);
+  const [strategyParams, setStrategyParams] = useState<any[]>([]);
+  const [hasCustomInputs, setHasCustomInputs] = useState<boolean>(false);
+  const [setFileExists, setSetFileExists] = useState<boolean>(false);
+  const [paramSearch, setParamSearch] = useState<string>('');
+  const [paramCategory, setParamCategory] = useState<string>('all');
+  const [saveSuccessMsg, setSaveSuccessMsg] = useState<string | null>(null);
+
+  const fetchStrategyInputs = async (eaName: string) => {
+    setLoadingInputs(true);
+    try {
+      const res = await fetch(`/api/screener-strategy-inputs?ea=${encodeURIComponent(eaName)}`);
+      if (res.ok) {
+        const data = await res.json();
+        setStrategyIndicators(data.indicators || []);
+        setStrategyParams(data.params || []);
+        setHasCustomInputs(!!data.hasCustomInputs);
+        setSetFileExists(!!data.setFileExists);
+      }
+    } catch (err) {
+      console.error('Failed to load strategy inputs:', err);
+    } finally {
+      setLoadingInputs(false);
+    }
+  };
+
   useEffect(() => {
     if (selectedEa) {
       fetchScreenerResults(selectedEa);
+      fetchStrategyInputs(selectedEa);
     }
   }, [selectedEa]);
+
+  const handleToggleIndicator = (toggleParam: string) => {
+    setStrategyIndicators(prev => prev.map(ind => 
+      ind.toggleParam === toggleParam ? { ...ind, enabled: !ind.enabled } : ind
+    ));
+  };
+
+  const handleParamChange = (paramName: string, val: any) => {
+    setStrategyParams(prev => prev.map(p => {
+      if (p.name === paramName) {
+        let parsedVal = val;
+        if (p.type === 'int' || p.type === 'ulong' || p.type === 'long') {
+          const num = parseInt(val, 10);
+          parsedVal = isNaN(num) ? val : num;
+        } else if (p.type === 'double' || p.type === 'float') {
+          const num = parseFloat(val);
+          parsedVal = isNaN(num) ? val : num;
+        } else if (p.type === 'bool') {
+          parsedVal = val === true || val === 'true' || val === 1;
+        }
+        return {
+          ...p,
+          currentValue: parsedVal,
+          isModified: parsedVal !== p.fixedValue
+        };
+      }
+      return p;
+    }));
+  };
+
+  const handleSaveInputs = async () => {
+    setSavingInputs(true);
+    setSaveSuccessMsg(null);
+    try {
+      const paramDict: Record<string, any> = {};
+      strategyParams.forEach(p => {
+        paramDict[p.name] = p.currentValue !== undefined ? p.currentValue : p.fixedValue;
+      });
+
+      const res = await fetch('/api/screener-strategy-inputs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ea: selectedEa,
+          indicators: strategyIndicators.map(i => ({
+            toggleParam: i.toggleParam,
+            enabled: !!i.enabled
+          })),
+          params: paramDict
+        })
+      });
+
+      if (res.ok) {
+        setHasCustomInputs(true);
+        setSetFileExists(true);
+        setSaveSuccessMsg('Parameters & indicator inputs saved to screener_inputs.set');
+        setTimeout(() => setSaveSuccessMsg(null), 4000);
+      }
+    } catch (err: any) {
+      console.error('Save error:', err);
+      alert('Error saving strategy inputs: ' + err.message);
+    } finally {
+      setSavingInputs(false);
+    }
+  };
+
+  const handleResetInputs = async () => {
+    if (!confirm(`Reset all parameters and indicators for ${selectedEa} back to compiled MQL5 defaults?`)) {
+      return;
+    }
+    setSavingInputs(true);
+    try {
+      await fetch('/api/screener-strategy-inputs/reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ea: selectedEa })
+      });
+      await fetchStrategyInputs(selectedEa);
+      setSaveSuccessMsg('Reset to strategy defaults');
+      setTimeout(() => setSaveSuccessMsg(null), 3000);
+    } catch (err: any) {
+      console.error('Reset error:', err);
+    } finally {
+      setSavingInputs(false);
+    }
+  };
 
   // Toggle symbol selection
   const toggleSymbol = (sym: string) => {
@@ -267,6 +398,17 @@ export default function StrategyScreener({ config }: { config: any }) {
     };
   }, [results]);
 
+  // Filtered parameters for strategy configuration
+  const filteredParams = useMemo(() => {
+    return strategyParams.filter(p => {
+      const matchCat = paramCategory === 'all' || p.category === paramCategory;
+      const matchQuery = !paramSearch.trim() || 
+        p.name.toLowerCase().includes(paramSearch.toLowerCase()) || 
+        (p.label && p.label.toLowerCase().includes(paramSearch.toLowerCase()));
+      return matchCat && matchQuery;
+    });
+  }, [strategyParams, paramCategory, paramSearch]);
+
   return (
     <div className="flex flex-col h-full space-y-4">
       <SectionHeader 
@@ -332,6 +474,336 @@ export default function StrategyScreener({ config }: { config: any }) {
               className="w-full bg-[#0f172a] border border-[#2d3748] text-white font-mono rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-amber-400"
             />
           </div>
+        </div>
+
+        {/* Strategy Parameters & Indicator Inputs Bar & Collapsible Drawer */}
+        <div className="mb-5 bg-[#0f172a] border border-[#2d3748] rounded-xl p-4 shadow-inner">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-lg bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400">
+                <Sliders className="w-4 h-4" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold text-white tracking-wide">
+                    Strategy Parameters & Indicator Switchboard
+                  </span>
+                  <span className="text-[10px] px-2 py-0.5 rounded font-mono font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                    {selectedEa}
+                  </span>
+                  {setFileExists || hasCustomInputs ? (
+                    <span className="text-[10px] px-2 py-0.5 rounded font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
+                      <CheckCircle2 className="w-3 h-3" />
+                      Customized (screener_inputs.set)
+                    </span>
+                  ) : (
+                    <span className="text-[10px] px-2 py-0.5 rounded font-medium bg-blue-500/10 text-blue-400 border border-blue-500/30 flex items-center gap-1">
+                      <Sparkles className="w-3 h-3" />
+                      Compiled MQL5 Defaults
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-3 mt-1 text-[11px] text-[#8b95a6]">
+                  <span>
+                    Active Filters: <strong className="text-emerald-400">{strategyIndicators.filter(i => i.enabled).length}/{strategyIndicators.length}</strong>
+                  </span>
+                  <span>•</span>
+                  <span>
+                    Parameters: <strong className="text-white">{strategyParams.length}</strong>
+                    {strategyParams.filter(p => p.isModified).length > 0 && (
+                      <span className="text-amber-400 ml-1 font-medium">({strategyParams.filter(p => p.isModified).length} modified)</span>
+                    )}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              {(hasCustomInputs || setFileExists) && (
+                <button
+                  onClick={handleResetInputs}
+                  disabled={savingInputs}
+                  className="px-2.5 py-1.5 text-[11px] font-medium bg-red-500/10 hover:bg-red-500/20 text-red-300 border border-red-500/30 rounded-lg flex items-center gap-1.5 transition-colors"
+                  title="Reset to default compiled values"
+                >
+                  <RotateCcw className="w-3 h-3" />
+                  Reset Defaults
+                </button>
+              )}
+              <button
+                onClick={() => setShowInputsEditor(!showInputsEditor)}
+                className="px-3 py-1.5 text-xs font-semibold bg-[#1e293b] hover:bg-[#283548] text-amber-400 border border-amber-500/30 rounded-lg flex items-center gap-1.5 transition-all shadow-sm"
+              >
+                <Settings2 className="w-3.5 h-3.5" />
+                {showInputsEditor ? 'Hide Parameter Editor' : 'Modify Parameters & Indicators'}
+                {showInputsEditor ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+              </button>
+            </div>
+          </div>
+
+          {/* Expanded Configuration Drawer */}
+          {showInputsEditor && (
+            <div className="mt-4 pt-4 border-t border-[#232f46] space-y-5 animate-in fade-in duration-200">
+              {/* Save message notification */}
+              {saveSuccessMsg && (
+                <div className="p-3 bg-emerald-500/15 border border-emerald-500/40 rounded-lg text-emerald-300 text-xs flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                  <span>{saveSuccessMsg}</span>
+                </div>
+              )}
+
+              {/* Indicator Filter Switchboard */}
+              <div>
+                <div className="flex items-center justify-between mb-2.5">
+                  <span className="text-xs font-bold text-white flex items-center gap-2 uppercase tracking-wider">
+                    <Activity className="w-3.5 h-3.5 text-amber-400" />
+                    Indicator Filter Switchboard
+                  </span>
+                  <div className="flex items-center gap-2 text-[11px]">
+                    <button
+                      onClick={() => setStrategyIndicators(prev => prev.map(i => ({ ...i, enabled: true })))}
+                      className="text-cyan-400 hover:underline"
+                    >
+                      Enable All Filters
+                    </button>
+                    <span className="text-slate-600">|</span>
+                    <button
+                      onClick={() => setStrategyIndicators(prev => prev.map(i => ({ ...i, enabled: false })))}
+                      className="text-slate-400 hover:underline"
+                    >
+                      Disable All Filters
+                    </button>
+                  </div>
+                </div>
+
+                {loadingInputs ? (
+                  <div className="p-6 text-center text-xs text-[#8b95a6]">Loading strategy inputs from MQL5...</div>
+                ) : strategyIndicators.length === 0 ? (
+                  <div className="p-3 bg-[#162032] border border-[#232f46] rounded-lg text-xs text-[#8b95a6]">
+                    No explicit indicator filter switches found in {selectedEa}.mq5 source code.
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5">
+                    {strategyIndicators.map(ind => (
+                      <div
+                        key={ind.toggleParam || ind.id}
+                        onClick={() => handleToggleIndicator(ind.toggleParam)}
+                        className={`p-3 rounded-lg border cursor-pointer transition-all flex items-start justify-between gap-3 ${
+                          ind.enabled
+                            ? 'bg-emerald-950/20 border-emerald-500/40 text-white shadow-sm'
+                            : 'bg-[#162032] border-[#232f46] text-slate-400 hover:border-slate-600'
+                        }`}
+                      >
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-semibold text-white">
+                              {ind.name || ind.toggleParam}
+                            </span>
+                          </div>
+                          <div className="text-[10px] font-mono text-[#8b95a6]">
+                            {ind.toggleParam}
+                          </div>
+                          {ind.paramNames && ind.paramNames.length > 0 && (
+                            <div className="flex flex-wrap gap-1 mt-1">
+                              {ind.paramNames.map((pName: string) => (
+                                <span key={pName} className="text-[9px] px-1.5 py-0.2 bg-[#0f172a] text-cyan-300 rounded border border-cyan-800/40">
+                                  {pName}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                        <button
+                          type="button"
+                          className="mt-0.5 text-lg transition-transform active:scale-95"
+                        >
+                          {ind.enabled ? (
+                            <ToggleRight className="w-6 h-6 text-emerald-400" />
+                          ) : (
+                            <ToggleLeft className="w-6 h-6 text-slate-600" />
+                          )}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Strategy Parameters Editor */}
+              <div>
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                  <span className="text-xs font-bold text-white flex items-center gap-2 uppercase tracking-wider">
+                    <Target className="w-3.5 h-3.5 text-amber-400" />
+                    Strategy & Execution Parameters ({filteredParams.length})
+                  </span>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    {/* Category filter pills */}
+                    <div className="flex items-center bg-[#162032] p-0.5 rounded-lg border border-[#232f46] text-[11px]">
+                      {[
+                        { id: 'all', label: 'All' },
+                        { id: 'risk', label: 'Risk' },
+                        { id: 'core', label: 'Core' },
+                        { id: 'indicator', label: 'Indicators' },
+                        { id: 'timing', label: 'Timing' },
+                      ].map(cat => (
+                        <button
+                          key={cat.id}
+                          onClick={() => setParamCategory(cat.id)}
+                          className={`px-2.5 py-1 rounded-md transition-colors ${
+                            paramCategory === cat.id
+                              ? 'bg-amber-400 text-slate-950 font-bold'
+                              : 'text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          {cat.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Search box */}
+                    <div className="relative">
+                      <Search className="w-3 h-3 text-slate-500 absolute left-2.5 top-2.5" />
+                      <input
+                        type="text"
+                        placeholder="Search params..."
+                        value={paramSearch}
+                        onChange={e => setParamSearch(e.target.value)}
+                        className="bg-[#162032] border border-[#232f46] text-white text-xs pl-7 pr-2.5 py-1 rounded-lg focus:outline-none focus:border-amber-400 w-36"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {loadingInputs ? (
+                  <div className="p-6 text-center text-xs text-[#8b95a6]">Loading parameters...</div>
+                ) : filteredParams.length === 0 ? (
+                  <div className="p-4 bg-[#162032] border border-[#232f46] rounded-lg text-xs text-[#8b95a6] text-center">
+                    No parameters found matching the current search or category filter.
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 max-h-[380px] overflow-y-auto pr-1">
+                    {filteredParams.map(p => {
+                      const curVal = p.currentValue !== undefined ? p.currentValue : p.fixedValue;
+                      const isNum = p.type === 'double' || p.type === 'float' || p.type === 'int' || p.type === 'ulong' || p.type === 'long';
+                      const step = p.type === 'double' || p.type === 'float' ? '0.05' : '1';
+
+                      return (
+                        <div
+                          key={p.name}
+                          className={`p-3 rounded-lg border transition-all ${
+                            p.isModified
+                              ? 'bg-amber-950/15 border-amber-500/40'
+                              : 'bg-[#162032] border-[#232f46]'
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-1 mb-1.5">
+                            <label className="text-xs font-semibold text-white truncate" title={p.label || p.name}>
+                              {p.name}
+                            </label>
+                            <div className="flex items-center gap-1">
+                              <span className="text-[9px] px-1 py-0.2 bg-[#0f172a] text-slate-400 rounded uppercase font-mono">
+                                {p.type}
+                              </span>
+                              {p.isModified && (
+                                <span className="text-[9px] px-1.5 py-0.2 bg-amber-500/20 text-amber-300 font-bold rounded">
+                                  Edited
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="text-[10px] text-[#8b95a6] line-clamp-1 mb-2" title={p.description || p.label}>
+                            {p.description || p.label || p.name}
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            {typeof p.fixedValue === 'boolean' || p.type === 'bool' ? (
+                              <select
+                                value={String(curVal)}
+                                onChange={e => handleParamChange(p.name, e.target.value === 'true')}
+                                className="w-full bg-[#0f172a] border border-[#2d3748] text-white rounded px-2.5 py-1 text-xs focus:outline-none focus:border-amber-400"
+                              >
+                                <option value="true">True (Enabled)</option>
+                                <option value="false">False (Disabled)</option>
+                              </select>
+                            ) : isNum ? (
+                              <input
+                                type="number"
+                                step={step}
+                                value={curVal !== undefined ? curVal : ''}
+                                onChange={e => handleParamChange(p.name, e.target.value)}
+                                className="w-full bg-[#0f172a] border border-[#2d3748] text-white font-mono rounded px-2.5 py-1 text-xs focus:outline-none focus:border-amber-400"
+                              />
+                            ) : (
+                              <input
+                                type="text"
+                                value={curVal !== undefined ? curVal : ''}
+                                onChange={e => handleParamChange(p.name, e.target.value)}
+                                className="w-full bg-[#0f172a] border border-[#2d3748] text-white font-mono rounded px-2.5 py-1 text-xs focus:outline-none focus:border-amber-400"
+                              />
+                            )}
+
+                            {p.isModified && (
+                              <button
+                                type="button"
+                                onClick={() => handleParamChange(p.name, p.fixedValue)}
+                                className="text-[10px] px-1.5 py-1 text-slate-400 hover:text-amber-400 rounded hover:bg-[#0f172a]"
+                                title={`Revert to default: ${p.fixedValue}`}
+                              >
+                                <RotateCcw className="w-3 h-3" />
+                              </button>
+                            )}
+                          </div>
+
+                          <div className="mt-1.5 text-[10px] text-slate-500 font-mono flex items-center justify-between">
+                            <span>Default: {String(p.fixedValue)}</span>
+                            {p.range && (
+                              <span>Range: [{p.range.start}..{p.range.stop}]</span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* Bottom Action Footer */}
+              <div className="pt-3 border-t border-[#232f46] flex flex-wrap items-center justify-between gap-3">
+                <div className="text-[11px] text-[#8b95a6] flex items-center gap-1.5">
+                  <Shield className="w-3.5 h-3.5 text-amber-400" />
+                  <span>
+                    Saved inputs automatically compile into <code className="text-amber-300 font-mono">screener_inputs.set</code> and apply to all screened pairs.
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleResetInputs}
+                    disabled={savingInputs}
+                    className="px-3 py-1.5 text-xs text-slate-300 hover:text-white bg-[#1e293b] hover:bg-[#283548] border border-[#334155] rounded-lg transition-colors flex items-center gap-1.5"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    Reset Defaults
+                  </button>
+                  <button
+                    onClick={handleSaveInputs}
+                    disabled={savingInputs}
+                    className="px-4 py-1.5 text-xs font-bold text-slate-950 bg-amber-400 hover:bg-amber-300 rounded-lg transition-colors flex items-center gap-1.5 shadow-md"
+                  >
+                    {savingInputs ? (
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Save className="w-3.5 h-3.5" />
+                    )}
+                    Save & Apply to Screener
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Pairs Selection Area */}
