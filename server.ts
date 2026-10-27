@@ -426,11 +426,25 @@ async function startServer() {
                     }
                   }
                 }
+                let meta: any = null;
+                const metaCandidates = [
+                  path.join(fullPath, 'run_meta.json'),
+                  path.join(fullPath, '..', 'run_meta.json'),
+                ];
+                for (const mp of metaCandidates) {
+                  if (existsSync(mp)) {
+                    try {
+                      meta = JSON.parse(await fs.readFile(mp, 'utf-8'));
+                      break;
+                    } catch {}
+                  }
+                }
                 runs.push({
                   name: entry.name,
                   path: fullPath,
                   passedCandidates: passedCount,
                   candidates: candidates.sort(),
+                  meta,
                 });
               } else {
                 await scanRuns(fullPath, depth + 1);
@@ -520,6 +534,9 @@ async function startServer() {
       strategyItems.forEach(s => {
         const clean = s.name.replace(/\.(ex5|mq5)$/i, '');
         if (clean) eaSet.add(clean);
+      });
+      runs.forEach(r => {
+        if (r.meta?.ea) eaSet.add(r.meta.ea);
       });
       if (eaSet.size === 0) {
         eaSet.add("TRB");
@@ -617,6 +634,21 @@ async function startServer() {
       }
 
       res.json({ setFiles, candidateDir: targetCandDir });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Get Screener Results for an EA
+  app.get("/api/screener-results", async (req, res) => {
+    try {
+      const ea = (req.query.ea as string) || "TRB";
+      const screenerManifest = path.join(process.cwd(), 'researched_strategies', ea, 'screener', 'screener_manifest.json');
+      if (existsSync(screenerManifest)) {
+        const data = await fs.readFile(screenerManifest, 'utf-8');
+        return res.json(JSON.parse(data));
+      }
+      res.json({ results: [], pairs_total: 0, pairs_completed: 0 });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -992,6 +1024,42 @@ async function startServer() {
     for (const [k, v] of Object.entries(req.query)) {
       if (k.startsWith('AF_') && typeof v === 'string') {
         extraEnv[k] = v;
+      }
+    }
+
+    // Auto-resolve AF_EXPERT if AF_ACTIVE_EA is set but AF_EXPERT is empty
+    if (extraEnv['AF_ACTIVE_EA'] && !extraEnv['AF_EXPERT']) {
+      const eaName = extraEnv['AF_ACTIVE_EA'].toLowerCase();
+      const searchDirs = [
+        path.join(process.cwd(), 'researched_strategies'),
+        path.join(process.cwd(), 'strategies'),
+        process.cwd()
+      ];
+      for (const sdir of searchDirs) {
+        if (existsSync(sdir)) {
+          try {
+            const files = readdirSync(sdir, { withFileTypes: true });
+            for (const f of files) {
+              if (f.isFile() && f.name.toLowerCase().endsWith('.ex5')) {
+                const stem = f.name.toLowerCase().replace(/\.ex5$/, '');
+                if (f.name.toLowerCase().includes(eaName) || eaName.includes(stem)) {
+                  extraEnv['AF_EXPERT'] = f.name;
+                  break;
+                }
+              } else if (f.isDirectory() && !f.name.startsWith('.')) {
+                try {
+                  const subFiles = readdirSync(path.join(sdir, f.name));
+                  const ex5 = subFiles.find(sf => sf.toLowerCase().endsWith('.ex5'));
+                  if (ex5 && (f.name.toLowerCase().includes(eaName) || ex5.toLowerCase().includes(eaName))) {
+                    extraEnv['AF_EXPERT'] = ex5;
+                    break;
+                  }
+                } catch {}
+              }
+            }
+          } catch {}
+        }
+        if (extraEnv['AF_EXPERT']) break;
       }
     }
 

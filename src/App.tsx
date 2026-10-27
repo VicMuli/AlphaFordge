@@ -21,6 +21,7 @@ import { motion, AnimatePresence } from 'motion/react';
 
 // Components
 import Dashboard from './components/Dashboard';
+import StrategyScreener from './components/StrategyScreener';
 import Research from './components/Research';
 import Optimize from './components/Optimize';
 import { MonteCarlo } from './components/MonteCarlo';
@@ -32,6 +33,7 @@ import Settings from './components/Settings';
 
 const NAV_ITEMS = [
   { id: 'dashboard', label: 'Dashboard', icon: Home, prefix: '🏠' },
+  { id: 'screener', label: 'Strategy Screener', icon: Zap, prefix: '📊' },
   { id: 'research', label: 'Research', icon: Microscope, prefix: '🔬' },
   { id: 'optimize', label: 'Optimize', icon: SettingsIcon, prefix: '⚙' },
   { id: 'montecarlo', label: 'Monte Carlo', icon: Dices, prefix: '🎲' },
@@ -87,6 +89,7 @@ export default function App() {
   const renderContent = () => {
     switch (activeTab) {
       case 'dashboard': return <Dashboard config={config} />;
+      case 'screener': return <StrategyScreener config={config} />;
       case 'research': return <Research config={config} />;
       case 'optimize': return <Optimize config={config} onNavigateToSettings={() => setActiveTab('settings')} />;
       case 'montecarlo': return <MonteCarlo />;

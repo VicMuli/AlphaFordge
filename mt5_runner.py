@@ -102,9 +102,11 @@ def normalize_mt5_date(val: str, default: str = "2013.01.01", is_end: bool = Fal
 
 def resolve_mt5_symbol(symbol: str, work_dir: Path = None, terminal_data_dir: str = None) -> str:
     """
-    Resolves a raw market string (e.g. 'USDJPY') to the actual MT5 custom symbol that
-    contains the complete 2013-2026 Dukascopy historical dataset (e.g. 'USDJPY Dukascopy').
-    Broker live symbols like bare 'USDJPY' only contain short recent history (current year only).
+    Resolves a market symbol to the actual MT5 symbol available in the terminal.
+    1. If a custom Dukascopy symbol exists in bases/Custom/history, uses that exact name.
+    2. If a broker symbol exists in bases/<server>/history (e.g. AUDUSD, EURUSD.raw), uses that exact symbol.
+    3. Searches work_dir / run_meta.json / run.ini for run-specific symbol names.
+    4. Never replaces a real existing broker symbol with a non-existent custom symbol.
     """
     SYMBOL_MAP = {
         "EURUSD": "EURUSD dukascopy",
@@ -112,16 +114,53 @@ def resolve_mt5_symbol(symbol: str, work_dir: Path = None, terminal_data_dir: st
         "USDJPY": "USDJPY Dukascopy",
         "EURJPY": "EURJPY Dukascopy",
         "XAUUSD": "XAUUSD dukascopy",
+        "AUDUSD": "AUDUSD dukascopy",
+        "NZDUSD": "NZDUSD dukascopy",
+        "USDCAD": "USDCAD dukascopy",
+        "USDCHF": "USDCHF dukascopy",
+        "GBPJPY": "GBPJPY dukascopy",
+        "AUDJPY": "AUDJPY dukascopy",
+        "CADJPY": "CADJPY dukascopy",
+        "CHFJPY": "CHFJPY dukascopy",
+        "EURGBP": "EURGBP dukascopy",
     }
     raw = (symbol or "").strip()
     if not raw:
         return "USDJPY Dukascopy"
 
-    # If already a custom symbol
+    # Auto-load terminal_data_dir if not provided
+    if not terminal_data_dir:
+        for possible_cfg in [Path(__file__).parent / "config.json", Path.cwd() / "config.json"]:
+            if possible_cfg.exists():
+                try:
+                    import json
+                    with open(possible_cfg, "r", encoding="utf-8") as f:
+                        c_data = json.load(f)
+                        if c_data.get("terminal_data_dir"):
+                            terminal_data_dir = c_data["terminal_data_dir"]
+                            break
+                except Exception:
+                    pass
+        if not terminal_data_dir:
+            terminal_data_dir = os.environ.get("AF_TERMINAL_DATA_DIR")
+
+    # If already an explicit custom symbol with "dukascopy"
     if "dukascopy" in raw.lower():
+        # Verify exact casing if terminal_data_dir exists
+        if terminal_data_dir:
+            custom_base = Path(terminal_data_dir) / "bases" / "Custom" / "history"
+            if custom_base.exists():
+                try:
+                    for cdir in custom_base.iterdir():
+                        if cdir.is_dir() and cdir.name.lower() == raw.lower():
+                            return cdir.name
+                except Exception:
+                    pass
         return raw
 
     sym_key = raw.split()[0].upper()
+    # Strip any broker trailing suffixes for key matching (e.g. AUDUSD.raw -> AUDUSD)
+    base_key = re.sub(r"[._+][a-zA-Z0-9]+$", "", sym_key)
 
     # 1. Search work_dir and parent directories for run_meta.json or run.ini
     if work_dir:
@@ -139,7 +178,7 @@ def resolve_mt5_symbol(symbol: str, work_dir: Path = None, terminal_data_dir: st
                     with open(meta_file, "r", encoding="utf-8") as mf:
                         mdata = json.load(mf)
                         msym = mdata.get("symbol")
-                        if msym and (sym_key in msym.upper() or not sym_key):
+                        if msym and (base_key in msym.upper() or sym_key in msym.upper() or not sym_key):
                             return msym.strip()
                 except Exception:
                     pass
@@ -152,23 +191,56 @@ def resolve_mt5_symbol(symbol: str, work_dir: Path = None, terminal_data_dir: st
                     m = re.search(r"^Symbol\s*=\s*(.+)$", text, flags=re.MULTILINE)
                     if m:
                         isym = m.group(1).strip()
-                        if sym_key in isym.upper() or not sym_key:
+                        if base_key in isym.upper() or sym_key in isym.upper() or not sym_key:
                             return isym
                 except Exception:
                     pass
 
-    # 2. Check terminal_data_dir custom bases
+    # 2. Check terminal_data_dir for REAL existing symbols on disk
     if terminal_data_dir:
-        custom_base = Path(terminal_data_dir) / "bases" / "Custom" / "history"
+        td_path = Path(terminal_data_dir)
+        
+        # 2a. Check custom bases history first (for custom historical datasets)
+        custom_base = td_path / "bases" / "Custom" / "history"
         if custom_base.exists():
             try:
+                # Priority 1: Exact match or match with Dukascopy
                 for cdir in custom_base.iterdir():
-                    if cdir.is_dir() and sym_key in cdir.name.upper():
+                    if cdir.is_dir():
+                        c_up = cdir.name.upper()
+                        if c_up == raw.upper() or c_up == sym_key or c_up == base_key:
+                            return cdir.name
+                        if (base_key in c_up or sym_key in c_up) and "dukascopy" in c_up.lower():
+                            return cdir.name
+                # Priority 2: Any custom folder containing base key
+                for cdir in custom_base.iterdir():
+                    if cdir.is_dir() and (base_key in cdir.name.upper() or sym_key in cdir.name.upper()):
                         return cdir.name
             except Exception:
                 pass
 
-    # 3. Use standard Dukascopy custom symbol mapping
+        # 2b. Check broker live/server bases history (for standard broker symbols)
+        bases_dir = td_path / "bases"
+        if bases_dir.exists():
+            try:
+                for server_dir in bases_dir.iterdir():
+                    if server_dir.is_dir() and server_dir.name != "Custom":
+                        hist_dir = server_dir / "history"
+                        if hist_dir.exists():
+                            for sdir in hist_dir.iterdir():
+                                if sdir.is_dir():
+                                    s_up = sdir.name.upper()
+                                    # Exact match or prefix match (e.g. AUDUSD, AUDUSD.raw, AUDUSDm)
+                                    if s_up == raw.upper() or s_up == sym_key or s_up == base_key:
+                                        return sdir.name
+                                    if s_up.startswith(base_key) or s_up.startswith(sym_key):
+                                        return sdir.name
+            except Exception:
+                pass
+
+    # 3. If running without terminal data dir or in mock/cloud, check SYMBOL_MAP
+    if base_key in SYMBOL_MAP:
+        return SYMBOL_MAP[base_key]
     if sym_key in SYMBOL_MAP:
         return SYMBOL_MAP[sym_key]
 

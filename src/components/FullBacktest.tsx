@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Card, SectionHeader, Button, Input, LogViewer } from './ui';
-import { Play, FolderOpen, RefreshCw, Square, Trash2 } from 'lucide-react';
+import { Play, FolderOpen, RefreshCw, Square, Trash2, X } from 'lucide-react';
 import { useScriptRunner } from '../useScriptRunner';
 
 export default function FullBacktest({ config }: { config: any }) {
@@ -21,6 +21,7 @@ export default function FullBacktest({ config }: { config: any }) {
   const [lotSize, setLotSize] = useState<string>('');
   const [riskPct, setRiskPct] = useState<string>('');
   const [loading, setLoading] = useState(false);
+  const [showOutputModal, setShowOutputModal] = useState(false);
 
   const normalizeMt5Date = (val: string, fallback: string, isEnd: boolean): string => {
     if (!val || !val.trim()) return fallback;
@@ -101,6 +102,19 @@ export default function FullBacktest({ config }: { config: any }) {
             setSetFiles([]);
             setSelectedSetFile('');
           }
+          if (first.meta) {
+            if (first.meta.ea) {
+              setEas(prev => prev.includes(first.meta.ea) ? prev : [first.meta.ea, ...prev]);
+              setSelectedEa(first.meta.ea);
+            }
+            const detectedSym = first.meta.symbol_key || first.meta.symbol;
+            if (detectedSym) {
+              const symKey = detectedSym.split(' ')[0].toUpperCase();
+              setSelectedMarket(symKey);
+            }
+            if (first.meta.train_from) setFromDate(first.meta.train_from);
+            if (first.meta.holdout_to) setToDate(first.meta.holdout_to);
+          }
         }
       }
     } catch (e) {
@@ -137,6 +151,25 @@ export default function FullBacktest({ config }: { config: any }) {
       setSetFiles([]);
       setSelectedSetFile('');
     }
+
+    // Auto-detect EA, symbol, and date range from run metadata (matching app.py exactly)
+    if (found?.meta) {
+      if (found.meta.ea) {
+        setEas(prev => prev.includes(found.meta.ea) ? prev : [found.meta.ea, ...prev]);
+        setSelectedEa(found.meta.ea);
+      }
+      const detectedSym = found.meta.symbol_key || found.meta.symbol;
+      if (detectedSym) {
+        const symKey = detectedSym.split(' ')[0].toUpperCase();
+        setSelectedMarket(symKey);
+      }
+      if (found.meta.train_from) {
+        setFromDate(found.meta.train_from);
+      }
+      if (found.meta.holdout_to) {
+        setToDate(found.meta.holdout_to);
+      }
+    }
   };
 
   const handleCandChange = (cand: string) => {
@@ -159,9 +192,35 @@ export default function FullBacktest({ config }: { config: any }) {
   };
 
   const handleRun = () => {
-    const normFrom = normalizeMt5Date(fromDate, '2013.01.01', false);
-    const normTo = normalizeMt5Date(toDate, '2026.07.03', true);
+    let rawFrom = (fromDate || '').trim() || (config?.train_from || '2013.01.01');
+    let rawTo = (toDate || '').trim() || (config?.holdout_to || '2026.07.03');
+
+    // Handle range syntax if entered in From Date (e.g. "2013-2026", "2013 to 2026", "2013..2026", "2013 -> 2026")
+    let foundSep = false;
+    for (const sep of [' to ', ' - ', ' -> ', '..']) {
+      if (rawFrom.includes(sep)) {
+        const parts = rawFrom.split(sep);
+        rawFrom = parts[0].trim();
+        rawTo = parts[1].trim();
+        foundSep = true;
+        break;
+      }
+    }
+    if (!foundSep) {
+      const mRange = rawFrom.match(/^(\d{4})\s*[-/]\s*(\d{4})$/);
+      if (mRange) {
+        rawFrom = mRange[1];
+        rawTo = mRange[2];
+      }
+    }
+
+    const normFrom = normalizeMt5Date(rawFrom, '2013.01.01', false);
+    const normTo = normalizeMt5Date(rawTo, '2026.07.03', true);
     const resolvedSymbol = resolveMarketSymbol(selectedMarket);
+
+    // Reflect normalized dates back in UI for clarity (matching app.py)
+    setFromDate(normFrom);
+    setToDate(normTo);
 
     runScript('run_full_backtest.py', {
       patch: {
@@ -344,7 +403,7 @@ export default function FullBacktest({ config }: { config: any }) {
           </Button>
           <Button 
             variant="secondary" 
-            onClick={() => alert(`Backtest output report folder:\n${config.work_dir || "optimization_runs"}/${selectedRun || "latest"}/passed_candidates/${selectedCand || "cand_001"}/full_backtest`)}
+            onClick={() => setShowOutputModal(true)}
           >
             <FolderOpen size={16} /> Open Output
           </Button>
@@ -357,6 +416,42 @@ export default function FullBacktest({ config }: { config: any }) {
       <div className="flex-1 min-h-[300px] flex flex-col">
         <LogViewer logs={logs} title={`Full Backtest Output ${isRunning ? '(Executing...)' : ''}`} />
       </div>
+
+      {showOutputModal && (
+        <div className="fixed inset-0 bg-black/75 backdrop-blur-xs flex items-center justify-center z-50 p-4">
+          <div className="bg-[#111827] border border-[#2d3748] rounded-xl w-full max-w-lg overflow-hidden shadow-2xl">
+            <div className="flex items-center justify-between p-4 border-b border-[#2d3748] bg-[#060912]">
+              <div className="flex items-center gap-2 font-bold text-white text-sm">
+                <FolderOpen size={18} className="text-[#f59e0b]" />
+                Full Backtest Output Directory
+              </div>
+              <button 
+                onClick={() => setShowOutputModal(false)}
+                className="text-[#8b95a6] hover:text-white p-1"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="p-5 space-y-3 text-xs text-[#8b95a6]">
+              <p>Generated backtest reports, charts, and summary documents are saved to:</p>
+              <div className="p-3 bg-[#060912] border border-[#2d3748] rounded font-mono text-amber-300 break-all select-all">
+                {`${config.work_dir || "optimization_runs"}/${selectedRun || "latest"}/passed_candidates/${selectedCand || "cand_001"}/full_backtest`}
+              </div>
+              <p className="text-[11px]">
+                On your Windows machine, open File Explorer and paste this path to access the Word report (.docx), HTML report, and monthly heatmaps.
+              </p>
+            </div>
+            <div className="p-3 border-t border-[#2d3748] bg-[#060912] flex justify-end">
+              <button
+                onClick={() => setShowOutputModal(false)}
+                className="px-4 py-2 bg-[#f59e0b] hover:bg-[#d97706] text-[#0a0e1a] rounded-lg font-bold text-xs"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
