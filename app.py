@@ -844,31 +844,50 @@ def make_card(parent, **kw) -> ctk.CTkFrame:
 
 
 def make_label(parent, text, font=None, color=None, **kw) -> ctk.CTkLabel:
-    return ctk.CTkLabel(parent, text=text, font=font or FB,
-                        text_color=color or C["text"], **kw)
+    cfg = {"font": font or FB, "text_color": color or C["text"]}
+    cfg.update(kw)
+    return ctk.CTkLabel(parent, text=text, **cfg)
 
 
-def make_btn(parent, text, cmd, color=None, hover=None, width=140, **kw) -> ctk.CTkButton:
-    return ctk.CTkButton(parent, text=text, command=cmd, width=width,
-                         fg_color=color or C["accent"],
-                         hover_color=hover or "#d97706",
-                         text_color="#0a0e1a", font=FH3, corner_radius=8, **kw)
+def make_btn(parent, text, cmd, color=None, hover=None, width=140, font=None, **kw) -> ctk.CTkButton:
+    cfg = {
+        "fg_color": color or C["accent"],
+        "hover_color": hover or "#d97706",
+        "text_color": "#0a0e1a",
+        "font": font or FH3,
+        "corner_radius": 8,
+    }
+    cfg.update(kw)
+    return ctk.CTkButton(parent, text=text, command=cmd, width=width, **cfg)
 
 
-def make_entry(parent, placeholder="", width=240, show=None, **kw) -> ctk.CTkEntry:
-    e = ctk.CTkEntry(parent, width=width, placeholder_text=placeholder,
-                     fg_color=C["inp"], border_color=C["border"],
-                     text_color=C["text"], font=FB, corner_radius=8, **kw)
+def make_entry(parent, placeholder="", width=240, show=None, font=None, **kw) -> ctk.CTkEntry:
+    cfg = {
+        "fg_color": C["inp"],
+        "border_color": C["border"],
+        "text_color": C["text"],
+        "font": font or FB,
+        "corner_radius": 8,
+    }
+    cfg.update(kw)
+    e = ctk.CTkEntry(parent, width=width, placeholder_text=placeholder, **cfg)
     if show:
         e.configure(show=show)
     _add_context_menu(e, is_text=False)
     return e
 
 
-def make_log(parent, height=220, **kw) -> ctk.CTkTextbox:
-    tb = ctk.CTkTextbox(parent, height=height, fg_color=C["sidebar"],
-                        text_color="#a8d8a8", font=FMO, corner_radius=8,
-                        border_width=1, border_color=C["border"], **kw)
+def make_log(parent, height=220, font=None, **kw) -> ctk.CTkTextbox:
+    cfg = {
+        "fg_color": C["sidebar"],
+        "text_color": "#a8d8a8",
+        "font": font or FMO,
+        "corner_radius": 8,
+        "border_width": 1,
+        "border_color": C["border"],
+    }
+    cfg.update(kw)
+    tb = ctk.CTkTextbox(parent, height=height, **cfg)
     tb.configure(state="disabled")
     _add_context_menu(tb, is_text=True)
     return tb

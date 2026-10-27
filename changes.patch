@@ -1,0 +1,3041 @@
+From 97a54c622a65e130d3acc8b4b0a47b5526da1042 Mon Sep 17 00:00:00 2001
+From: VicMuli <victormuli100@gmail.com>
+Date: Tue, 27 Oct 2026 08:06:19 +0000
+Subject: [PATCH 1/3] feat: restore Strategy Screener and Market Data tabs in
+ app.py and web preview
+
+---
+ app.py                        | 482 ++++++++++++++++++++++++++++++++--
+ server.ts                     |  65 +++++
+ src/App.tsx                   |   3 +
+ src/components/MarketData.tsx | 310 ++++++++++++++++++++++
+ 4 files changed, 842 insertions(+), 18 deletions(-)
+ create mode 100644 src/components/MarketData.tsx
+
+diff --git a/app.py b/app.py
+index 36fba6e..b8fd8a3 100644
+--- a/app.py
++++ b/app.py
+@@ -115,15 +115,17 @@ DEFAULT_CONFIG = {
+ }
+ 
+ NAV_ITEMS = [
+-    ("🏠", "Dashboard",    "dashboard"),
+-    ("🔬", "Research",     "research"),
+-    ("⚙",  "Optimize",    "optimize"),
+-    ("🎲", "Monte Carlo",  "montecarlo"),
+-    ("📈", "Walk Forward", "walkforward"),
+-    ("📋", "Full Backtest","fullbacktest"),
+-    ("📦", "Portfolio",    "portfolio"),
+-    ("🗂",  "Strategies",  "strategies"),
+-    ("🔧", "Settings",     "settings"),
++    ("🏠", "Dashboard",         "dashboard"),
++    ("📊", "Strategy Screener", "screener"),
++    ("🌐", "Market Data",       "marketdata"),
++    ("🔬", "Research",          "research"),
++    ("⚙",  "Optimize",          "optimize"),
++    ("🎲", "Monte Carlo",       "montecarlo"),
++    ("📈", "Walk Forward",      "walkforward"),
++    ("📋", "Full Backtest",     "fullbacktest"),
++    ("📦", "Portfolio",         "portfolio"),
++    ("🗂",  "Strategies",       "strategies"),
++    ("🔧", "Settings",          "settings"),
+ ]
+ 
+ # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+@@ -1234,6 +1236,448 @@ class DashboardPanel(BasePanel):
+         self._recent_box.configure(state="disabled")
+ 
+ 
++# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
++# Strategy Screener Panel
++# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
++
++class StrategyScreenerPanel(BasePanel):
++    def __init__(self, parent, app):
++        super().__init__(parent, app)
++        self.columnconfigure(0, weight=1)
++        self._pair_vars = {}
++        self._results = []
++        self._build()
++
++    def _build(self):
++        pad = dict(padx=32, pady=(24, 0))
++        make_section_header(self, "📊  Strategy Screener",
++            "Batch-screen and compare EA performance across multiple currency pairs & market symbols"
++        ).grid(row=0, column=0, sticky="ew", **pad)
++
++        cfg = self.cfg
++        card = make_card(self)
++        card.grid(row=1, column=0, sticky="ew", padx=32, pady=(16, 0))
++        card.columnconfigure(1, weight=1)
++
++        # Row 0: Strategy / EA selector, Timeframe, Deposit
++        r0 = ctk.CTkFrame(card, fg_color="transparent")
++        r0.grid(row=0, column=0, columnspan=2, sticky="ew", padx=20, pady=(16, 8))
++
++        make_label(r0, "Strategy / EA", font=FB, color=C["sub"]).pack(side="left", padx=(0, 8))
++        available_eas = get_available_eas(cfg)
++        self._ea_var = ctk.StringVar(value=cfg.get("active_ea", "TRB"))
++        self._ea_cb = ctk.CTkComboBox(r0, values=available_eas or ["TRB"], variable=self._ea_var,
++                                      width=160, font=FB, fg_color=C["inp"],
++                                      border_color=C["border"], button_color=C["accent"],
++                                      command=lambda _: self._load_screener_results())
++        self._ea_cb.pack(side="left", padx=(0, 20))
++
++        make_label(r0, "Timeframe", font=FB, color=C["sub"]).pack(side="left", padx=(0, 8))
++        self._period_var = ctk.StringVar(value=cfg.get("period", "M15"))
++        self._period_cb = ctk.CTkComboBox(r0, values=["M1", "M5", "M15", "M30", "H1", "H4", "D1"],
++                                          variable=self._period_var, width=100, font=FB,
++                                          fg_color=C["inp"], border_color=C["border"], button_color=C["accent"])
++        self._period_cb.pack(side="left", padx=(0, 20))
++
++        make_label(r0, "Deposit ($)", font=FB, color=C["sub"]).pack(side="left", padx=(0, 8))
++        self._dep_var = make_entry(r0, width=90)
++        self._dep_var.insert(0, cfg.get("deposit", "2500"))
++        self._dep_var.pack(side="left")
++
++        # Row 1: Date Range
++        r1 = ctk.CTkFrame(card, fg_color="transparent")
++        r1.grid(row=1, column=0, columnspan=2, sticky="ew", padx=20, pady=(4, 10))
++
++        make_label(r1, "From Date", font=FB, color=C["sub"]).pack(side="left", padx=(0, 8))
++        self._from_var = make_entry(r1, width=120)
++        self._from_var.insert(0, cfg.get("train_from", "2013.01.01") or "2013.01.01")
++        self._from_var.pack(side="left", padx=(0, 20))
++
++        make_label(r1, "To Date", font=FB, color=C["sub"]).pack(side="left", padx=(0, 8))
++        self._to_var = make_entry(r1, width=120)
++        self._to_var.insert(0, cfg.get("holdout_to", "2026.07.03") or "2026.07.03")
++        self._to_var.pack(side="left", padx=(0, 20))
++
++        make_label(r1, "Note: '2013-2026' auto-splits and normalizes", font=FSM, color=C["sub"]).pack(side="left")
++
++        # Row 2: Pairs Checklist & Quick Selectors
++        r2 = ctk.CTkFrame(card, fg_color="#1a202c", corner_radius=8)
++        r2.grid(row=2, column=0, columnspan=2, sticky="ew", padx=20, pady=(6, 12))
++
++        r2_top = ctk.CTkFrame(r2, fg_color="transparent")
++        r2_top.pack(fill="x", padx=12, pady=(10, 6))
++
++        make_label(r2_top, "Select Pairs to Screen:", font=FB, color=C["text"]).pack(side="left")
++
++        btn_box = ctk.CTkFrame(r2_top, fg_color="transparent")
++        btn_box.pack(side="right")
++        make_btn(btn_box, "+ Majors", self._select_majors, color=C["card"], hover=C["hover"], width=80).pack(side="left", padx=2)
++        make_btn(btn_box, "+ Crosses", self._select_crosses, color=C["card"], hover=C["hover"], width=85).pack(side="left", padx=2)
++        make_btn(btn_box, "Select All", self._select_all_pairs, color=C["card"], hover=C["hover"], width=85).pack(side="left", padx=2)
++        make_btn(btn_box, "Clear", self._clear_pairs, color=C["card"], hover=C["hover"], width=65).pack(side="left", padx=2)
++
++        # Checkboxes container
++        self._pairs_frame = ctk.CTkFrame(r2, fg_color="transparent")
++        self._pairs_frame.pack(fill="x", padx=12, pady=(2, 10))
++
++        STANDARD_PAIRS = ["USDJPY", "EURUSD", "GBPUSD", "EURJPY", "XAUUSD", "AUDUSD", "NZDUSD", "USDCAD", "USDCHF", "GBPJPY", "AUDJPY", "CADJPY"]
++        for idx, p in enumerate(STANDARD_PAIRS):
++            row_idx = idx // 6
++            col_idx = idx % 6
++            v = ctk.BooleanVar(value=True if p in ("USDJPY", "EURUSD", "EURJPY", "GBPUSD", "XAUUSD", "AUDUSD") else False)
++            self._pair_vars[p] = v
++            cb = ctk.CTkCheckBox(self._pairs_frame, text=p, variable=v, font=FB,
++                                 fg_color=C["accent"], hover_color=C["hover"],
++                                 border_color=C["border"], text_color=C["text"])
++            cb.grid(row=row_idx, column=col_idx, sticky="w", padx=8, pady=4)
++
++        # Custom pair entry
++        custom_row = ctk.CTkFrame(r2, fg_color="transparent")
++        custom_row.pack(fill="x", padx=12, pady=(4, 10))
++        make_label(custom_row, "Add Custom Symbol:", font=FSM, color=C["sub"]).pack(side="left", padx=(0, 8))
++        self._custom_sym_entry = make_entry(custom_row, placeholder="e.g. BTCUSD, US30, EURGBP", width=180)
++        self._custom_sym_entry.pack(side="left", padx=(0, 8))
++        make_btn(custom_row, "Add", self._add_custom_pair, color=C["card"], hover=C["hover"], width=70).pack(side="left")
++
++        # Row 3: Action Buttons
++        r3 = ctk.CTkFrame(card, fg_color="transparent")
++        r3.grid(row=3, column=0, columnspan=2, sticky="ew", padx=20, pady=(8, 16))
++        make_btn(r3, "▶  Run Strategy Screener", self._run_screener, width=220).pack(side="left")
++        make_btn(r3, "⟳ Refresh Results", self._load_screener_results, color=C["card"], hover=C["hover"], width=140).pack(side="left", padx=(10, 0))
++        make_btn(r3, "📂 Open Screener Folder", self._open_screener_folder, color=C["card"], hover=C["hover"], width=170).pack(side="left", padx=(10, 0))
++
++        # ── Results Leaderboard Card ──────────────────────────────────────────
++        res_card = make_card(self)
++        res_card.grid(row=2, column=0, sticky="ew", padx=32, pady=(16, 0))
++        res_card.columnconfigure(0, weight=1)
++
++        res_hdr = ctk.CTkFrame(res_card, fg_color="transparent")
++        res_hdr.grid(row=0, column=0, sticky="ew", padx=16, pady=(12, 4))
++        make_label(res_hdr, "Screener Leaderboard", font=FH3, color=C["sub"]).pack(side="left")
++        self._lbl_summary_stats = make_label(res_hdr, "Ready to screen pairs", font=FSM, color=C["accent"])
++        self._lbl_summary_stats.pack(side="right")
++
++        # Table container
++        self._table_frame = ctk.CTkScrollableFrame(res_card, height=180, fg_color="#0a0f1d")
++        self._table_frame.grid(row=1, column=0, sticky="ew", padx=16, pady=(4, 16))
++        self._table_frame.columnconfigure((0, 1, 2, 3, 4, 5, 6, 7), weight=1)
++
++        # Header row
++        hdrs = ["Symbol", "MT5 Symbol", "Status", "Net Profit ($)", "Return %", "PF", "Max DD %", "Trades"]
++        for ci, h in enumerate(hdrs):
++            ctk.CTkLabel(self._table_frame, text=h, font=ctk.CTkFont("Segoe UI", 10, "bold"),
++                         text_color=C["sub"], anchor="w" if ci < 2 else "e").grid(row=0, column=ci, sticky="ew", padx=6, pady=4)
++
++        # ── Live Output Log ───────────────────────────────────────────────────
++        log_card = make_card(self)
++        log_card.grid(row=3, column=0, sticky="nsew", padx=32, pady=(16, 24))
++        log_card.columnconfigure(0, weight=1)
++        self.rowconfigure(3, weight=1)
++        make_label(log_card, "Live Screener Output", font=FH3, color=C["sub"]).grid(
++            row=0, column=0, sticky="w", padx=16, pady=(12, 4))
++        self._log = make_log(log_card, height=200)
++        self._log.grid(row=1, column=0, sticky="nsew", padx=16, pady=(0, 16))
++
++        self._load_screener_results()
++
++    def _select_majors(self):
++        majors = {"EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD"}
++        for p, v in self._pair_vars.items():
++            if p in majors:
++                v.set(True)
++
++    def _select_crosses(self):
++        crosses = {"EURJPY", "GBPJPY", "EURGBP", "EURAUD", "AUDJPY", "CADJPY"}
++        for p, v in self._pair_vars.items():
++            if p in crosses:
++                v.set(True)
++
++    def _select_all_pairs(self):
++        for v in self._pair_vars.values():
++            v.set(True)
++
++    def _clear_pairs(self):
++        for v in self._pair_vars.values():
++            v.set(False)
++
++    def _add_custom_pair(self):
++        sym = self._custom_sym_entry.get().strip().upper()
++        if sym and sym not in self._pair_vars:
++            v = ctk.BooleanVar(value=True)
++            self._pair_vars[sym] = v
++            idx = len(self._pair_vars) - 1
++            cb = ctk.CTkCheckBox(self._pairs_frame, text=sym, variable=v, font=FB,
++                                 fg_color=C["accent"], hover_color=C["hover"],
++                                 border_color=C["border"], text_color=C["text"])
++            cb.grid(row=idx // 6, column=idx % 6, sticky="w", padx=8, pady=4)
++            self._custom_sym_entry.delete(0, "end")
++
++    def _run_screener(self):
++        selected = [p for p, v in self._pair_vars.items() if v.get()]
++        if not selected:
++            messagebox.showwarning("Missing Pairs", "Please select at least one currency pair or symbol.")
++            return
++
++        ea = self._ea_var.get().strip()
++        period = self._period_var.get().strip() or "M15"
++        dep = self._dep_var.get().strip() or "2500"
++
++        raw_from = self._from_var.get().strip() or "2013.01.01"
++        raw_to = self._to_var.get().strip() or "2026.07.03"
++
++        for sep in [" to ", " - ", " -> ", ".."]:
++            if sep in raw_from:
++                parts = raw_from.split(sep)
++                raw_from = parts[0].strip()
++                raw_to = parts[1].strip()
++                break
++        else:
++            m_range = re.match(r"^(\d{4})\s*[-/]\s*(\d{4})$", raw_from)
++            if m_range:
++                raw_from = m_range.group(1)
++                raw_to = m_range.group(2)
++
++        norm_from = normalize_mt5_date(raw_from, default="2013.01.01", is_end=False)
++        norm_to = normalize_mt5_date(raw_to, default="2026.07.03", is_end=True)
++
++        self._from_var.delete(0, "end")
++        self._from_var.insert(0, norm_from)
++        self._to_var.delete(0, "end")
++        self._to_var.insert(0, norm_to)
++
++        symbols_str = ",".join(selected)
++
++        env_extra = {
++            "AF_ACTIVE_EA": ea,
++            "AF_SYMBOLS":   symbols_str,
++            "AF_PERIOD":    period,
++            "AF_BT_START":  norm_from,
++            "AF_BT_END":    norm_to,
++            "AF_DEPOSIT":   dep,
++        }
++
++        self.log_clear(self._log)
++        def on_done():
++            self._load_screener_results()
++
++        self.run_script("run_screener.py", self._log, env_extra=env_extra, on_done=on_done)
++
++    def _load_screener_results(self):
++        ea = self._ea_var.get().strip() if hasattr(self, "_ea_var") else "TRB"
++        manifest_path = SCRIPT_DIR / "researched_strategies" / ea / "screener" / "screener_manifest.json"
++
++        # Clear existing rows except header
++        for widget in self._table_frame.winfo_children():
++            info = widget.grid_info()
++            if info.get("row", 0) > 0:
++                widget.destroy()
++
++        if not manifest_path.exists():
++            lbl = ctk.CTkLabel(self._table_frame, text="No screener results yet. Click 'Run Strategy Screener' to test.",
++                               font=FB, text_color=C["sub"])
++            lbl.grid(row=1, column=0, columnspan=8, pady=20)
++            if hasattr(self, "_lbl_summary_stats"):
++                self._lbl_summary_stats.configure(text="No results")
++            return
++
++        try:
++            with open(manifest_path, "r", encoding="utf-8") as f:
++                data = json.load(f)
++            results = data.get("results", [])
++            if not results:
++                return
++
++            sorted_res = sorted(results, key=lambda x: x.get("net_profit", 0), reverse=True)
++            profitable = [r for r in sorted_res if r.get("net_profit", 0) > 0]
++
++            if hasattr(self, "_lbl_summary_stats"):
++                self._lbl_summary_stats.configure(
++                    text=f"Screened: {len(sorted_res)} Pairs | Profitable: {len(profitable)} ({len(profitable)*100//len(sorted_res)}%)"
++                )
++
++            for ri, r in enumerate(sorted_res, 1):
++                sym = r.get("symbol", "")
++                res_sym = r.get("resolved_symbol", sym)
++                status = r.get("status", "Completed")
++                net_p = r.get("net_profit", 0.0)
++                pct = r.get("profit_pct", 0.0)
++                pf = r.get("profit_factor", 0.0)
++                dd = r.get("max_dd_pct", 0.0)
++                trades = r.get("total_trades", 0)
++
++                p_col = C["success"] if net_p > 0 else (C["danger"] if net_p < 0 else C["sub"])
++
++                ctk.CTkLabel(self._table_frame, text=sym, font=ctk.CTkFont("Segoe UI", 11, "bold"),
++                             text_color=C["text"], anchor="w").grid(row=ri, column=0, sticky="ew", padx=6, pady=3)
++                ctk.CTkLabel(self._table_frame, text=res_sym, font=FMO, text_color=C["sub"], anchor="w").grid(row=ri, column=1, sticky="ew", padx=6, pady=3)
++                ctk.CTkLabel(self._table_frame, text=status, font=FSM, text_color=p_col, anchor="e").grid(row=ri, column=2, sticky="ew", padx=6, pady=3)
++                ctk.CTkLabel(self._table_frame, text=f"${net_p:,.2f}", font=FMO, text_color=p_col, anchor="e").grid(row=ri, column=3, sticky="ew", padx=6, pady=3)
++                ctk.CTkLabel(self._table_frame, text=f"{pct:.1f}%", font=FMO, text_color=p_col, anchor="e").grid(row=ri, column=4, sticky="ew", padx=6, pady=3)
++                ctk.CTkLabel(self._table_frame, text=f"{pf:.2f}" if pf > 0 else "-", font=FMO, text_color=C["text"], anchor="e").grid(row=ri, column=5, sticky="ew", padx=6, pady=3)
++                ctk.CTkLabel(self._table_frame, text=f"{dd:.1f}%" if dd > 0 else "-", font=FMO, text_color=C["accent"], anchor="e").grid(row=ri, column=6, sticky="ew", padx=6, pady=3)
++                ctk.CTkLabel(self._table_frame, text=str(trades), font=FMO, text_color=C["text"], anchor="e").grid(row=ri, column=7, sticky="ew", padx=6, pady=3)
++
++        except Exception as e:
++            print(f"Error loading screener results: {e}")
++
++    def _open_screener_folder(self):
++        ea = self._ea_var.get().strip() if hasattr(self, "_ea_var") else "TRB"
++        screener_path = SCRIPT_DIR / "researched_strategies" / ea / "screener"
++        screener_path.mkdir(parents=True, exist_ok=True)
++        self._open_file_safely(screener_path)
++
++
++# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
++# Market Data Panel
++# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
++
++class MarketDataPanel(BasePanel):
++    def __init__(self, parent, app):
++        super().__init__(parent, app)
++        self.columnconfigure(0, weight=1)
++        self._build()
++
++    def _build(self):
++        pad = dict(padx=32, pady=(24, 0))
++        make_section_header(self, "🌐  Market Data & Symbol Manager",
++            "Inspect MT5 historical datasets, verify 2013-2026 Dukascopy coverage, and manage custom symbols"
++        ).grid(row=0, column=0, sticky="ew", **pad)
++
++        cfg = self.cfg
++        card = make_card(self)
++        card.grid(row=1, column=0, sticky="ew", padx=32, pady=(16, 0))
++        card.columnconfigure((0, 1, 2), weight=1)
++
++        t_dir = cfg.get("terminal_data_dir", "")
++        custom_base = Path(t_dir) / "bases" / "Custom" / "history" if t_dir else None
++        has_custom = custom_base.exists() if custom_base else False
++
++        # Box 1: Terminal Bases Status
++        b1 = ctk.CTkFrame(card, fg_color="#1a202c", corner_radius=8)
++        b1.grid(row=0, column=0, sticky="nsew", padx=(16, 8), pady=16)
++        make_label(b1, "MT5 Terminal Data Path", font=FB, color=C["sub"]).pack(anchor="w", padx=12, pady=(10, 2))
++        t_label = (t_dir[:36] + "...") if len(t_dir) > 36 else (t_dir or "Not configured")
++        ctk.CTkLabel(b1, text=t_label, font=FMO, text_color=C["text"]).pack(anchor="w", padx=12)
++        status_text = "✔ Terminal bases connected" if Path(t_dir).exists() else "⚠ Path not found"
++        status_color = C["success"] if Path(t_dir).exists() else C["danger"]
++        make_label(b1, status_text, font=FSM, color=status_color).pack(anchor="w", padx=12, pady=(4, 10))
++
++        # Box 2: Custom Dukascopy Datasets
++        b2 = ctk.CTkFrame(card, fg_color="#1a202c", corner_radius=8)
++        b2.grid(row=0, column=1, sticky="nsew", padx=8, pady=16)
++        make_label(b2, "Custom Dukascopy Datasets", font=FB, color=C["sub"]).pack(anchor="w", padx=12, pady=(10, 2))
++        installed_count = len([d for d in custom_base.iterdir() if d.is_dir()]) if has_custom else 0
++        ctk.CTkLabel(b2, text=f"{installed_count} Installed Symbols" if has_custom else "17 Standard Datasets",
++                     font=FH2, text_color=C["accent"]).pack(anchor="w", padx=12)
++        make_label(b2, "Complete 2013-2026 M1 Tick Data", font=FSM, color=C["sub"]).pack(anchor="w", padx=12, pady=(4, 10))
++
++        # Box 3: Active Strategy Symbol
++        b3 = ctk.CTkFrame(card, fg_color="#1a202c", corner_radius=8)
++        b3.grid(row=0, column=2, sticky="nsew", padx=(8, 16), pady=16)
++        make_label(b3, "Active Strategy Symbol", font=FB, color=C["sub"]).pack(anchor="w", padx=12, pady=(10, 2))
++        active_sym = cfg.get("symbol", "USDJPY Dukascopy")
++        self._lbl_active_sym = ctk.CTkLabel(b3, text=active_sym, font=FH2, text_color=C["blue"])
++        self._lbl_active_sym.pack(anchor="w", padx=12)
++        self._lbl_active_sub = make_label(b3, f"Pip: {cfg.get('pip_size', '0.01')} | Period: {cfg.get('period', 'M15')}", font=FSM, color=C["sub"])
++        self._lbl_active_sub.pack(anchor="w", padx=12, pady=(4, 10))
++
++        # Action row
++        act_row = ctk.CTkFrame(card, fg_color="transparent")
++        act_row.grid(row=1, column=0, columnspan=3, sticky="ew", padx=16, pady=(0, 16))
++        make_btn(act_row, "⟳ Rescan Terminal Bases", self._rescan, color=C["card"], hover=C["hover"], width=180).pack(side="left")
++        make_btn(act_row, "📂 Open Terminal Bases Folder", self._open_bases_dir, color=C["card"], hover=C["hover"], width=210).pack(side="left", padx=10)
++
++        # 2. Installed Market Symbols Table Card
++        sym_card = make_card(self)
++        sym_card.grid(row=2, column=0, sticky="nsew", padx=32, pady=(16, 24))
++        sym_card.columnconfigure(0, weight=1)
++        self.rowconfigure(2, weight=1)
++
++        hdr_row = ctk.CTkFrame(sym_card, fg_color="transparent")
++        hdr_row.grid(row=0, column=0, sticky="ew", padx=16, pady=(12, 4))
++        make_label(hdr_row, "MT5 Symbol Catalog & Historical Coverage", font=FH3, color=C["sub"]).pack(side="left")
++
++        # Scrollable symbols frame
++        self._sym_frame = ctk.CTkScrollableFrame(sym_card, height=340, fg_color="#0a0f1d")
++        self._sym_frame.grid(row=1, column=0, sticky="nsew", padx=16, pady=(4, 16))
++        self._sym_frame.columnconfigure((0, 1, 2, 3, 4, 5), weight=1)
++
++        self._populate_symbols_table()
++
++    def _populate_symbols_table(self):
++        for widget in self._sym_frame.winfo_children():
++            widget.destroy()
++
++        hdrs = ["Symbol", "Category", "MT5 Custom Name", "Historical Coverage", "Pip Size", "Action"]
++        for ci, h in enumerate(hdrs):
++            ctk.CTkLabel(self._sym_frame, text=h, font=ctk.CTkFont("Segoe UI", 10, "bold"),
++                         text_color=C["sub"], anchor="w" if ci < 5 else "center").grid(row=0, column=ci, sticky="ew", padx=6, pady=4)
++
++        CATALOG = [
++            ("USDJPY", "FX Major",     "USDJPY Dukascopy", "Full 2013-2026 (Dukascopy)", "0.01"),
++            ("EURUSD", "FX Major",     "EURUSD dukascopy", "Full 2013-2026 (Dukascopy)", "0.0001"),
++            ("GBPUSD", "FX Major",     "GBPUSD dukascopy", "Full 2013-2026 (Dukascopy)", "0.0001"),
++            ("EURJPY", "FX Cross",     "EURJPY Dukascopy", "Full 2013-2026 (Dukascopy)", "0.01"),
++            ("XAUUSD", "Commodities",  "XAUUSD dukascopy", "Full 2013-2026 (Dukascopy)", "0.10"),
++            ("AUDUSD", "FX Major",     "AUDUSD dukascopy", "Full 2013-2026 (Dukascopy)", "0.0001"),
++            ("NZDUSD", "FX Major",     "NZDUSD dukascopy", "Full 2013-2026 (Dukascopy)", "0.0001"),
++            ("USDCAD", "FX Major",     "USDCAD dukascopy", "Full 2013-2026 (Dukascopy)", "0.0001"),
++            ("USDCHF", "FX Major",     "USDCHF dukascopy", "Full 2013-2026 (Dukascopy)", "0.0001"),
++            ("GBPJPY", "FX Cross",     "GBPJPY dukascopy", "Full 2013-2026 (Dukascopy)", "0.01"),
++            ("AUDJPY", "FX Cross",     "AUDJPY dukascopy", "Full 2013-2026 (Dukascopy)", "0.01"),
++            ("CADJPY", "FX Cross",     "CADJPY dukascopy", "Full 2013-2026 (Dukascopy)", "0.01"),
++            ("CHFJPY", "FX Cross",     "CHFJPY dukascopy", "Full 2013-2026 (Dukascopy)", "0.01"),
++            ("EURGBP", "FX Cross",     "EURGBP dukascopy", "Full 2013-2026 (Dukascopy)", "0.0001"),
++            ("BTCUSD", "Crypto",       "BTCUSD",           "Broker Live / Custom",       "1.0"),
++            ("US30",   "Indices",      "US30",             "Broker Live / Custom",       "1.0"),
++            ("NAS100", "Indices",      "NAS100",            "Broker Live / Custom",       "1.0"),
++        ]
++
++        active_sym = self.cfg.get("symbol", "USDJPY Dukascopy")
++
++        for ri, (sym, cat, c_name, cov, pip) in enumerate(CATALOG, 1):
++            is_active = (active_sym == c_name or active_sym == sym or self.cfg.get("symbol_key") == sym)
++
++            ctk.CTkLabel(self._sym_frame, text=sym, font=ctk.CTkFont("Segoe UI", 11, "bold"),
++                         text_color=C["accent"] if is_active else C["text"], anchor="w").grid(row=ri, column=0, sticky="ew", padx=6, pady=3)
++            ctk.CTkLabel(self._sym_frame, text=cat, font=FSM, text_color=C["sub"], anchor="w").grid(row=ri, column=1, sticky="ew", padx=6, pady=3)
++            ctk.CTkLabel(self._sym_frame, text=c_name, font=FMO, text_color=C["text"], anchor="w").grid(row=ri, column=2, sticky="ew", padx=6, pady=3)
++            ctk.CTkLabel(self._sym_frame, text=cov, font=FSM, text_color=C["success"], anchor="w").grid(row=ri, column=3, sticky="ew", padx=6, pady=3)
++            ctk.CTkLabel(self._sym_frame, text=pip, font=FMO, text_color=C["sub"], anchor="w").grid(row=ri, column=4, sticky="ew", padx=6, pady=3)
++
++            btn_txt = "✔ Active" if is_active else "Set Active"
++            btn_fg = C["accent"] if is_active else C["card"]
++            btn = make_btn(self._sym_frame, btn_txt, lambda s=c_name, k=sym, p=pip: self._set_active_symbol(s, k, p),
++                           color=btn_fg, hover=C["hover"], width=85)
++            btn.grid(row=ri, column=5, padx=6, pady=3)
++
++    def _set_active_symbol(self, custom_name: str, key: str, pip: str):
++        self.cfg["symbol"] = custom_name
++        self.cfg["symbol_key"] = key
++        self.cfg["pip_size"] = pip
++        save_config(self.cfg)
++        self.app.update_topbar_meta()
++        if hasattr(self, "_lbl_active_sym"):
++            self._lbl_active_sym.configure(text=custom_name)
++        if hasattr(self, "_lbl_active_sub"):
++            self._lbl_active_sub.configure(text=f"Pip: {pip} | Period: {self.cfg.get('period', 'M15')}")
++        self._populate_symbols_table()
++        messagebox.showinfo("Active Symbol Updated", f"Active symbol set to: {custom_name}\nPip Size: {pip}\nSaved to config.json.")
++
++    def _rescan(self):
++        self.cfg = load_config()
++        self._populate_symbols_table()
++        messagebox.showinfo("Rescan Complete", "Terminal data and symbol bases rescanned.")
++
++    def _open_bases_dir(self):
++        t_dir = self.cfg.get("terminal_data_dir", "")
++        custom_base = Path(t_dir) / "bases" if t_dir else SCRIPT_DIR
++        if custom_base.exists():
++            self._open_file_safely(custom_base)
++        else:
++            messagebox.showinfo("Not Found", f"Terminal bases folder not found at:\n{custom_base}")
++
++
+ # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ # Research Panel
+ # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+@@ -4241,15 +4685,17 @@ class AlphaForgeApp(ctk.CTk):
+ 
+     def _build_nav_buttons(self):
+         PANEL_CLASSES = {
+-            "dashboard":   DashboardPanel,
+-            "research":    ResearchPanel,
+-            "optimize":    OptimizePanel,
+-            "montecarlo":  MonteCarloPanel,
+-            "walkforward": WalkForwardPanel,
+-            "fullbacktest":FullBacktestPanel,
+-            "portfolio":   PortfolioPanel,
+-            "strategies":  StrategiesPanel,
+-            "settings":    SettingsPanel,
++            "dashboard":    DashboardPanel,
++            "screener":     StrategyScreenerPanel,
++            "marketdata":   MarketDataPanel,
++            "research":     ResearchPanel,
++            "optimize":     OptimizePanel,
++            "montecarlo":   MonteCarloPanel,
++            "walkforward":  WalkForwardPanel,
++            "fullbacktest": FullBacktestPanel,
++            "portfolio":    PortfolioPanel,
++            "strategies":   StrategiesPanel,
++            "settings":     SettingsPanel,
+         }
+         for i, (icon, label, key) in enumerate(NAV_ITEMS):
+             btn = ctk.CTkButton(
+diff --git a/server.ts b/server.ts
+index 72e449d..5df0c0d 100644
+--- a/server.ts
++++ b/server.ts
+@@ -654,6 +654,71 @@ async function startServer() {
+     }
+   });
+ 
++  // Market Data & Symbols Inspector API
++  app.get("/api/market-data", async (req, res) => {
++    try {
++      const cwd = process.cwd();
++      let cfg: any = {};
++      try {
++        cfg = JSON.parse(await fs.readFile(path.join(cwd, 'config.json'), 'utf-8'));
++      } catch {}
++
++      const terminalDataDir = cfg.terminal_data_dir || "";
++      const customHistoryPath = terminalDataDir ? path.join(terminalDataDir, "bases", "Custom", "history") : "";
++      
++      const installedCustomSymbols: string[] = [];
++      if (customHistoryPath && existsSync(customHistoryPath)) {
++        try {
++          const entries = await fs.readdir(customHistoryPath, { withFileTypes: true });
++          for (const e of entries) {
++            if (e.isDirectory()) installedCustomSymbols.push(e.name);
++          }
++        } catch {}
++      }
++
++      const standardSymbols = [
++        { key: "USDJPY", name: "USDJPY", customName: "USDJPY Dukascopy", category: "FX Major", pipSize: 0.01, digits: 3, fromDate: "2013.01.01", toDate: "2026.07.03", coverage: "Full 2013-2026 (Dukascopy)" },
++        { key: "EURUSD", name: "EURUSD", customName: "EURUSD dukascopy", category: "FX Major", pipSize: 0.0001, digits: 5, fromDate: "2013.01.01", toDate: "2026.07.03", coverage: "Full 2013-2026 (Dukascopy)" },
++        { key: "GBPUSD", name: "GBPUSD", customName: "GBPUSD dukascopy", category: "FX Major", pipSize: 0.0001, digits: 5, fromDate: "2013.01.01", toDate: "2026.07.03", coverage: "Full 2013-2026 (Dukascopy)" },
++        { key: "EURJPY", name: "EURJPY", customName: "EURJPY Dukascopy", category: "FX Cross", pipSize: 0.01, digits: 3, fromDate: "2013.01.01", toDate: "2026.07.03", coverage: "Full 2013-2026 (Dukascopy)" },
++        { key: "XAUUSD", name: "XAUUSD", customName: "XAUUSD dukascopy", category: "Commodities", pipSize: 0.10, digits: 2, fromDate: "2013.01.01", toDate: "2026.07.03", coverage: "Full 2013-2026 (Dukascopy)" },
++        { key: "AUDUSD", name: "AUDUSD", customName: "AUDUSD dukascopy", category: "FX Major", pipSize: 0.0001, digits: 5, fromDate: "2013.01.01", toDate: "2026.07.03", coverage: "Full 2013-2026 (Dukascopy)" },
++        { key: "NZDUSD", name: "NZDUSD", customName: "NZDUSD dukascopy", category: "FX Major", pipSize: 0.0001, digits: 5, fromDate: "2013.01.01", toDate: "2026.07.03", coverage: "Full 2013-2026 (Dukascopy)" },
++        { key: "USDCAD", name: "USDCAD", customName: "USDCAD dukascopy", category: "FX Major", pipSize: 0.0001, digits: 5, fromDate: "2013.01.01", toDate: "2026.07.03", coverage: "Full 2013-2026 (Dukascopy)" },
++        { key: "USDCHF", name: "USDCHF", customName: "USDCHF dukascopy", category: "FX Major", pipSize: 0.0001, digits: 5, fromDate: "2013.01.01", toDate: "2026.07.03", coverage: "Full 2013-2026 (Dukascopy)" },
++        { key: "GBPJPY", name: "GBPJPY", customName: "GBPJPY dukascopy", category: "FX Cross", pipSize: 0.01, digits: 3, fromDate: "2013.01.01", toDate: "2026.07.03", coverage: "Full 2013-2026 (Dukascopy)" },
++        { key: "AUDJPY", name: "AUDJPY", customName: "AUDJPY dukascopy", category: "FX Cross", pipSize: 0.01, digits: 3, fromDate: "2013.01.01", toDate: "2026.07.03", coverage: "Full 2013-2026 (Dukascopy)" },
++        { key: "CADJPY", name: "CADJPY", customName: "CADJPY dukascopy", category: "FX Cross", pipSize: 0.01, digits: 3, fromDate: "2013.01.01", toDate: "2026.07.03", coverage: "Full 2013-2026 (Dukascopy)" },
++        { key: "CHFJPY", name: "CHFJPY", customName: "CHFJPY dukascopy", category: "FX Cross", pipSize: 0.01, digits: 3, fromDate: "2013.01.01", toDate: "2026.07.03", coverage: "Full 2013-2026 (Dukascopy)" },
++        { key: "EURGBP", name: "EURGBP", customName: "EURGBP dukascopy", category: "FX Cross", pipSize: 0.0001, digits: 5, fromDate: "2013.01.01", toDate: "2026.07.03", coverage: "Full 2013-2026 (Dukascopy)" },
++        { key: "BTCUSD", name: "BTCUSD", customName: "BTCUSD", category: "Crypto", pipSize: 1.0, digits: 2, fromDate: "2018.01.01", toDate: "2026.07.03", coverage: "Broker Live / Custom" },
++        { key: "US30", name: "US30", customName: "US30", category: "Indices", pipSize: 1.0, digits: 2, fromDate: "2020.01.01", toDate: "2026.07.03", coverage: "Broker Live / Custom" },
++        { key: "NAS100", name: "NAS100", customName: "NAS100", category: "Indices", pipSize: 1.0, digits: 2, fromDate: "2020.01.01", toDate: "2026.07.03", coverage: "Broker Live / Custom" },
++      ];
++
++      const symbolsWithStatus = standardSymbols.map(s => {
++        const isInstalled = installedCustomSymbols.some(cs => cs.toLowerCase() === s.customName.toLowerCase() || cs.toLowerCase() === s.key.toLowerCase());
++        return {
++          ...s,
++          installed: isInstalled || installedCustomSymbols.length === 0,
++          installedName: installedCustomSymbols.find(cs => cs.toLowerCase() === s.customName.toLowerCase()) || s.customName,
++          isActive: cfg.symbol === s.customName || cfg.symbol === s.name || cfg.symbol_key === s.key,
++        };
++      });
++
++      res.json({
++        terminalDataDir,
++        customHistoryPath,
++        installedCustomSymbols,
++        activeSymbol: cfg.symbol || "USDJPY Dukascopy",
++        activeSymbolKey: cfg.symbol_key || "USDJPY",
++        symbols: symbolsWithStatus,
++      });
++    } catch (e: any) {
++      res.status(500).json({ error: e.message });
++    }
++  });
++
+   // Researched Strategies Detailed Scanner
+   app.get("/api/researched-strategies", async (req, res) => {
+     try {
+diff --git a/src/App.tsx b/src/App.tsx
+index 405736f..af89cb9 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -22,6 +22,7 @@ import { motion, AnimatePresence } from 'motion/react';
+ // Components
+ import Dashboard from './components/Dashboard';
+ import StrategyScreener from './components/StrategyScreener';
++import MarketData from './components/MarketData';
+ import Research from './components/Research';
+ import Optimize from './components/Optimize';
+ import { MonteCarlo } from './components/MonteCarlo';
+@@ -34,6 +35,7 @@ import Settings from './components/Settings';
+ const NAV_ITEMS = [
+   { id: 'dashboard', label: 'Dashboard', icon: Home, prefix: '🏠' },
+   { id: 'screener', label: 'Strategy Screener', icon: Zap, prefix: '📊' },
++  { id: 'marketdata', label: 'Market Data', icon: FolderTree, prefix: '🌐' },
+   { id: 'research', label: 'Research', icon: Microscope, prefix: '🔬' },
+   { id: 'optimize', label: 'Optimize', icon: SettingsIcon, prefix: '⚙' },
+   { id: 'montecarlo', label: 'Monte Carlo', icon: Dices, prefix: '🎲' },
+@@ -90,6 +92,7 @@ export default function App() {
+     switch (activeTab) {
+       case 'dashboard': return <Dashboard config={config} />;
+       case 'screener': return <StrategyScreener config={config} />;
++      case 'marketdata': return <MarketData config={config} onUpdateConfig={setConfig} />;
+       case 'research': return <Research config={config} />;
+       case 'optimize': return <Optimize config={config} onNavigateToSettings={() => setActiveTab('settings')} />;
+       case 'montecarlo': return <MonteCarlo />;
+diff --git a/src/components/MarketData.tsx b/src/components/MarketData.tsx
+new file mode 100644
+index 0000000..da5521e
+--- /dev/null
++++ b/src/components/MarketData.tsx
+@@ -0,0 +1,310 @@
++import { useState, useEffect } from 'react';
++import { Card, SectionHeader, Button } from './ui';
++import { 
++  Database, 
++  FolderTree, 
++  CheckCircle2, 
++  AlertTriangle, 
++  RefreshCw, 
++  Layers, 
++  Zap, 
++  Search, 
++  Check, 
++  ExternalLink,
++  ShieldCheck,
++  Calendar,
++  Sliders,
++  Sparkles
++} from 'lucide-react';
++
++interface MarketSymbol {
++  key: string;
++  name: string;
++  customName: string;
++  category: string;
++  pipSize: number;
++  digits: number;
++  fromDate: string;
++  toDate: string;
++  coverage: string;
++  installed: boolean;
++  installedName: string;
++  isActive: boolean;
++}
++
++export default function MarketData({ config, onUpdateConfig }: { config: any; onUpdateConfig?: (cfg: any) => void }) {
++  const [symbols, setSymbols] = useState<MarketSymbol[]>([]);
++  const [terminalDataDir, setTerminalDataDir] = useState<string>('');
++  const [customHistoryPath, setCustomHistoryPath] = useState<string>('');
++  const [installedCount, setInstalledCount] = useState<number>(0);
++  const [activeSymbol, setActiveSymbol] = useState<string>(config?.symbol || 'USDJPY Dukascopy');
++  const [loading, setLoading] = useState(false);
++  const [categoryFilter, setCategoryFilter] = useState<string>('All');
++  const [searchQuery, setSearchQuery] = useState<string>('');
++  const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
++
++  const fetchMarketData = async () => {
++    setLoading(true);
++    try {
++      const res = await fetch('/api/market-data');
++      if (res.ok) {
++        const data = await res.json();
++        setSymbols(data.symbols || []);
++        setTerminalDataDir(data.terminalDataDir || '');
++        setCustomHistoryPath(data.customHistoryPath || '');
++        setInstalledCount((data.installedCustomSymbols || []).length);
++        if (data.activeSymbol) setActiveSymbol(data.activeSymbol);
++      }
++    } catch (e) {
++      console.error('Error fetching market data:', e);
++    } finally {
++      setLoading(false);
++    }
++  };
++
++  useEffect(() => {
++    fetchMarketData();
++  }, [config]);
++
++  const handleSetActive = async (sym: MarketSymbol) => {
++    const newConfig = {
++      ...config,
++      symbol: sym.customName,
++      symbol_key: sym.key,
++      pip_size: String(sym.pipSize),
++    };
++
++    try {
++      const res = await fetch('/api/config', {
++        method: 'POST',
++        headers: { 'Content-Type': 'application/json' },
++        body: JSON.stringify(newConfig),
++      });
++      if (res.ok) {
++        setActiveSymbol(sym.customName);
++        setSymbols(prev => prev.map(s => ({
++          ...s,
++          isActive: s.key === sym.key
++        })));
++        setFeedbackMsg(`✔ Active Symbol set to ${sym.customName} (Pip: ${sym.pipSize})`);
++        setTimeout(() => setFeedbackMsg(null), 4000);
++        if (onUpdateConfig) onUpdateConfig(newConfig);
++      }
++    } catch (e) {
++      console.error(e);
++    }
++  };
++
++  const filteredSymbols = symbols.filter(s => {
++    const matchesCat = categoryFilter === 'All' || s.category === categoryFilter;
++    const matchesSearch = s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
++                          s.customName.toLowerCase().includes(searchQuery.toLowerCase()) ||
++                          s.category.toLowerCase().includes(searchQuery.toLowerCase());
++    return matchesCat && matchesSearch;
++  });
++
++  const categories = ['All', 'FX Major', 'FX Cross', 'Commodities', 'Crypto', 'Indices'];
++
++  return (
++    <div className="flex flex-col h-full space-y-4">
++      <SectionHeader 
++        title="🌐 Market Data & Symbol Manager" 
++        subtitle="Inspect MT5 historical datasets, verify 2013-2026 Dukascopy coverage, and manage custom symbols" 
++      />
++
++      {feedbackMsg && (
++        <div className="p-3 bg-emerald-950/80 border border-emerald-600/50 rounded-lg text-emerald-300 text-xs font-semibold flex items-center justify-between">
++          <div className="flex items-center gap-2">
++            <CheckCircle2 size={16} />
++            <span>{feedbackMsg}</span>
++          </div>
++          <span className="text-[11px] text-emerald-400 font-mono">config.json updated</span>
++        </div>
++      )}
++
++      {/* Overview Status Cards */}
++      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
++        <Card className="p-4 bg-[#161f30] border border-[#2d3748]">
++          <div className="flex items-center justify-between mb-2">
++            <span className="text-[11px] font-semibold text-[#8b95a6] uppercase tracking-wider">
++              MT5 Data Directory
++            </span>
++            <Database size={16} className="text-amber-400" />
++          </div>
++          <div className="text-xs font-mono text-gray-200 truncate select-all" title={terminalDataDir}>
++            {terminalDataDir || 'Default Local Path'}
++          </div>
++          <div className="mt-2 flex items-center gap-2 text-[11px] text-emerald-400">
++            <CheckCircle2 size={13} />
++            <span>Terminal bases configured</span>
++          </div>
++        </Card>
++
++        <Card className="p-4 bg-[#161f30] border border-[#2d3748]">
++          <div className="flex items-center justify-between mb-2">
++            <span className="text-[11px] font-semibold text-[#8b95a6] uppercase tracking-wider">
++              Custom Dukascopy Datasets
++            </span>
++            <Layers size={16} className="text-cyan-400" />
++          </div>
++          <div className="text-xl font-bold text-white">
++            {installedCount > 0 ? `${installedCount} Custom Symbols` : '17 Standard Datasets'}
++          </div>
++          <div className="mt-1 text-[11px] text-[#8b95a6] font-mono">
++            Full 2013-2026 Dukascopy datasets
++          </div>
++        </Card>
++
++        <Card className="p-4 bg-[#161f30] border border-[#2d3748]">
++          <div className="flex items-center justify-between mb-2">
++            <span className="text-[11px] font-semibold text-[#8b95a6] uppercase tracking-wider">
++              Active Strategy Symbol
++            </span>
++            <Zap size={16} className="text-amber-400 fill-amber-400" />
++          </div>
++          <div className="text-base font-bold text-amber-400 font-mono truncate">
++            {activeSymbol}
++          </div>
++          <div className="mt-1 text-[11px] text-gray-300">
++            Pip Size: <span className="font-mono text-white">{config?.pip_size || '0.01'}</span> | Period: <span className="font-mono text-white">{config?.period || 'M15'}</span>
++          </div>
++        </Card>
++      </div>
++
++      {/* Symbol Table & Filter Card */}
++      <Card className="p-0 border border-[#2d3748] bg-[#161f30] overflow-hidden">
++        {/* Controls Bar */}
++        <div className="p-4 border-b border-[#2d3748] bg-[#0f172a] flex flex-wrap items-center justify-between gap-3">
++          {/* Category Filter Pills */}
++          <div className="flex flex-wrap items-center gap-1.5">
++            {categories.map(cat => (
++              <button
++                key={cat}
++                onClick={() => setCategoryFilter(cat)}
++                className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
++                  categoryFilter === cat
++                    ? 'bg-amber-500 text-[#0a0e1a] font-bold shadow-xs'
++                    : 'bg-[#1e293b] text-gray-300 hover:text-white hover:bg-[#334155]'
++                }`}
++              >
++                {cat}
++              </button>
++            ))}
++          </div>
++
++          {/* Search & Refresh */}
++          <div className="flex items-center gap-2">
++            <div className="relative">
++              <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
++              <input
++                type="text"
++                placeholder="Search symbol..."
++                value={searchQuery}
++                onChange={e => setSearchQuery(e.target.value)}
++                className="pl-8 pr-3 py-1.5 bg-[#1e293b] border border-[#2d3748] text-white text-xs rounded-lg focus:outline-none focus:border-amber-400 w-48"
++              />
++            </div>
++            <Button variant="secondary" onClick={fetchMarketData} disabled={loading} className="text-xs py-1.5 px-3">
++              <RefreshCw size={13} className={loading ? 'animate-spin' : ''} /> Rescan
++            </Button>
++          </div>
++        </div>
++
++        {/* Symbols Table */}
++        <div className="overflow-x-auto">
++          <table className="w-full text-left text-xs">
++            <thead className="bg-[#0b101d] text-[#8b95a6] uppercase text-[10px] tracking-wider border-b border-[#2d3748]">
++              <tr>
++                <th className="py-2.5 px-4">Market Symbol</th>
++                <th className="py-2.5 px-3">Category</th>
++                <th className="py-2.5 px-3">MT5 Custom Symbol</th>
++                <th className="py-2.5 px-3">Historical Coverage</th>
++                <th className="py-2.5 px-3 text-right">Pip Size</th>
++                <th className="py-2.5 px-3">Status</th>
++                <th className="py-2.5 px-4 text-center">Action</th>
++              </tr>
++            </thead>
++            <tbody className="divide-y divide-[#243048]">
++              {filteredSymbols.map((sym) => {
++                const isSelected = sym.isActive || activeSymbol === sym.customName;
++                return (
++                  <tr 
++                    key={sym.key} 
++                    className={`hover:bg-[#1a2540]/60 transition-colors ${isSelected ? 'bg-amber-950/20' : ''}`}
++                  >
++                    <td className="py-3 px-4 font-mono font-bold text-white">
++                      <div className="flex items-center gap-2">
++                        <span>{sym.key}</span>
++                        {isSelected && (
++                          <span className="text-[10px] font-semibold text-amber-300 bg-amber-900/60 border border-amber-500/40 px-1.5 py-0.2 rounded">
++                            ACTIVE
++                          </span>
++                        )}
++                      </div>
++                    </td>
++
++                    <td className="py-3 px-3">
++                      <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-[#1e293b] text-cyan-300 border border-[#334155]">
++                        {sym.category}
++                      </span>
++                    </td>
++
++                    <td className="py-3 px-3 font-mono text-gray-200">
++                      {sym.customName}
++                    </td>
++
++                    <td className="py-3 px-3 text-gray-300 flex items-center gap-1.5">
++                      <Calendar size={13} className="text-amber-400 shrink-0" />
++                      <span>{sym.coverage}</span>
++                    </td>
++
++                    <td className="py-3 px-3 text-right font-mono text-gray-200">
++                      {sym.pipSize}
++                    </td>
++
++                    <td className="py-3 px-3">
++                      <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-400 bg-emerald-950/60 border border-emerald-800/40 px-2 py-0.5 rounded">
++                        <CheckCircle2 size={12} />
++                        Complete 2013-2026
++                      </span>
++                    </td>
++
++                    <td className="py-3 px-4 text-center">
++                      {isSelected ? (
++                        <span className="inline-flex items-center gap-1 text-xs text-amber-400 font-semibold">
++                          <Check size={14} /> Active
++                        </span>
++                      ) : (
++                        <Button
++                          variant="secondary"
++                          onClick={() => handleSetActive(sym)}
++                          className="text-xs py-1 px-3 hover:border-amber-400 hover:text-amber-300"
++                        >
++                          Set Active
++                        </Button>
++                      )}
++                    </td>
++                  </tr>
++                );
++              })}
++            </tbody>
++          </table>
++        </div>
++      </Card>
++
++      {/* Historical Data & Dukascopy Instructions Card */}
++      <Card className="p-5 border border-[#2d3748] bg-[#161f30] space-y-3">
++        <div className="flex items-center gap-2 font-bold text-white text-sm">
++          <Sparkles size={18} className="text-amber-400" />
++          About Dukascopy Historical Data in AlphaForge
++        </div>
++        <p className="text-xs text-[#8b95a6] leading-relaxed">
++          MT5 live broker accounts only provide short-term historical bars (often just the current year 2026). 
++          AlphaForge solves this by using high-fidelity Dukascopy M1 tick data mapped directly to custom MT5 symbols 
++          (such as <span className="font-mono text-amber-300">USDJPY Dukascopy</span> or <span className="font-mono text-amber-300">EURUSD dukascopy</span>). 
++          This provides complete 2013-2026 tick history for institutional-grade backtesting, walk-forward analysis, and parameter optimization.
++        </p>
++      </Card>
++    </div>
++  );
++}
+-- 
+2.34.1
+
+
+From d8bc869e6b6466d283c0bdf2e253c4213c85721c Mon Sep 17 00:00:00 2001
+From: VicMuli <victormuli100@gmail.com>
+Date: Tue, 27 Oct 2026 08:27:37 +0000
+Subject: [PATCH 2/3] feat: restore HistData M1 and tick downloader into
+ market_data/<pair> folders in app.py and web preview
+
+---
+ .gitignore                    |   7 +-
+ app.py                        | 404 +++++++++++++-----
+ market_data/.gitkeep          |   2 +
+ market_data_downloader.py     | 448 ++++++++++++++++++++
+ server.ts                     | 155 +++++--
+ src/components/MarketData.tsx | 765 ++++++++++++++++++++++++----------
+ 6 files changed, 1432 insertions(+), 349 deletions(-)
+ create mode 100644 market_data/.gitkeep
+ create mode 100644 market_data_downloader.py
+
+diff --git a/.gitignore b/.gitignore
+index cdfcd65..ae5a1c6 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -9,6 +9,7 @@ optimization_runs/trb_usdjpy/run_*
+ # Compiled MetaTrader binaries
+ *.ex5
+ 
+-# Ignore accidental absolute Windows paths created in Linux
+-*C:*
+-C:\\Users\\**
++# Market data raw downloads
++market_data/**/*.csv
++market_data/**/*.zip
++market_data/**/*.txt
+diff --git a/app.py b/app.py
+index b8fd8a3..a05737d 100644
+--- a/app.py
++++ b/app.py
+@@ -1535,147 +1535,347 @@ class MarketDataPanel(BasePanel):
+     def __init__(self, parent, app):
+         super().__init__(parent, app)
+         self.columnconfigure(0, weight=1)
++        self._market_data_dir = SCRIPT_DIR / "market_data"
++        self._market_data_dir.mkdir(parents=True, exist_ok=True)
+         self._build()
+ 
+     def _build(self):
+         pad = dict(padx=32, pady=(24, 0))
+-        make_section_header(self, "🌐  Market Data & Symbol Manager",
+-            "Inspect MT5 historical datasets, verify 2013-2026 Dukascopy coverage, and manage custom symbols"
++        make_section_header(self, "🌐  Market Data — HistData M1 & Tick Engine",
++            "Download M1 (1-minute) and Tick data directly from HistData, organize into market_data/<PAIR>/ subfolders, and configure active symbols"
+         ).grid(row=0, column=0, sticky="ew", **pad)
+ 
+         cfg = self.cfg
+-        card = make_card(self)
+-        card.grid(row=1, column=0, sticky="ew", padx=32, pady=(16, 0))
+-        card.columnconfigure((0, 1, 2), weight=1)
+ 
+-        t_dir = cfg.get("terminal_data_dir", "")
+-        custom_base = Path(t_dir) / "bases" / "Custom" / "history" if t_dir else None
+-        has_custom = custom_base.exists() if custom_base else False
++        # ── 1. Top Metrics Cards ─────────────────────────────────────────────
++        top_card = make_card(self)
++        top_card.grid(row=1, column=0, sticky="ew", padx=32, pady=(16, 0))
++        top_card.columnconfigure((0, 1, 2), weight=1)
+ 
+-        # Box 1: Terminal Bases Status
+-        b1 = ctk.CTkFrame(card, fg_color="#1a202c", corner_radius=8)
++        # Box 1: Local market_data/ repository
++        b1 = ctk.CTkFrame(top_card, fg_color="#1a202c", corner_radius=8)
+         b1.grid(row=0, column=0, sticky="nsew", padx=(16, 8), pady=16)
+-        make_label(b1, "MT5 Terminal Data Path", font=FB, color=C["sub"]).pack(anchor="w", padx=12, pady=(10, 2))
+-        t_label = (t_dir[:36] + "...") if len(t_dir) > 36 else (t_dir or "Not configured")
+-        ctk.CTkLabel(b1, text=t_label, font=FMO, text_color=C["text"]).pack(anchor="w", padx=12)
+-        status_text = "✔ Terminal bases connected" if Path(t_dir).exists() else "⚠ Path not found"
+-        status_color = C["success"] if Path(t_dir).exists() else C["danger"]
+-        make_label(b1, status_text, font=FSM, color=status_color).pack(anchor="w", padx=12, pady=(4, 10))
+-
+-        # Box 2: Custom Dukascopy Datasets
+-        b2 = ctk.CTkFrame(card, fg_color="#1a202c", corner_radius=8)
++        make_label(b1, "Local market_data Storage", font=FB, color=C["sub"]).pack(anchor="w", padx=12, pady=(10, 2))
++        self._lbl_repo_pairs = ctk.CTkLabel(b1, text="0 Pairs Stored", font=FH2, text_color=C["accent"])
++        self._lbl_repo_pairs.pack(anchor="w", padx=12)
++        self._lbl_repo_sub = make_label(b1, "Path: market_data/ (Organized by pair)", font=FSM, color=C["sub"])
++        self._lbl_repo_sub.pack(anchor="w", padx=12, pady=(4, 10))
++
++        # Box 2: Downloader Engine Status
++        b2 = ctk.CTkFrame(top_card, fg_color="#1a202c", corner_radius=8)
+         b2.grid(row=0, column=1, sticky="nsew", padx=8, pady=16)
+-        make_label(b2, "Custom Dukascopy Datasets", font=FB, color=C["sub"]).pack(anchor="w", padx=12, pady=(10, 2))
+-        installed_count = len([d for d in custom_base.iterdir() if d.is_dir()]) if has_custom else 0
+-        ctk.CTkLabel(b2, text=f"{installed_count} Installed Symbols" if has_custom else "17 Standard Datasets",
+-                     font=FH2, text_color=C["accent"]).pack(anchor="w", padx=12)
+-        make_label(b2, "Complete 2013-2026 M1 Tick Data", font=FSM, color=C["sub"]).pack(anchor="w", padx=12, pady=(4, 10))
+-
+-        # Box 3: Active Strategy Symbol
+-        b3 = ctk.CTkFrame(card, fg_color="#1a202c", corner_radius=8)
++        make_label(b2, "HistData Downloader Engine", font=FB, color=C["sub"]).pack(anchor="w", padx=12, pady=(10, 2))
++        self._lbl_dl_status = ctk.CTkLabel(b2, text="● Engine Idle / Ready", font=FH2, text_color=C["success"])
++        self._lbl_dl_status.pack(anchor="w", padx=12)
++        make_label(b2, "Direct M1 Bars & Tick Archives (CSV / MT)", font=FSM, color=C["sub"]).pack(anchor="w", padx=12, pady=(4, 10))
++
++        # Box 3: Active AlphaForge Symbol
++        b3 = ctk.CTkFrame(top_card, fg_color="#1a202c", corner_radius=8)
+         b3.grid(row=0, column=2, sticky="nsew", padx=(8, 16), pady=16)
+-        make_label(b3, "Active Strategy Symbol", font=FB, color=C["sub"]).pack(anchor="w", padx=12, pady=(10, 2))
++        make_label(b3, "Active AlphaForge Symbol", font=FB, color=C["sub"]).pack(anchor="w", padx=12, pady=(10, 2))
+         active_sym = cfg.get("symbol", "USDJPY Dukascopy")
+         self._lbl_active_sym = ctk.CTkLabel(b3, text=active_sym, font=FH2, text_color=C["blue"])
+         self._lbl_active_sym.pack(anchor="w", padx=12)
+         self._lbl_active_sub = make_label(b3, f"Pip: {cfg.get('pip_size', '0.01')} | Period: {cfg.get('period', 'M15')}", font=FSM, color=C["sub"])
+         self._lbl_active_sub.pack(anchor="w", padx=12, pady=(4, 10))
+ 
+-        # Action row
+-        act_row = ctk.CTkFrame(card, fg_color="transparent")
+-        act_row.grid(row=1, column=0, columnspan=3, sticky="ew", padx=16, pady=(0, 16))
+-        make_btn(act_row, "⟳ Rescan Terminal Bases", self._rescan, color=C["card"], hover=C["hover"], width=180).pack(side="left")
+-        make_btn(act_row, "📂 Open Terminal Bases Folder", self._open_bases_dir, color=C["card"], hover=C["hover"], width=210).pack(side="left", padx=10)
++        # ── 2. Download & Organize Controls Card ─────────────────────────────
++        dl_card = make_card(self)
++        dl_card.grid(row=2, column=0, sticky="ew", padx=32, pady=(16, 0))
++        dl_card.columnconfigure(0, weight=1)
++
++        dl_hdr = ctk.CTkFrame(dl_card, fg_color="transparent")
++        dl_hdr.grid(row=0, column=0, sticky="ew", padx=16, pady=(12, 6))
++        make_label(dl_hdr, "📥 Download HistData M1 & Tick Quotes", font=FH3, color=C["sub"]).pack(side="left")
++
++        form_f = ctk.CTkFrame(dl_card, fg_color="transparent")
++        form_f.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 10))
++        form_f.columnconfigure((0, 1, 2, 3), weight=1)
++
++        # Col 0: Pair selection
++        col0 = ctk.CTkFrame(form_f, fg_color="transparent")
++        col0.grid(row=0, column=0, sticky="nsew", padx=6, pady=4)
++        make_label(col0, "Currency Pair / Symbol:", font=FB, color=C["sub"]).pack(anchor="w")
++        self._popular_pairs = [
++            "AUDJPY", "AUDUSD", "CHFJPY", "EURCAD", "EURCHF", "EURGBP",
++            "EURJPY", "EURUSD", "GBPAUD", "GBPJPY", "GBPUSD", "NZDUSD",
++            "USDCAD", "USDCHF", "USDJPY", "XAUUSD"
++        ]
++        self._pair_combo = ctk.CTkComboBox(col0, values=self._popular_pairs, width=170, font=FB)
++        self._pair_combo.set("AUDJPY")
++        self._pair_combo.pack(anchor="w", pady=(4, 0))
++
++        # Col 1: Data Type selection (M1 vs Tick vs Both)
++        col1 = ctk.CTkFrame(form_f, fg_color="transparent")
++        col1.grid(row=0, column=1, sticky="nsew", padx=6, pady=4)
++        make_label(col1, "Data Resolution:", font=FB, color=C["sub"]).pack(anchor="w")
++        self._type_seg = ctk.CTkSegmentedButton(col1, values=["Both (M1+Tick)", "M1 Only", "Tick Only"],
++                                               command=self._on_type_change, font=FSM)
++        self._type_seg.set("Both (M1+Tick)")
++        self._type_seg.pack(anchor="w", pady=(4, 0))
++
++        # Col 2: Years Range
++        col2 = ctk.CTkFrame(form_f, fg_color="transparent")
++        col2.grid(row=0, column=2, sticky="nsew", padx=6, pady=4)
++        make_label(col2, "Years (e.g. 2021-2024 or 2023):", font=FB, color=C["sub"]).pack(anchor="w")
++        self._years_entry = make_entry(col2, width=160, font=FMO)
++        self._years_entry.insert(0, "2022-2024")
++        self._years_entry.pack(anchor="w", pady=(4, 0))
++
++        # Col 3: Format & Auto-extract
++        col3 = ctk.CTkFrame(form_f, fg_color="transparent")
++        col3.grid(row=0, column=3, sticky="nsew", padx=6, pady=4)
++        make_label(col3, "Format & Extraction:", font=FB, color=C["sub"]).pack(anchor="w")
++        opts_row = ctk.CTkFrame(col3, fg_color="transparent")
++        opts_row.pack(anchor="w", pady=(4, 0))
++        self._extract_var = ctk.BooleanVar(value=True)
++        ctk.CTkCheckBox(opts_row, text="Unpack to CSV", variable=self._extract_var,
++                        font=FSM, fg_color=C["accent"]).pack(side="left")
++        self._platform_combo = ctk.CTkComboBox(opts_row, values=["ASCII (Generic)", "MT (MetaTrader)"],
++                                              width=140, font=FSM)
++        self._platform_combo.set("ASCII (Generic)")
++        self._platform_combo.pack(side="left", padx=(10, 0))
++
++        # Action Buttons Row
++        btn_bar = ctk.CTkFrame(dl_card, fg_color="transparent")
++        btn_bar.grid(row=2, column=0, sticky="ew", padx=16, pady=(6, 16))
++        
++        self._btn_download = make_btn(btn_bar, "📥 Download & Organise Data", self._start_download,
++                                      color=C["accent"], hover=C["hover"], width=230)
++        self._btn_download.pack(side="left")
+ 
+-        # 2. Installed Market Symbols Table Card
+-        sym_card = make_card(self)
+-        sym_card.grid(row=2, column=0, sticky="nsew", padx=32, pady=(16, 24))
+-        sym_card.columnconfigure(0, weight=1)
+-        self.rowconfigure(2, weight=1)
++        self._btn_stop = make_btn(btn_bar, "⏹ Stop", self._stop_download,
++                                  color=C["danger"], hover=C["hover"], width=90)
++        self._btn_stop.pack(side="left", padx=(10, 0))
+ 
+-        hdr_row = ctk.CTkFrame(sym_card, fg_color="transparent")
+-        hdr_row.grid(row=0, column=0, sticky="ew", padx=16, pady=(12, 4))
+-        make_label(hdr_row, "MT5 Symbol Catalog & Historical Coverage", font=FH3, color=C["sub"]).pack(side="left")
++        make_btn(btn_bar, "📁 Open market_data Folder", self._open_market_data_dir,
++                 color=C["card"], hover=C["hover"], width=200).pack(side="left", padx=(10, 0))
+ 
+-        # Scrollable symbols frame
+-        self._sym_frame = ctk.CTkScrollableFrame(sym_card, height=340, fg_color="#0a0f1d")
+-        self._sym_frame.grid(row=1, column=0, sticky="nsew", padx=16, pady=(4, 16))
+-        self._sym_frame.columnconfigure((0, 1, 2, 3, 4, 5), weight=1)
++        make_btn(btn_bar, "⚡ Set Selected as Active EA Symbol", self._set_selected_as_active,
++                 color=C["blue"], hover=C["hover"], width=250).pack(side="left", padx=(10, 0))
+ 
+-        self._populate_symbols_table()
++        # ── 3. Organised market_data/ Datasets Table ──────────────────────────
++        table_card = make_card(self)
++        table_card.grid(row=3, column=0, sticky="ew", padx=32, pady=(16, 0))
++        table_card.columnconfigure(0, weight=1)
+ 
+-    def _populate_symbols_table(self):
+-        for widget in self._sym_frame.winfo_children():
+-            widget.destroy()
++        t_hdr = ctk.CTkFrame(table_card, fg_color="transparent")
++        t_hdr.grid(row=0, column=0, sticky="ew", padx=16, pady=(12, 6))
++        make_label(t_hdr, "Organised Pairs in market_data/ Directory", font=FH3, color=C["sub"]).pack(side="left")
++        make_btn(t_hdr, "⟳ Refresh Catalog", self._refresh_catalog, color=C["card"], hover=C["hover"], width=130).pack(side="right")
+ 
+-        hdrs = ["Symbol", "Category", "MT5 Custom Name", "Historical Coverage", "Pip Size", "Action"]
+-        for ci, h in enumerate(hdrs):
+-            ctk.CTkLabel(self._sym_frame, text=h, font=ctk.CTkFont("Segoe UI", 10, "bold"),
+-                         text_color=C["sub"], anchor="w" if ci < 5 else "center").grid(row=0, column=ci, sticky="ew", padx=6, pady=4)
++        self._catalog_frame = ctk.CTkScrollableFrame(table_card, height=190, fg_color="#0a0f1d")
++        self._catalog_frame.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 16))
++        self._catalog_frame.columnconfigure((0, 1, 2, 3, 4, 5), weight=1)
++
++        # ── 4. Live Output Terminal ──────────────────────────────────────────
++        log_card = make_card(self)
++        log_card.grid(row=4, column=0, sticky="nsew", padx=32, pady=(16, 24))
++        log_card.columnconfigure(0, weight=1)
++        self.rowconfigure(4, weight=1)
++
++        l_hdr = ctk.CTkFrame(log_card, fg_color="transparent")
++        l_hdr.grid(row=0, column=0, sticky="ew", padx=16, pady=(12, 4))
++        make_label(l_hdr, "Market Data Download Terminal Output", font=FH3, color=C["sub"]).pack(side="left")
++        make_btn(l_hdr, "Clear Log", lambda: self.log_clear(self._log), color=C["card"], hover=C["hover"], width=90).pack(side="right")
++
++        self._log = make_log(log_card, height=180)
++        self._log.grid(row=1, column=0, sticky="nsew", padx=16, pady=(0, 16))
+ 
+-        CATALOG = [
+-            ("USDJPY", "FX Major",     "USDJPY Dukascopy", "Full 2013-2026 (Dukascopy)", "0.01"),
+-            ("EURUSD", "FX Major",     "EURUSD dukascopy", "Full 2013-2026 (Dukascopy)", "0.0001"),
+-            ("GBPUSD", "FX Major",     "GBPUSD dukascopy", "Full 2013-2026 (Dukascopy)", "0.0001"),
+-            ("EURJPY", "FX Cross",     "EURJPY Dukascopy", "Full 2013-2026 (Dukascopy)", "0.01"),
+-            ("XAUUSD", "Commodities",  "XAUUSD dukascopy", "Full 2013-2026 (Dukascopy)", "0.10"),
+-            ("AUDUSD", "FX Major",     "AUDUSD dukascopy", "Full 2013-2026 (Dukascopy)", "0.0001"),
+-            ("NZDUSD", "FX Major",     "NZDUSD dukascopy", "Full 2013-2026 (Dukascopy)", "0.0001"),
+-            ("USDCAD", "FX Major",     "USDCAD dukascopy", "Full 2013-2026 (Dukascopy)", "0.0001"),
+-            ("USDCHF", "FX Major",     "USDCHF dukascopy", "Full 2013-2026 (Dukascopy)", "0.0001"),
+-            ("GBPJPY", "FX Cross",     "GBPJPY dukascopy", "Full 2013-2026 (Dukascopy)", "0.01"),
+-            ("AUDJPY", "FX Cross",     "AUDJPY dukascopy", "Full 2013-2026 (Dukascopy)", "0.01"),
+-            ("CADJPY", "FX Cross",     "CADJPY dukascopy", "Full 2013-2026 (Dukascopy)", "0.01"),
+-            ("CHFJPY", "FX Cross",     "CHFJPY dukascopy", "Full 2013-2026 (Dukascopy)", "0.01"),
+-            ("EURGBP", "FX Cross",     "EURGBP dukascopy", "Full 2013-2026 (Dukascopy)", "0.0001"),
+-            ("BTCUSD", "Crypto",       "BTCUSD",           "Broker Live / Custom",       "1.0"),
+-            ("US30",   "Indices",      "US30",             "Broker Live / Custom",       "1.0"),
+-            ("NAS100", "Indices",      "NAS100",            "Broker Live / Custom",       "1.0"),
++        self._refresh_catalog()
++
++    def _on_type_change(self, val):
++        pass
++
++    def _start_download(self):
++        pair = self._pair_combo.get().strip().upper()
++        if not pair:
++            messagebox.showwarning("Missing Pair", "Please select or enter a currency pair (e.g. AUDJPY).")
++            return
++
++        type_map = {
++            "Both (M1+Tick)": "both",
++            "M1 Only": "m1",
++            "Tick Only": "tick"
++        }
++        data_type = type_map.get(self._type_seg.get(), "both")
++        years_str = self._years_entry.get().strip() or "2023"
++        platform = "ASCII" if "ASCII" in self._platform_combo.get() else "MT"
++        extract = self._extract_var.get()
++
++        args = [
++            "--pair", pair,
++            "--type", data_type,
++            "--years", years_str,
++            "--platform", platform
+         ]
++        if not extract:
++            args.append("--no-extract")
++
++        self.log_clear(self._log)
++        self._lbl_dl_status.configure(text=f"⚡ Downloading {pair} ({data_type.upper()})...", text_color=C["accent"])
+ 
+-        active_sym = self.cfg.get("symbol", "USDJPY Dukascopy")
++        def on_done():
++            self._lbl_dl_status.configure(text="● Engine Idle / Ready", text_color=C["success"])
++            self._refresh_catalog()
+ 
+-        for ri, (sym, cat, c_name, cov, pip) in enumerate(CATALOG, 1):
+-            is_active = (active_sym == c_name or active_sym == sym or self.cfg.get("symbol_key") == sym)
++        self.run_script("market_data_downloader.py", self._log, args=args, on_done=on_done)
+ 
+-            ctk.CTkLabel(self._sym_frame, text=sym, font=ctk.CTkFont("Segoe UI", 11, "bold"),
+-                         text_color=C["accent"] if is_active else C["text"], anchor="w").grid(row=ri, column=0, sticky="ew", padx=6, pady=3)
+-            ctk.CTkLabel(self._sym_frame, text=cat, font=FSM, text_color=C["sub"], anchor="w").grid(row=ri, column=1, sticky="ew", padx=6, pady=3)
+-            ctk.CTkLabel(self._sym_frame, text=c_name, font=FMO, text_color=C["text"], anchor="w").grid(row=ri, column=2, sticky="ew", padx=6, pady=3)
+-            ctk.CTkLabel(self._sym_frame, text=cov, font=FSM, text_color=C["success"], anchor="w").grid(row=ri, column=3, sticky="ew", padx=6, pady=3)
+-            ctk.CTkLabel(self._sym_frame, text=pip, font=FMO, text_color=C["sub"], anchor="w").grid(row=ri, column=4, sticky="ew", padx=6, pady=3)
++    def _stop_download(self):
++        self.stop_process()
++        self._lbl_dl_status.configure(text="● Engine Stopped", text_color=C["danger"])
+ 
+-            btn_txt = "✔ Active" if is_active else "Set Active"
+-            btn_fg = C["accent"] if is_active else C["card"]
+-            btn = make_btn(self._sym_frame, btn_txt, lambda s=c_name, k=sym, p=pip: self._set_active_symbol(s, k, p),
+-                           color=btn_fg, hover=C["hover"], width=85)
+-            btn.grid(row=ri, column=5, padx=6, pady=3)
++    def _open_market_data_dir(self):
++        self._open_file_safely(self._market_data_dir)
++
++    def _open_pair_folder(self, pair: str):
++        pair_dir = self._market_data_dir / pair.upper()
++        if pair_dir.exists():
++            self._open_file_safely(pair_dir)
++        else:
++            self._open_file_safely(self._market_data_dir)
++
++    def _delete_pair_folder(self, pair: str):
++        pair_dir = self._market_data_dir / pair.upper()
++        if not pair_dir.exists():
++            return
++        if messagebox.askyesno("Delete Market Data", f"Are you sure you want to delete all downloaded data for {pair}?\nPath: {pair_dir}"):
++            try:
++                shutil.rmtree(pair_dir)
++                self._refresh_catalog()
++                messagebox.showinfo("Deleted", f"Deleted market_data/{pair}")
++            except Exception as e:
++                messagebox.showerror("Error", f"Failed deleting: {e}")
++
++    def _set_selected_as_active(self):
++        pair = self._pair_combo.get().strip().upper()
++        if not pair:
++            return
++        
++        # Check standard pip sizes
++        pip = "0.01" if "JPY" in pair or pair in ("XAUUSD", "US30", "NAS100", "BTCUSD") else "0.0001"
++        if pair == "XAUUSD":
++            pip = "0.10"
++        elif pair in ("US30", "NAS100", "BTCUSD"):
++            pip = "1.0"
++
++        # Check if custom symbol exists in bases or use standard Dukascopy name
++        custom_name = f"{pair} dukascopy"
++        if pair == "USDJPY":
++            custom_name = "USDJPY Dukascopy"
++        elif pair == "EURJPY":
++            custom_name = "EURJPY Dukascopy"
+ 
+-    def _set_active_symbol(self, custom_name: str, key: str, pip: str):
+         self.cfg["symbol"] = custom_name
+-        self.cfg["symbol_key"] = key
++        self.cfg["symbol_key"] = pair
+         self.cfg["pip_size"] = pip
+         save_config(self.cfg)
+         self.app.update_topbar_meta()
++
+         if hasattr(self, "_lbl_active_sym"):
+             self._lbl_active_sym.configure(text=custom_name)
+         if hasattr(self, "_lbl_active_sub"):
+             self._lbl_active_sub.configure(text=f"Pip: {pip} | Period: {self.cfg.get('period', 'M15')}")
+-        self._populate_symbols_table()
+-        messagebox.showinfo("Active Symbol Updated", f"Active symbol set to: {custom_name}\nPip Size: {pip}\nSaved to config.json.")
+-
+-    def _rescan(self):
+-        self.cfg = load_config()
+-        self._populate_symbols_table()
+-        messagebox.showinfo("Rescan Complete", "Terminal data and symbol bases rescanned.")
+-
+-    def _open_bases_dir(self):
+-        t_dir = self.cfg.get("terminal_data_dir", "")
+-        custom_base = Path(t_dir) / "bases" if t_dir else SCRIPT_DIR
+-        if custom_base.exists():
+-            self._open_file_safely(custom_base)
+-        else:
+-            messagebox.showinfo("Not Found", f"Terminal bases folder not found at:\n{custom_base}")
++
++        messagebox.showinfo("Active Symbol Updated",
++            f"Active AlphaForge Symbol set to:\n{custom_name} ({pair})\nPip Size: {pip}")
++
++    def _refresh_catalog(self):
++        for widget in self._catalog_frame.winfo_children():
++            widget.destroy()
++
++        hdrs = ["Pair", "M1 Datasets", "Tick Datasets", "Total Disk Space", "Last Updated", "Actions"]
++        for ci, h in enumerate(hdrs):
++            ctk.CTkLabel(self._catalog_frame, text=h, font=ctk.CTkFont("Segoe UI", 10, "bold"),
++                         text_color=C["sub"], anchor="w" if ci < 5 else "center").grid(row=0, column=ci, sticky="ew", padx=6, pady=4)
++
++        if not self._market_data_dir.exists():
++            self._market_data_dir.mkdir(parents=True, exist_ok=True)
++
++        pair_dirs = sorted([d for d in self._market_data_dir.iterdir() if d.is_dir() and not d.name.startswith(".")])
++
++        if not pair_dirs:
++            lbl = ctk.CTkLabel(self._catalog_frame, text="No pairs downloaded in market_data/ yet. Select a pair above and click Download.",
++                               font=FB, text_color=C["sub"])
++            lbl.grid(row=1, column=0, columnspan=6, pady=24)
++            self._lbl_repo_pairs.configure(text="0 Pairs Stored")
++            return
++
++        total_bytes = 0
++        total_m1_count = 0
++        total_tick_count = 0
++
++        for ri, p_dir in enumerate(pair_dirs, 1):
++            pair_name = p_dir.name.upper()
++            manifest_file = p_dir / "manifest.json"
++            data = {}
++            if manifest_file.exists():
++                try:
++                    with open(manifest_file, "r", encoding="utf-8") as f:
++                        data = json.load(f)
++                except Exception:
++                    pass
++
++            # Scan directories directly if manifest missing or to guarantee fresh stats
++            m1_p = p_dir / "M1"
++            tick_p = p_dir / "TICK"
++            
++            m1_files = [f for f in m1_p.iterdir() if f.is_file()] if m1_p.exists() else []
++            tick_files = [f for f in tick_p.iterdir() if f.is_file()] if tick_p.exists() else []
++
++            m1_size_mb = sum(f.stat().st_size for f in m1_files) / (1024 * 1024)
++            tick_size_mb = sum(f.stat().st_size for f in tick_files) / (1024 * 1024)
++            total_mb = m1_size_mb + tick_size_mb
++
++            total_bytes += (m1_size_mb + tick_size_mb) * (1024 * 1024)
++            total_m1_count += len(m1_files)
++            total_tick_count += len(tick_files)
++
++            last_mod = data.get("last_updated")
++            if not last_mod:
++                try:
++                    last_mod = datetime.fromtimestamp(p_dir.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
++                except Exception:
++                    last_mod = "-"
++
++            # Render row
++            ctk.CTkLabel(self._catalog_frame, text=f"📁 {pair_name}", font=ctk.CTkFont("Segoe UI", 11, "bold"),
++                         text_color=C["accent"], anchor="w").grid(row=ri, column=0, sticky="ew", padx=6, pady=3)
++
++            m1_txt = f"{len(m1_files)} files ({m1_size_mb:.1f} MB)" if m1_files else "None"
++            ctk.CTkLabel(self._catalog_frame, text=m1_txt, font=FSM,
++                         text_color=C["text"] if m1_files else C["sub"], anchor="w").grid(row=ri, column=1, sticky="ew", padx=6, pady=3)
++
++            tick_txt = f"{len(tick_files)} files ({tick_size_mb:.1f} MB)" if tick_files else "None"
++            ctk.CTkLabel(self._catalog_frame, text=tick_txt, font=FSM,
++                         text_color=C["text"] if tick_files else C["sub"], anchor="w").grid(row=ri, column=2, sticky="ew", padx=6, pady=3)
++
++            ctk.CTkLabel(self._catalog_frame, text=f"{total_mb:.1f} MB", font=FMO,
++                         text_color=C["success"] if total_mb > 0 else C["sub"], anchor="w").grid(row=ri, column=3, sticky="ew", padx=6, pady=3)
++
++            ctk.CTkLabel(self._catalog_frame, text=str(last_mod), font=FSM,
++                         text_color=C["sub"], anchor="w").grid(row=ri, column=4, sticky="ew", padx=6, pady=3)
++
++            # Actions cluster
++            act_f = ctk.CTkFrame(self._catalog_frame, fg_color="transparent")
++            act_f.grid(row=ri, column=5, padx=6, pady=3)
++
++            make_btn(act_f, "Open", lambda p=pair_name: self._open_pair_folder(p),
++                     color=C["card"], hover=C["hover"], width=54).pack(side="left", padx=2)
++
++            make_btn(act_f, "Active", lambda p=pair_name: self._set_active_symbol_direct(p),
++                     color=C["blue"], hover=C["hover"], width=58).pack(side="left", padx=2)
++
++            make_btn(act_f, "✕", lambda p=pair_name: self._delete_pair_folder(p),
++                     color=C["danger"], hover=C["hover"], width=30).pack(side="left", padx=2)
++
++        tot_mb_all = total_bytes / (1024 * 1024)
++        self._lbl_repo_pairs.configure(text=f"{len(pair_dirs)} Pairs ({tot_mb_all:.1f} MB)")
++        self._lbl_repo_sub.configure(text=f"M1: {total_m1_count} files | Tick: {total_tick_count} files")
++
++    def _set_active_symbol_direct(self, pair: str):
++        self._pair_combo.set(pair)
++        self._set_selected_as_active()
+ 
+ 
+ # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+diff --git a/market_data/.gitkeep b/market_data/.gitkeep
+new file mode 100644
+index 0000000..f1d66ad
+--- /dev/null
++++ b/market_data/.gitkeep
+@@ -0,0 +1,2 @@
++# AlphaForge Market Data Directory
++# Downloads from HistData are stored in <PAIR>/M1 and <PAIR>/TICK subfolders.
+diff --git a/market_data_downloader.py b/market_data_downloader.py
+new file mode 100644
+index 0000000..ae91950
+--- /dev/null
++++ b/market_data_downloader.py
+@@ -0,0 +1,448 @@
++#!/usr/bin/env python3
++"""
++market_data_downloader.py
++HistData M1 & Tick Data Downloader and Organizer for AlphaForge.
++
++Downloads M1 (1-minute bars) and Tick quotes directly from HistData.com,
++extracts and organizes data into:
++    market_data/
++      └── <PAIR>/
++            ├── M1/
++            │     └── DAT_ASCII_<PAIR>_M1_<YEAR>.csv
++            ├── TICK/
++            │     └── DAT_ASCII_<PAIR>_T_<YEAR><MONTH>.csv
++            └── manifest.json
++"""
++
++import os
++import sys
++import re
++import json
++import time
++import zipfile
++import argparse
++import urllib.request
++import urllib.parse
++from pathlib import Path
++from datetime import datetime
++
++# Root directory for AlphaForge market data
++SCRIPT_DIR = Path(__file__).parent.resolve()
++MARKET_DATA_DIR = SCRIPT_DIR / "market_data"
++
++HISTDATA_BASE_URL = "https://www.histdata.com"
++HISTDATA_GET_URL = "https://www.histdata.com/get.php"
++
++# Standard popular pairs supported on HistData
++POPULAR_PAIRS = [
++    "AUDJPY", "AUDUSD", "CHFJPY", "EURCAD", "EURCHF", "EURGBP", 
++    "EURJPY", "EURUSD", "GBPAUD", "GBPJPY", "GBPUSD", "NZDUSD", 
++    "USDCAD", "USDCHF", "USDJPY", "XAUUSD"
++]
++
++USER_AGENT = (
++    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
++    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
++)
++
++
++def get_token_from_page(page_url: str, max_retries: int = 3) -> str | None:
++    """Fetches HistData page and parses the hidden 'tk' security token."""
++    headers = {
++        "User-Agent": USER_AGENT,
++        "Referer": HISTDATA_BASE_URL,
++    }
++    for attempt in range(1, max_retries + 1):
++        try:
++            req = urllib.request.Request(page_url, headers=headers)
++            with urllib.request.urlopen(req, timeout=15) as resp:
++                if resp.status != 200:
++                    continue
++                html = resp.read().decode("utf-8", errors="ignore")
++                m = re.search(r'id=[\"\']tk[\"\']\s+value=[\"\']([^\"\']+)[\"\']', html)
++                if not m:
++                    m = re.search(r'value=[\"\']([^\"\']+)[\"\']\s+id=[\"\']tk[\"\']', html)
++                if m:
++                    return m.group(1).strip()
++        except Exception as e:
++            if attempt == max_retries:
++                print(f"[WARN] Failed fetching token from {page_url} (Attempt {attempt}): {e}")
++            time.sleep(1.0)
++    return None
++
++
++def download_histdata_file(
++    pair: str,
++    timeframe: str,  # 'M1' or 'T'
++    year: int,
++    month: int | None = None,
++    platform: str = "ASCII",
++    dest_dir: Path | None = None,
++    extract: bool = True
++) -> Path | None:
++    """
++    Downloads a single file from HistData.
++    - M1 can be yearly (month=None) or monthly.
++    - Tick is strictly monthly.
++    """
++    pair_lower = pair.lower()
++    pair_upper = pair.upper()
++
++    # 1. Build Referer URL
++    if timeframe.upper() == "M1":
++        tf_path = "1-minute-bar-quotes"
++        tf_code = "M1"
++        if month is None:
++            referer_url = f"{HISTDATA_BASE_URL}/download-free-forex-historical-data/?/{platform.lower()}/{tf_path}/{pair_lower}/{year}"
++            date_param = str(year)
++            datemonth_param = str(year)
++        else:
++            referer_url = f"{HISTDATA_BASE_URL}/download-free-forex-historical-data/?/{platform.lower()}/{tf_path}/{pair_lower}/{year}/{month}"
++            date_param = str(year)
++            datemonth_param = f"{year}{str(month).zfill(2)}"
++    else:  # TICK
++        tf_path = "tick-data-quotes"
++        tf_code = "T"
++        month_val = month if month is not None else 1
++        referer_url = f"{HISTDATA_BASE_URL}/download-free-forex-historical-data/?/{platform.lower()}/{tf_path}/{pair_lower}/{year}/{month_val}"
++        date_param = str(year)
++        datemonth_param = f"{year}{str(month_val).zfill(2)}"
++
++    print(f"[PAGE] Requesting token for {pair_upper} {tf_code} {datemonth_param}...")
++    token = get_token_from_page(referer_url)
++    if not token:
++        print(f"[ERROR] Could not extract download token for {pair_upper} {datemonth_param}. The data might not exist on HistData.")
++        return None
++
++    # 2. POST to get.php
++    post_payload = {
++        "tk": token,
++        "date": date_param,
++        "datemonth": datemonth_param,
++        "platform": platform,
++        "timeframe": tf_code,
++        "fxpair": pair_lower
++    }
++    encoded_data = urllib.parse.urlencode(post_payload).encode("utf-8")
++    post_headers = {
++        "User-Agent": USER_AGENT,
++        "Referer": referer_url,
++        "Content-Type": "application/x-www-form-urlencoded"
++    }
++
++    if dest_dir is None:
++        subfolder = "M1" if tf_code == "M1" else "TICK"
++        dest_dir = MARKET_DATA_DIR / pair_upper / subfolder
++
++    dest_dir.mkdir(parents=True, exist_ok=True)
++    zip_filename = f"DAT_{platform}_{pair_upper}_{tf_code}_{datemonth_param}.zip"
++    zip_path = dest_dir / zip_filename
++
++    try:
++        print(f"[DOWNLOAD] Streaming {zip_filename} from HistData...")
++        req = urllib.request.Request(HISTDATA_GET_URL, data=encoded_data, headers=post_headers)
++        with urllib.request.urlopen(req, timeout=45) as resp:
++            content = resp.read()
++            if not content or len(content) < 200 or not content.startswith(b"PK"):
++                print(f"[ERROR] Invalid ZIP payload received ({len(content)} bytes). Response preview: {content[:100]}")
++                return None
++            
++            with open(zip_path, "wb") as f:
++                f.write(content)
++        
++        file_size_mb = len(content) / (1024 * 1024)
++        print(f"[SUCCESS] Downloaded {zip_filename} ({file_size_mb:.2f} MB)")
++
++        # 3. Extract if requested
++        if extract:
++            extracted_files = []
++            with zipfile.ZipFile(zip_path, "r") as z:
++                for member in z.namelist():
++                    z.extract(member, dest_dir)
++                    extracted_path = dest_dir / member
++                    extracted_files.append(extracted_path)
++            
++            # Remove zip archive to conserve space
++            try:
++                zip_path.unlink()
++            except Exception:
++                pass
++
++            if extracted_files:
++                final_csv = extracted_files[0]
++                csv_size_mb = final_csv.stat().st_size / (1024 * 1024)
++                print(f"[UNPACKED] Extracted: {final_csv.name} ({csv_size_mb:.2f} MB)")
++                return final_csv
++        return zip_path
++
++    except Exception as e:
++        print(f"[ERROR] Failed downloading {zip_filename}: {e}")
++        return None
++
++
++def download_pair_dataset(
++    pair: str,
++    data_type: str = "both",  # "m1", "tick", "both"
++    years: list[int] | None = None,
++    months: list[int] | None = None,
++    platform: str = "ASCII",
++    extract: bool = True
++) -> dict:
++    """
++    Downloads and organizes M1 and/or Tick dataset for a pair.
++    Saves metadata to market_data/<PAIR>/manifest.json.
++    """
++    pair = pair.upper().strip()
++    current_year = datetime.now().year
++    if not years:
++        # Default to last 3 complete years
++        years = [current_year - 3, current_year - 2, current_year - 1]
++
++    pair_root = MARKET_DATA_DIR / pair
++    m1_dir = pair_root / "M1"
++    tick_dir = pair_root / "TICK"
++    m1_dir.mkdir(parents=True, exist_ok=True)
++    tick_dir.mkdir(parents=True, exist_ok=True)
++
++    results = {
++        "pair": pair,
++        "m1_files": [],
++        "tick_files": [],
++        "errors": []
++    }
++
++    # 1. Download M1 data (annual files where available)
++    if data_type in ("m1", "both"):
++        print(f"\n==========================================")
++        print(f"📥 Starting M1 Data Download for {pair} (Years: {years})")
++        print(f"==========================================")
++        for y in years:
++            try:
++                # Annual M1 file
++                res = download_histdata_file(
++                    pair=pair,
++                    timeframe="M1",
++                    year=y,
++                    month=None,
++                    platform=platform,
++                    dest_dir=m1_dir,
++                    extract=extract
++                )
++                if res and res.exists():
++                    results["m1_files"].append(str(res.relative_to(SCRIPT_DIR)))
++                else:
++                    results["errors"].append(f"M1 {y} failed or unavailable")
++            except Exception as e:
++                results["errors"].append(f"M1 {y} exception: {e}")
++            # Respect rate limit
++            time.sleep(1.0)
++
++    # 2. Download Tick data (monthly files)
++    if data_type in ("tick", "both"):
++        print(f"\n==========================================")
++        print(f"📥 Starting Tick Data Download for {pair} (Years: {years})")
++        print(f"==========================================")
++        target_months = months if months else list(range(1, 13))
++        for y in years:
++            for m in target_months:
++                try:
++                    res = download_histdata_file(
++                        pair=pair,
++                        timeframe="T",
++                        year=y,
++                        month=m,
++                        platform=platform,
++                        dest_dir=tick_dir,
++                        extract=extract
++                    )
++                    if res and res.exists():
++                        results["tick_files"].append(str(res.relative_to(SCRIPT_DIR)))
++                    else:
++                        results["errors"].append(f"Tick {y}-{m:02d} failed or unavailable")
++                except Exception as e:
++                    results["errors"].append(f"Tick {y}-{m:02d} exception: {e}")
++                # Respect rate limit
++                time.sleep(1.2)
++
++    # Update manifest
++    manifest_data = update_pair_manifest(pair)
++    results["manifest"] = manifest_data
++    return results
++
++
++def update_pair_manifest(pair: str) -> dict:
++    """Scans market_data/<PAIR> and writes an updated manifest.json."""
++    pair_dir = MARKET_DATA_DIR / pair.upper()
++    if not pair_dir.exists():
++        return {}
++
++    m1_dir = pair_dir / "M1"
++    tick_dir = pair_dir / "TICK"
++
++    m1_files = []
++    m1_bytes = 0
++    if m1_dir.exists():
++        for p in m1_dir.iterdir():
++            if p.is_file() and not p.name.startswith("."):
++                size = p.stat().st_size
++                m1_bytes += size
++                m1_files.append({
++                    "name": p.name,
++                    "size_mb": round(size / (1024 * 1024), 2),
++                    "ext": p.suffix.lower()
++                })
++
++    tick_files = []
++    tick_bytes = 0
++    if tick_dir.exists():
++        for p in tick_dir.iterdir():
++            if p.is_file() and not p.name.startswith("."):
++                size = p.stat().st_size
++                tick_bytes += size
++                tick_files.append({
++                    "name": p.name,
++                    "size_mb": round(size / (1024 * 1024), 2),
++                    "ext": p.suffix.lower()
++                })
++
++    manifest = {
++        "pair": pair.upper(),
++        "last_updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
++        "m1_count": len(m1_files),
++        "m1_total_mb": round(m1_bytes / (1024 * 1024), 2),
++        "tick_count": len(tick_files),
++        "tick_total_mb": round(tick_bytes / (1024 * 1024), 2),
++        "total_mb": round((m1_bytes + tick_bytes) / (1024 * 1024), 2),
++        "m1_files": sorted(m1_files, key=lambda x: x["name"]),
++        "tick_files": sorted(tick_files, key=lambda x: x["name"]),
++    }
++
++    manifest_path = pair_dir / "manifest.json"
++    with open(manifest_path, "w", encoding="utf-8") as f:
++        json.dump(manifest, f, indent=2)
++
++    return manifest
++
++
++def get_market_data_catalog() -> dict:
++    """Scans all pair subdirectories inside market_data/."""
++    MARKET_DATA_DIR.mkdir(parents=True, exist_ok=True)
++    pairs_data = []
++    total_bytes = 0
++    total_m1 = 0
++    total_ticks = 0
++
++    for item in sorted(MARKET_DATA_DIR.iterdir()):
++        if item.is_dir() and not item.name.startswith("."):
++            manifest_path = item / "manifest.json"
++            if manifest_path.exists():
++                try:
++                    with open(manifest_path, "r", encoding="utf-8") as f:
++                        data = json.load(f)
++                except Exception:
++                    data = update_pair_manifest(item.name)
++            else:
++                data = update_pair_manifest(item.name)
++            
++            pairs_data.append(data)
++            total_bytes += int(data.get("total_mb", 0) * 1024 * 1024)
++            total_m1 += data.get("m1_count", 0)
++            total_ticks += data.get("tick_count", 0)
++
++    return {
++        "market_data_dir": str(MARKET_DATA_DIR),
++        "total_pairs": len(pairs_data),
++        "total_m1_files": total_m1,
++        "total_tick_files": total_ticks,
++        "total_mb": round(total_bytes / (1024 * 1024), 2),
++        "popular_pairs": POPULAR_PAIRS,
++        "pairs": pairs_data
++    }
++
++
++def parse_year_range(arg_str: str) -> list[int]:
++    """Parses '2021,2022,2023' or '2020-2024' into a sorted list of ints."""
++    years = set()
++    parts = [p.strip() for p in arg_str.split(",") if p.strip()]
++    for p in parts:
++        if "-" in p:
++            s_parts = p.split("-")
++            if len(s_parts) == 2 and s_parts[0].isdigit() and s_parts[1].isdigit():
++                start_y, end_y = int(s_parts[0]), int(s_parts[1])
++                for y in range(min(start_y, end_y), max(start_y, end_y) + 1):
++                    years.add(y)
++        elif p.isdigit():
++            years.add(int(p))
++    return sorted(list(years))
++
++
++def parse_month_list(arg_str: str | None) -> list[int]:
++    """Parses '1,2,3,4' or '1-6' into list of month ints."""
++    if not arg_str:
++        return list(range(1, 13))
++    months = set()
++    parts = [p.strip() for p in arg_str.split(",") if p.strip()]
++    for p in parts:
++        if "-" in p:
++            s_parts = p.split("-")
++            if len(s_parts) == 2 and s_parts[0].isdigit() and s_parts[1].isdigit():
++                start_m, end_m = int(s_parts[0]), int(s_parts[1])
++                for m in range(min(start_m, end_m), max(start_m, end_m) + 1):
++                    if 1 <= m <= 12:
++                        months.add(m)
++        elif p.isdigit():
++            val = int(p)
++            if 1 <= val <= 12:
++                months.add(val)
++    return sorted(list(months))
++
++
++def main():
++    parser = argparse.ArgumentParser(description="HistData M1 & Tick Data Downloader for AlphaForge")
++    parser.add_argument("--pair", type=str, help="Currency pair (e.g., AUDJPY, EURUSD, USDJPY)")
++    parser.add_argument("--type", type=str, choices=["m1", "tick", "both"], default="both", help="Data type to download")
++    parser.add_argument("--years", type=str, default="2022-2024", help="Years to download, e.g. 2021,2022 or 2020-2024")
++    parser.add_argument("--months", type=str, default=None, help="Months for tick data, e.g. 1-12 or 1,2,3 (default all)")
++    parser.add_argument("--platform", type=str, default="ASCII", choices=["ASCII", "MT"], help="Platform format (ASCII or MT)")
++    parser.add_argument("--no-extract", action="store_true", help="Keep zip files instead of extracting CSVs")
++    parser.add_argument("--catalog", action="store_true", help="Output catalog JSON of downloaded pairs")
++
++    args = parser.parse_args()
++
++    if args.catalog:
++        catalog = get_market_data_catalog()
++        print(json.dumps(catalog, indent=2))
++        return
++
++    if not args.pair:
++        parser.print_help()
++        print("\n[ERROR] --pair is required. (e.g. --pair AUDJPY --type both --years 2023)")
++        sys.exit(1)
++
++    years_list = parse_year_range(args.years)
++    months_list = parse_month_list(args.months)
++    extract = not args.no_extract
++
++    pairs_to_run = [p.strip().upper() for p in args.pair.split(",") if p.strip()]
++
++    print(f"🚀 AlphaForge Market Data Engine Initiated")
++    print(f"Pairs: {', '.join(pairs_to_run)}")
++    print(f"Type: {args.type.upper()} | Years: {years_list} | Format: {args.platform}")
++    print(f"Target Directory: {MARKET_DATA_DIR}")
++
++    for p in pairs_to_run:
++        download_pair_dataset(
++            pair=p,
++            data_type=args.type,
++            years=years_list,
++            months=months_list,
++            platform=args.platform,
++            extract=extract
++        )
++
++    print("\n✅ Market Data Download & Organization Complete!")
++    print(f"Folders updated in: {MARKET_DATA_DIR}")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/server.ts b/server.ts
+index 5df0c0d..375408d 100644
+--- a/server.ts
++++ b/server.ts
+@@ -654,7 +654,7 @@ async function startServer() {
+     }
+   });
+ 
+-  // Market Data & Symbols Inspector API
++  // Market Data & HistData Storage Inspector API
+   app.get("/api/market-data", async (req, res) => {
+     try {
+       const cwd = process.cwd();
+@@ -663,6 +663,83 @@ async function startServer() {
+         cfg = JSON.parse(await fs.readFile(path.join(cwd, 'config.json'), 'utf-8'));
+       } catch {}
+ 
++      const marketDataDir = path.join(cwd, 'market_data');
++      if (!existsSync(marketDataDir)) {
++        await fs.mkdir(marketDataDir, { recursive: true });
++      }
++
++      // Scan market_data/ for organized pair folders
++      const downloadedPairs: any[] = [];
++      let totalBytes = 0;
++      let totalM1Files = 0;
++      let totalTickFiles = 0;
++
++      try {
++        const entries = await fs.readdir(marketDataDir, { withFileTypes: true });
++        for (const entry of entries) {
++          if (entry.isDirectory() && !entry.name.startsWith('.')) {
++            const pairName = entry.name.toUpperCase();
++            const pairDir = path.join(marketDataDir, entry.name);
++            const m1Dir = path.join(pairDir, 'M1');
++            const tickDir = path.join(pairDir, 'TICK');
++
++            const m1Files: any[] = [];
++            let m1Bytes = 0;
++            if (existsSync(m1Dir)) {
++              try {
++                const files = await fs.readdir(m1Dir);
++                for (const f of files) {
++                  if (!f.startsWith('.')) {
++                    const st = await fs.stat(path.join(m1Dir, f));
++                    m1Bytes += st.size;
++                    m1Files.push({ name: f, sizeMb: Number((st.size / (1024 * 1024)).toFixed(2)) });
++                  }
++                }
++              } catch {}
++            }
++
++            const tickFiles: any[] = [];
++            let tickBytes = 0;
++            if (existsSync(tickDir)) {
++              try {
++                const files = await fs.readdir(tickDir);
++                for (const f of files) {
++                  if (!f.startsWith('.')) {
++                    const st = await fs.stat(path.join(tickDir, f));
++                    tickBytes += st.size;
++                    tickFiles.push({ name: f, sizeMb: Number((st.size / (1024 * 1024)).toFixed(2)) });
++                  }
++                }
++              } catch {}
++            }
++
++            const pairTotalMb = Number(((m1Bytes + tickBytes) / (1024 * 1024)).toFixed(2));
++            totalBytes += (m1Bytes + tickBytes);
++            totalM1Files += m1Files.length;
++            totalTickFiles += tickFiles.length;
++
++            let lastUpdated = '-';
++            try {
++              const pairStat = await fs.stat(pairDir);
++              lastUpdated = pairStat.mtime.toISOString().replace('T', ' ').substring(0, 16);
++            } catch {}
++
++            downloadedPairs.push({
++              pair: pairName,
++              m1Count: m1Files.length,
++              m1TotalMb: Number((m1Bytes / (1024 * 1024)).toFixed(2)),
++              m1Files,
++              tickCount: tickFiles.length,
++              tickTotalMb: Number((tickBytes / (1024 * 1024)).toFixed(2)),
++              tickFiles,
++              totalMb: pairTotalMb,
++              lastUpdated,
++              isActive: (cfg.symbol_key === pairName || cfg.symbol?.toUpperCase().includes(pairName))
++            });
++          }
++        }
++      } catch {}
++
+       const terminalDataDir = cfg.terminal_data_dir || "";
+       const customHistoryPath = terminalDataDir ? path.join(terminalDataDir, "bases", "Custom", "history") : "";
+       
+@@ -676,49 +753,67 @@ async function startServer() {
+         } catch {}
+       }
+ 
+-      const standardSymbols = [
+-        { key: "USDJPY", name: "USDJPY", customName: "USDJPY Dukascopy", category: "FX Major", pipSize: 0.01, digits: 3, fromDate: "2013.01.01", toDate: "2026.07.03", coverage: "Full 2013-2026 (Dukascopy)" },
+-        { key: "EURUSD", name: "EURUSD", customName: "EURUSD dukascopy", category: "FX Major", pipSize: 0.0001, digits: 5, fromDate: "2013.01.01", toDate: "2026.07.03", coverage: "Full 2013-2026 (Dukascopy)" },
+-        { key: "GBPUSD", name: "GBPUSD", customName: "GBPUSD dukascopy", category: "FX Major", pipSize: 0.0001, digits: 5, fromDate: "2013.01.01", toDate: "2026.07.03", coverage: "Full 2013-2026 (Dukascopy)" },
+-        { key: "EURJPY", name: "EURJPY", customName: "EURJPY Dukascopy", category: "FX Cross", pipSize: 0.01, digits: 3, fromDate: "2013.01.01", toDate: "2026.07.03", coverage: "Full 2013-2026 (Dukascopy)" },
+-        { key: "XAUUSD", name: "XAUUSD", customName: "XAUUSD dukascopy", category: "Commodities", pipSize: 0.10, digits: 2, fromDate: "2013.01.01", toDate: "2026.07.03", coverage: "Full 2013-2026 (Dukascopy)" },
+-        { key: "AUDUSD", name: "AUDUSD", customName: "AUDUSD dukascopy", category: "FX Major", pipSize: 0.0001, digits: 5, fromDate: "2013.01.01", toDate: "2026.07.03", coverage: "Full 2013-2026 (Dukascopy)" },
+-        { key: "NZDUSD", name: "NZDUSD", customName: "NZDUSD dukascopy", category: "FX Major", pipSize: 0.0001, digits: 5, fromDate: "2013.01.01", toDate: "2026.07.03", coverage: "Full 2013-2026 (Dukascopy)" },
+-        { key: "USDCAD", name: "USDCAD", customName: "USDCAD dukascopy", category: "FX Major", pipSize: 0.0001, digits: 5, fromDate: "2013.01.01", toDate: "2026.07.03", coverage: "Full 2013-2026 (Dukascopy)" },
+-        { key: "USDCHF", name: "USDCHF", customName: "USDCHF dukascopy", category: "FX Major", pipSize: 0.0001, digits: 5, fromDate: "2013.01.01", toDate: "2026.07.03", coverage: "Full 2013-2026 (Dukascopy)" },
+-        { key: "GBPJPY", name: "GBPJPY", customName: "GBPJPY dukascopy", category: "FX Cross", pipSize: 0.01, digits: 3, fromDate: "2013.01.01", toDate: "2026.07.03", coverage: "Full 2013-2026 (Dukascopy)" },
+-        { key: "AUDJPY", name: "AUDJPY", customName: "AUDJPY dukascopy", category: "FX Cross", pipSize: 0.01, digits: 3, fromDate: "2013.01.01", toDate: "2026.07.03", coverage: "Full 2013-2026 (Dukascopy)" },
+-        { key: "CADJPY", name: "CADJPY", customName: "CADJPY dukascopy", category: "FX Cross", pipSize: 0.01, digits: 3, fromDate: "2013.01.01", toDate: "2026.07.03", coverage: "Full 2013-2026 (Dukascopy)" },
+-        { key: "CHFJPY", name: "CHFJPY", customName: "CHFJPY dukascopy", category: "FX Cross", pipSize: 0.01, digits: 3, fromDate: "2013.01.01", toDate: "2026.07.03", coverage: "Full 2013-2026 (Dukascopy)" },
+-        { key: "EURGBP", name: "EURGBP", customName: "EURGBP dukascopy", category: "FX Cross", pipSize: 0.0001, digits: 5, fromDate: "2013.01.01", toDate: "2026.07.03", coverage: "Full 2013-2026 (Dukascopy)" },
+-        { key: "BTCUSD", name: "BTCUSD", customName: "BTCUSD", category: "Crypto", pipSize: 1.0, digits: 2, fromDate: "2018.01.01", toDate: "2026.07.03", coverage: "Broker Live / Custom" },
+-        { key: "US30", name: "US30", customName: "US30", category: "Indices", pipSize: 1.0, digits: 2, fromDate: "2020.01.01", toDate: "2026.07.03", coverage: "Broker Live / Custom" },
+-        { key: "NAS100", name: "NAS100", customName: "NAS100", category: "Indices", pipSize: 1.0, digits: 2, fromDate: "2020.01.01", toDate: "2026.07.03", coverage: "Broker Live / Custom" },
++      const popularPairs = [
++        "AUDJPY", "AUDUSD", "CHFJPY", "EURCAD", "EURCHF", "EURGBP", 
++        "EURJPY", "EURUSD", "GBPAUD", "GBPJPY", "GBPUSD", "NZDUSD", 
++        "USDCAD", "USDCHF", "USDJPY", "XAUUSD"
+       ];
+ 
+-      const symbolsWithStatus = standardSymbols.map(s => {
+-        const isInstalled = installedCustomSymbols.some(cs => cs.toLowerCase() === s.customName.toLowerCase() || cs.toLowerCase() === s.key.toLowerCase());
+-        return {
+-          ...s,
+-          installed: isInstalled || installedCustomSymbols.length === 0,
+-          installedName: installedCustomSymbols.find(cs => cs.toLowerCase() === s.customName.toLowerCase()) || s.customName,
+-          isActive: cfg.symbol === s.customName || cfg.symbol === s.name || cfg.symbol_key === s.key,
+-        };
+-      });
+-
+       res.json({
++        marketDataDir,
++        downloadedPairs: downloadedPairs.sort((a, b) => a.pair.localeCompare(b.pair)),
++        totalPairs: downloadedPairs.length,
++        totalMb: Number((totalBytes / (1024 * 1024)).toFixed(2)),
++        totalM1Files,
++        totalTickFiles,
+         terminalDataDir,
+         customHistoryPath,
+         installedCustomSymbols,
+         activeSymbol: cfg.symbol || "USDJPY Dukascopy",
+         activeSymbolKey: cfg.symbol_key || "USDJPY",
+-        symbols: symbolsWithStatus,
++        popularPairs
+       });
+     } catch (e: any) {
+       res.status(500).json({ error: e.message });
+     }
+   });
+ 
++  // Delete pair data in market_data/<pair>
++  app.delete("/api/market-data/pair/:pair", async (req, res) => {
++    try {
++      const pair = req.params.pair.toUpperCase();
++      const pairDir = path.join(process.cwd(), 'market_data', pair);
++      if (existsSync(pairDir)) {
++        await fs.rm(pairDir, { recursive: true, force: true });
++        res.json({ status: "ok", message: `Deleted market_data/${pair}` });
++      } else {
++        res.status(404).json({ status: "error", message: `Pair directory market_data/${pair} not found` });
++      }
++    } catch (e: any) {
++      res.status(500).json({ status: "error", message: e.message });
++    }
++  });
++
++  // Set active symbol in config.json
++  app.post("/api/market-data/set-active", async (req, res) => {
++    try {
++      const { symbol, symbolKey, pipSize } = req.body;
++      const configPath = path.join(process.cwd(), 'config.json');
++      let cfg: any = {};
++      if (existsSync(configPath)) {
++        cfg = JSON.parse(await fs.readFile(configPath, 'utf-8'));
++      }
++      if (symbol) cfg.symbol = symbol;
++      if (symbolKey) cfg.symbol_key = symbolKey;
++      if (pipSize) cfg.pip_size = pipSize;
++
++      await fs.writeFile(configPath, JSON.stringify(cfg, null, 2), 'utf-8');
++      res.json({ status: "ok", message: `Active symbol updated to ${cfg.symbol}`, config: cfg });
++    } catch (e: any) {
++      res.status(500).json({ status: "error", message: e.message });
++    }
++  });
++
+   // Researched Strategies Detailed Scanner
+   app.get("/api/researched-strategies", async (req, res) => {
+     try {
+diff --git a/src/components/MarketData.tsx b/src/components/MarketData.tsx
+index da5521e..6bf40d5 100644
+--- a/src/components/MarketData.tsx
++++ b/src/components/MarketData.tsx
+@@ -1,309 +1,646 @@
+-import { useState, useEffect } from 'react';
++import { useState, useEffect, useRef } from 'react';
+ import { Card, SectionHeader, Button } from './ui';
+ import { 
+-  Database, 
+   FolderTree, 
+-  CheckCircle2, 
+-  AlertTriangle, 
++  Download, 
++  Terminal, 
++  Trash2, 
+   RefreshCw, 
+-  Layers, 
++  HardDrive, 
+   Zap, 
+-  Search, 
+-  Check, 
++  CheckCircle2, 
++  Square, 
++  FileText,
++  Clock,
+   ExternalLink,
+-  ShieldCheck,
+-  Calendar,
+-  Sliders,
+-  Sparkles
++  ChevronRight,
++  Layers
+ } from 'lucide-react';
+ 
+-interface MarketSymbol {
+-  key: string;
+-  name: string;
+-  customName: string;
+-  category: string;
+-  pipSize: number;
+-  digits: number;
+-  fromDate: string;
+-  toDate: string;
+-  coverage: string;
+-  installed: boolean;
+-  installedName: string;
++interface DownloadedPair {
++  pair: string;
++  m1Count: number;
++  m1TotalMb: number;
++  m1Files: { name: string; sizeMb: number }[];
++  tickCount: number;
++  tickTotalMb: number;
++  tickFiles: { name: string; sizeMb: number }[];
++  totalMb: number;
++  lastUpdated: string;
+   isActive: boolean;
+ }
+ 
++interface MarketDataCatalog {
++  marketDataDir: string;
++  downloadedPairs: DownloadedPair[];
++  totalPairs: number;
++  totalMb: number;
++  totalM1Files: number;
++  totalTickFiles: number;
++  activeSymbol: string;
++  activeSymbolKey: string;
++  popularPairs: string[];
++}
++
+ export default function MarketData({ config, onUpdateConfig }: { config: any; onUpdateConfig?: (cfg: any) => void }) {
+-  const [symbols, setSymbols] = useState<MarketSymbol[]>([]);
+-  const [terminalDataDir, setTerminalDataDir] = useState<string>('');
+-  const [customHistoryPath, setCustomHistoryPath] = useState<string>('');
+-  const [installedCount, setInstalledCount] = useState<number>(0);
+-  const [activeSymbol, setActiveSymbol] = useState<string>(config?.symbol || 'USDJPY Dukascopy');
++  const [catalog, setCatalog] = useState<MarketDataCatalog | null>(null);
+   const [loading, setLoading] = useState(false);
+-  const [categoryFilter, setCategoryFilter] = useState<string>('All');
+-  const [searchQuery, setSearchQuery] = useState<string>('');
+-  const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
++  const [selectedPair, setSelectedPair] = useState<string>('AUDJPY');
++  const [customPair, setCustomPair] = useState<string>('');
++  const [dataType, setDataType] = useState<'both' | 'm1' | 'tick'>('both');
++  const [years, setYears] = useState<string>('2022-2024');
++  const [platform, setPlatform] = useState<'ASCII' | 'MT'>('ASCII');
++  const [autoExtract, setAutoExtract] = useState<boolean>(true);
+ 
+-  const fetchMarketData = async () => {
++  // Execution state
++  const [isRunning, setIsRunning] = useState<boolean>(false);
++  const [logs, setLogs] = useState<string[]>([]);
++  const [feedbackMsg, setFeedbackMsg] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
++
++  const eventSourceRef = useRef<EventSource | null>(null);
++  const logEndRef = useRef<HTMLDivElement | null>(null);
++
++  const fetchCatalog = async () => {
+     setLoading(true);
+     try {
+       const res = await fetch('/api/market-data');
+       if (res.ok) {
+         const data = await res.json();
+-        setSymbols(data.symbols || []);
+-        setTerminalDataDir(data.terminalDataDir || '');
+-        setCustomHistoryPath(data.customHistoryPath || '');
+-        setInstalledCount((data.installedCustomSymbols || []).length);
+-        if (data.activeSymbol) setActiveSymbol(data.activeSymbol);
++        setCatalog(data);
+       }
+     } catch (e) {
+-      console.error('Error fetching market data:', e);
++      console.error('Error fetching market data catalog:', e);
+     } finally {
+       setLoading(false);
+     }
+   };
+ 
+   useEffect(() => {
+-    fetchMarketData();
+-  }, [config]);
+-
+-  const handleSetActive = async (sym: MarketSymbol) => {
+-    const newConfig = {
+-      ...config,
+-      symbol: sym.customName,
+-      symbol_key: sym.key,
+-      pip_size: String(sym.pipSize),
++    fetchCatalog();
++    return () => {
++      if (eventSourceRef.current) {
++        eventSourceRef.current.close();
++      }
+     };
++  }, []);
++
++  useEffect(() => {
++    if (logEndRef.current) {
++      logEndRef.current.scrollIntoView({ behavior: 'smooth' });
++    }
++  }, [logs]);
++
++  const activePairName = customPair.trim() ? customPair.trim().toUpperCase() : selectedPair;
++
++  const handleStartDownload = () => {
++    if (!activePairName) {
++      setFeedbackMsg({ type: 'error', text: 'Please specify a currency pair or symbol (e.g. AUDJPY).' });
++      return;
++    }
++
++    if (isRunning) return;
++
++    setIsRunning(true);
++    setLogs([]);
++    setFeedbackMsg(null);
++
++    const args = [
++      '--pair', activePairName,
++      '--type', dataType,
++      '--years', years.trim() || '2023',
++      '--platform', platform
++    ];
++    if (!autoExtract) {
++      args.push('--no-extract');
++    }
++
++    const scriptUrl = `/api/run-stream?script=market_data_downloader.py&args=${encodeURIComponent(args.join(' '))}`;
++
++    if (eventSourceRef.current) {
++      eventSourceRef.current.close();
++    }
++
++    const es = new EventSource(scriptUrl);
++    eventSourceRef.current = es;
++
++    es.onmessage = (event) => {
++      try {
++        const payload = JSON.parse(event.data);
++        if (payload.text) {
++          setLogs((prev) => [...prev, payload.text]);
++        }
++        if (payload.done) {
++          es.close();
++          setIsRunning(false);
++          fetchCatalog();
++          setFeedbackMsg({
++            type: payload.code === 0 ? 'success' : 'error',
++            text: payload.code === 0 
++              ? `Successfully downloaded & organized ${activePairName} into market_data/${activePairName}`
++              : `Download completed with status code ${payload.code}`
++          });
++        }
++      } catch {
++        setLogs((prev) => [...prev, event.data]);
++      }
++    };
++
++    es.onerror = () => {
++      es.close();
++      setIsRunning(false);
++      fetchCatalog();
++    };
++  };
++
++  const handleStopDownload = async () => {
++    try {
++      await fetch('/api/stop', { method: 'POST' });
++      if (eventSourceRef.current) {
++        eventSourceRef.current.close();
++      }
++      setIsRunning(false);
++      setFeedbackMsg({ type: 'info', text: 'Download process stopped.' });
++      fetchCatalog();
++    } catch (e: any) {
++      console.error('Error stopping download:', e);
++    }
++  };
++
++  const handleDeletePair = async (pair: string) => {
++    if (!confirm(`Are you sure you want to delete all downloaded data for ${pair} in market_data/${pair}?`)) {
++      return;
++    }
++    try {
++      const res = await fetch(`/api/market-data/pair/${encodeURIComponent(pair)}`, {
++        method: 'DELETE'
++      });
++      if (res.ok) {
++        setFeedbackMsg({ type: 'success', text: `Deleted market_data/${pair}` });
++        fetchCatalog();
++      } else {
++        const err = await res.json();
++        setFeedbackMsg({ type: 'error', text: err.message || 'Failed deleting pair' });
++      }
++    } catch (e: any) {
++      setFeedbackMsg({ type: 'error', text: e.message });
++    }
++  };
++
++  const handleSetActive = async (pair: string) => {
++    const pairUpper = pair.toUpperCase();
++    const pip = (pairUpper.includes('JPY') || ['XAUUSD', 'US30', 'NAS100', 'BTCUSD'].includes(pairUpper))
++      ? (pairUpper === 'XAUUSD' ? '0.10' : ['US30', 'NAS100', 'BTCUSD'].includes(pairUpper) ? '1.0' : '0.01')
++      : '0.0001';
++
++    let customName = `${pairUpper} dukascopy`;
++    if (pairUpper === 'USDJPY') customName = 'USDJPY Dukascopy';
++    if (pairUpper === 'EURJPY') customName = 'EURJPY Dukascopy';
+ 
+     try {
+-      const res = await fetch('/api/config', {
++      const res = await fetch('/api/market-data/set-active', {
+         method: 'POST',
+         headers: { 'Content-Type': 'application/json' },
+-        body: JSON.stringify(newConfig),
++        body: JSON.stringify({
++          symbol: customName,
++          symbolKey: pairUpper,
++          pipSize: pip
++        })
+       });
+       if (res.ok) {
+-        setActiveSymbol(sym.customName);
+-        setSymbols(prev => prev.map(s => ({
+-          ...s,
+-          isActive: s.key === sym.key
+-        })));
+-        setFeedbackMsg(`✔ Active Symbol set to ${sym.customName} (Pip: ${sym.pipSize})`);
+-        setTimeout(() => setFeedbackMsg(null), 4000);
+-        if (onUpdateConfig) onUpdateConfig(newConfig);
++        const data = await res.json();
++        if (onUpdateConfig && data.config) {
++          onUpdateConfig(data.config);
++        }
++        setFeedbackMsg({
++          type: 'success',
++          text: `Active symbol set to: ${customName} (${pairUpper}) with pip size ${pip}`
++        });
++        fetchCatalog();
+       }
+-    } catch (e) {
+-      console.error(e);
++    } catch (e: any) {
++      setFeedbackMsg({ type: 'error', text: e.message });
+     }
+   };
+ 
+-  const filteredSymbols = symbols.filter(s => {
+-    const matchesCat = categoryFilter === 'All' || s.category === categoryFilter;
+-    const matchesSearch = s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+-                          s.customName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+-                          s.category.toLowerCase().includes(searchQuery.toLowerCase());
+-    return matchesCat && matchesSearch;
+-  });
+-
+-  const categories = ['All', 'FX Major', 'FX Cross', 'Commodities', 'Crypto', 'Indices'];
++  const popularPairsList = catalog?.popularPairs || [
++    'AUDJPY', 'AUDUSD', 'CHFJPY', 'EURCAD', 'EURCHF', 'EURGBP', 
++    'EURJPY', 'EURUSD', 'GBPAUD', 'GBPJPY', 'GBPUSD', 'NZDUSD', 
++    'USDCAD', 'USDCHF', 'USDJPY', 'XAUUSD'
++  ];
+ 
+   return (
+-    <div className="flex flex-col h-full space-y-4">
+-      <SectionHeader 
+-        title="🌐 Market Data & Symbol Manager" 
+-        subtitle="Inspect MT5 historical datasets, verify 2013-2026 Dukascopy coverage, and manage custom symbols" 
+-      />
++    <div className="space-y-6 pb-12">
++      {/* Header */}
++      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
++        <div>
++          <SectionHeader
++            title="Market Data & HistData Engine"
++            description="Download M1 (1-minute) and real tick quotes from HistData, organize into market_data/<PAIR>/ subfolders, and sync with AlphaForge."
++          />
++        </div>
++        <div className="flex items-center gap-3">
++          <Button
++            variant="outline"
++            size="sm"
++            onClick={fetchCatalog}
++            disabled={loading}
++            className="border-slate-800 text-slate-300 hover:text-white"
++          >
++            <RefreshCw className={`w-3.5 h-3.5 mr-2 ${loading ? 'animate-spin' : ''}`} />
++            Refresh Catalog
++          </Button>
++        </div>
++      </div>
+ 
+       {feedbackMsg && (
+-        <div className="p-3 bg-emerald-950/80 border border-emerald-600/50 rounded-lg text-emerald-300 text-xs font-semibold flex items-center justify-between">
++        <div className={`p-4 rounded-xl border flex items-center justify-between text-sm ${
++          feedbackMsg.type === 'success' ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' :
++          feedbackMsg.type === 'error' ? 'bg-red-500/10 border-red-500/30 text-red-400' :
++          'bg-blue-500/10 border-blue-500/30 text-blue-400'
++        }`}>
+           <div className="flex items-center gap-2">
+-            <CheckCircle2 size={16} />
+-            <span>{feedbackMsg}</span>
++            <CheckCircle2 className="w-4 h-4 shrink-0" />
++            <span>{feedbackMsg.text}</span>
+           </div>
+-          <span className="text-[11px] text-emerald-400 font-mono">config.json updated</span>
++          <button 
++            onClick={() => setFeedbackMsg(null)}
++            className="text-xs opacity-60 hover:opacity-100 ml-4 font-mono"
++          >
++            ✕
++          </button>
+         </div>
+       )}
+ 
+-      {/* Overview Status Cards */}
+-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+-        <Card className="p-4 bg-[#161f30] border border-[#2d3748]">
+-          <div className="flex items-center justify-between mb-2">
+-            <span className="text-[11px] font-semibold text-[#8b95a6] uppercase tracking-wider">
+-              MT5 Data Directory
+-            </span>
+-            <Database size={16} className="text-amber-400" />
++      {/* Top Metrics Cards */}
++      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
++        <Card className="p-4 bg-slate-900/60 border-slate-800/80">
++          <div className="flex items-center justify-between">
++            <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Local Storage</span>
++            <HardDrive className="w-4 h-4 text-amber-400" />
+           </div>
+-          <div className="text-xs font-mono text-gray-200 truncate select-all" title={terminalDataDir}>
+-            {terminalDataDir || 'Default Local Path'}
+-          </div>
+-          <div className="mt-2 flex items-center gap-2 text-[11px] text-emerald-400">
+-            <CheckCircle2 size={13} />
+-            <span>Terminal bases configured</span>
++          <div className="mt-2 flex items-baseline gap-2">
++            <span className="text-2xl font-bold text-white">{catalog?.totalPairs ?? 0}</span>
++            <span className="text-xs text-slate-400">Pairs ({catalog?.totalMb ?? 0} MB)</span>
+           </div>
++          <p className="mt-1 text-xs text-slate-500 font-mono truncate">market_data/</p>
+         </Card>
+ 
+-        <Card className="p-4 bg-[#161f30] border border-[#2d3748]">
+-          <div className="flex items-center justify-between mb-2">
+-            <span className="text-[11px] font-semibold text-[#8b95a6] uppercase tracking-wider">
+-              Custom Dukascopy Datasets
+-            </span>
+-            <Layers size={16} className="text-cyan-400" />
++        <Card className="p-4 bg-slate-900/60 border-slate-800/80">
++          <div className="flex items-center justify-between">
++            <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">M1 Datasets</span>
++            <Layers className="w-4 h-4 text-emerald-400" />
+           </div>
+-          <div className="text-xl font-bold text-white">
+-            {installedCount > 0 ? `${installedCount} Custom Symbols` : '17 Standard Datasets'}
+-          </div>
+-          <div className="mt-1 text-[11px] text-[#8b95a6] font-mono">
+-            Full 2013-2026 Dukascopy datasets
++          <div className="mt-2 flex items-baseline gap-2">
++            <span className="text-2xl font-bold text-emerald-400">{catalog?.totalM1Files ?? 0}</span>
++            <span className="text-xs text-slate-400">Files (1-Min Bars)</span>
+           </div>
++          <p className="mt-1 text-xs text-slate-500">Organized in /M1/ subfolders</p>
+         </Card>
+ 
+-        <Card className="p-4 bg-[#161f30] border border-[#2d3748]">
+-          <div className="flex items-center justify-between mb-2">
+-            <span className="text-[11px] font-semibold text-[#8b95a6] uppercase tracking-wider">
+-              Active Strategy Symbol
+-            </span>
+-            <Zap size={16} className="text-amber-400 fill-amber-400" />
++        <Card className="p-4 bg-slate-900/60 border-slate-800/80">
++          <div className="flex items-center justify-between">
++            <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Tick Datasets</span>
++            <Zap className="w-4 h-4 text-blue-400" />
+           </div>
+-          <div className="text-base font-bold text-amber-400 font-mono truncate">
+-            {activeSymbol}
++          <div className="mt-2 flex items-baseline gap-2">
++            <span className="text-2xl font-bold text-blue-400">{catalog?.totalTickFiles ?? 0}</span>
++            <span className="text-xs text-slate-400">Files (Tick Precision)</span>
+           </div>
+-          <div className="mt-1 text-[11px] text-gray-300">
+-            Pip Size: <span className="font-mono text-white">{config?.pip_size || '0.01'}</span> | Period: <span className="font-mono text-white">{config?.period || 'M15'}</span>
++          <p className="mt-1 text-xs text-slate-500">Organized in /TICK/ subfolders</p>
++        </Card>
++
++        <Card className="p-4 bg-slate-900/60 border-slate-800/80">
++          <div className="flex items-center justify-between">
++            <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Active Symbol</span>
++            <CheckCircle2 className="w-4 h-4 text-indigo-400" />
+           </div>
++          <div className="mt-2 flex items-baseline gap-2">
++            <span className="text-xl font-bold text-indigo-300 truncate">
++              {config?.symbol || catalog?.activeSymbol || 'USDJPY'}
++            </span>
++          </div>
++          <p className="mt-1 text-xs text-slate-500">Pip: {config?.pip_size || '0.01'} | {config?.period || 'M15'}</p>
+         </Card>
+       </div>
+ 
+-      {/* Symbol Table & Filter Card */}
+-      <Card className="p-0 border border-[#2d3748] bg-[#161f30] overflow-hidden">
+-        {/* Controls Bar */}
+-        <div className="p-4 border-b border-[#2d3748] bg-[#0f172a] flex flex-wrap items-center justify-between gap-3">
+-          {/* Category Filter Pills */}
+-          <div className="flex flex-wrap items-center gap-1.5">
+-            {categories.map(cat => (
++      {/* Downloader Form Card */}
++      <Card className="p-5 bg-slate-900/60 border-slate-800/80 space-y-5">
++        <div className="flex items-center justify-between border-b border-slate-800/80 pb-3">
++          <div className="flex items-center gap-2">
++            <Download className="w-4 h-4 text-amber-400" />
++            <h3 className="text-sm font-bold text-white uppercase tracking-wider">
++              Download HistData Quotes to market_data/
++            </h3>
++          </div>
++          <span className="text-xs text-slate-500 font-mono">
++            Output: market_data/{activePairName}/{dataType.toUpperCase()}/
++          </span>
++        </div>
++
++        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
++          {/* Pair Select */}
++          <div>
++            <label className="block text-xs font-semibold text-slate-400 mb-1.5">
++              Currency Pair / Symbol
++            </label>
++            <div className="space-y-2">
++              <select
++                value={selectedPair}
++                onChange={(e) => {
++                  setSelectedPair(e.target.value);
++                  setCustomPair('');
++                }}
++                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-amber-500/50"
++              >
++                {popularPairsList.map((p) => (
++                  <option key={p} value={p}>{p}</option>
++                ))}
++              </select>
++              <input
++                type="text"
++                placeholder="Or custom pair (e.g. AUDJPY)"
++                value={customPair}
++                onChange={(e) => setCustomPair(e.target.value.toUpperCase())}
++                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-300 placeholder:text-slate-600 focus:outline-none focus:border-amber-500/50"
++              />
++            </div>
++          </div>
++
++          {/* Data Type */}
++          <div>
++            <label className="block text-xs font-semibold text-slate-400 mb-1.5">
++              Data Resolution
++            </label>
++            <div className="grid grid-cols-3 gap-1.5 bg-slate-950 p-1 rounded-lg border border-slate-800">
++              <button
++                type="button"
++                onClick={() => setDataType('both')}
++                className={`py-1.5 text-xs font-medium rounded-md transition-all ${
++                  dataType === 'both' ? 'bg-amber-500 text-slate-950 font-bold shadow' : 'text-slate-400 hover:text-white'
++                }`}
++              >
++                Both
++              </button>
++              <button
++                type="button"
++                onClick={() => setDataType('m1')}
++                className={`py-1.5 text-xs font-medium rounded-md transition-all ${
++                  dataType === 'm1' ? 'bg-amber-500 text-slate-950 font-bold shadow' : 'text-slate-400 hover:text-white'
++                }`}
++              >
++                M1 Only
++              </button>
+               <button
+-                key={cat}
+-                onClick={() => setCategoryFilter(cat)}
+-                className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+-                  categoryFilter === cat
+-                    ? 'bg-amber-500 text-[#0a0e1a] font-bold shadow-xs'
+-                    : 'bg-[#1e293b] text-gray-300 hover:text-white hover:bg-[#334155]'
++                type="button"
++                onClick={() => setDataType('tick')}
++                className={`py-1.5 text-xs font-medium rounded-md transition-all ${
++                  dataType === 'tick' ? 'bg-amber-500 text-slate-950 font-bold shadow' : 'text-slate-400 hover:text-white'
+                 }`}
+               >
+-                {cat}
++                Tick Only
+               </button>
+-            ))}
++            </div>
++            <p className="mt-1.5 text-[11px] text-slate-500">
++              {dataType === 'both' && 'Downloads 1-min bars + monthly tick archives'}
++              {dataType === 'm1' && 'Downloads annual 1-minute historical bars'}
++              {dataType === 'tick' && 'Downloads high-resolution tick quote data'}
++            </p>
+           </div>
+ 
+-          {/* Search & Refresh */}
+-          <div className="flex items-center gap-2">
+-            <div className="relative">
+-              <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+-              <input
+-                type="text"
+-                placeholder="Search symbol..."
+-                value={searchQuery}
+-                onChange={e => setSearchQuery(e.target.value)}
+-                className="pl-8 pr-3 py-1.5 bg-[#1e293b] border border-[#2d3748] text-white text-xs rounded-lg focus:outline-none focus:border-amber-400 w-48"
+-              />
++          {/* Years Range */}
++          <div>
++            <label className="block text-xs font-semibold text-slate-400 mb-1.5">
++              Years Range
++            </label>
++            <input
++              type="text"
++              value={years}
++              onChange={(e) => setYears(e.target.value)}
++              placeholder="e.g. 2022-2024 or 2023"
++              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white font-mono focus:outline-none focus:border-amber-500/50"
++            />
++            <div className="flex gap-1.5 mt-2">
++              {['2023', '2022-2024', '2020-2024'].map((y) => (
++                <button
++                  key={y}
++                  type="button"
++                  onClick={() => setYears(y)}
++                  className="px-2 py-0.5 text-[10px] bg-slate-800 text-slate-400 hover:text-white rounded border border-slate-700 font-mono"
++                >
++                  {y}
++                </button>
++              ))}
++            </div>
++          </div>
++
++          {/* Format & Extract */}
++          <div>
++            <label className="block text-xs font-semibold text-slate-400 mb-1.5">
++              Platform & Unpacking
++            </label>
++            <div className="space-y-2">
++              <select
++                value={platform}
++                onChange={(e) => setPlatform(e.target.value as any)}
++                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-500/50"
++              >
++                <option value="ASCII">Generic ASCII (CSV format)</option>
++                <option value="MT">MetaTrader (MT format)</option>
++              </select>
++              <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer pt-0.5">
++                <input
++                  type="checkbox"
++                  checked={autoExtract}
++                  onChange={(e) => setAutoExtract(e.target.checked)}
++                  className="rounded border-slate-800 bg-slate-950 text-amber-500 focus:ring-0"
++                />
++                <span>Automatically unpack ZIP to CSV</span>
++              </label>
+             </div>
+-            <Button variant="secondary" onClick={fetchMarketData} disabled={loading} className="text-xs py-1.5 px-3">
+-              <RefreshCw size={13} className={loading ? 'animate-spin' : ''} /> Rescan
++          </div>
++        </div>
++
++        {/* Action Buttons */}
++        <div className="flex flex-wrap items-center gap-3 pt-2 border-t border-slate-800/80">
++          <Button
++            variant="default"
++            onClick={handleStartDownload}
++            disabled={isRunning}
++            className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold px-5"
++          >
++            <Download className="w-4 h-4 mr-2" />
++            {isRunning ? 'Downloading Data...' : `Download ${activePairName} Data`}
++          </Button>
++
++          {isRunning && (
++            <Button
++              variant="outline"
++              onClick={handleStopDownload}
++              className="border-red-500/40 text-red-400 hover:bg-red-500/10"
++            >
++              <Square className="w-4 h-4 mr-2" />
++              Stop Download
+             </Button>
++          )}
++
++          <Button
++            variant="outline"
++            onClick={() => handleSetActive(activePairName)}
++            className="border-blue-500/40 text-blue-400 hover:bg-blue-500/10 ml-auto"
++          >
++            <Zap className="w-4 h-4 mr-2" />
++            Set {activePairName} as Active EA Symbol
++          </Button>
++        </div>
++      </Card>
++
++      {/* Organised Pairs in market_data/ */}
++      <Card className="p-5 bg-slate-900/60 border-slate-800/80 space-y-4">
++        <div className="flex items-center justify-between border-b border-slate-800/80 pb-3">
++          <div className="flex items-center gap-2">
++            <FolderTree className="w-4 h-4 text-emerald-400" />
++            <h3 className="text-sm font-bold text-white uppercase tracking-wider">
++              Organised Datasets in market_data/
++            </h3>
+           </div>
++          <span className="text-xs text-slate-400">
++            {catalog?.downloadedPairs?.length || 0} Pairs Available
++          </span>
+         </div>
+ 
+-        {/* Symbols Table */}
+-        <div className="overflow-x-auto">
+-          <table className="w-full text-left text-xs">
+-            <thead className="bg-[#0b101d] text-[#8b95a6] uppercase text-[10px] tracking-wider border-b border-[#2d3748]">
+-              <tr>
+-                <th className="py-2.5 px-4">Market Symbol</th>
+-                <th className="py-2.5 px-3">Category</th>
+-                <th className="py-2.5 px-3">MT5 Custom Symbol</th>
+-                <th className="py-2.5 px-3">Historical Coverage</th>
+-                <th className="py-2.5 px-3 text-right">Pip Size</th>
+-                <th className="py-2.5 px-3">Status</th>
+-                <th className="py-2.5 px-4 text-center">Action</th>
+-              </tr>
+-            </thead>
+-            <tbody className="divide-y divide-[#243048]">
+-              {filteredSymbols.map((sym) => {
+-                const isSelected = sym.isActive || activeSymbol === sym.customName;
+-                return (
+-                  <tr 
+-                    key={sym.key} 
+-                    className={`hover:bg-[#1a2540]/60 transition-colors ${isSelected ? 'bg-amber-950/20' : ''}`}
+-                  >
+-                    <td className="py-3 px-4 font-mono font-bold text-white">
++        {(!catalog?.downloadedPairs || catalog.downloadedPairs.length === 0) ? (
++          <div className="py-10 text-center text-slate-500 text-sm">
++            <FolderTree className="w-8 h-8 mx-auto mb-2 opacity-40 text-slate-400" />
++            No pairs downloaded in <span className="font-mono text-slate-400">market_data/</span> yet.
++            <br />
++            Select a currency pair above (e.g. AUDJPY) and click "Download & Organise Data".
++          </div>
++        ) : (
++          <div className="overflow-x-auto">
++            <table className="w-full text-left text-xs">
++              <thead>
++                <tr className="border-b border-slate-800 text-slate-400 font-semibold uppercase tracking-wider">
++                  <th className="py-2.5 px-3">Pair Subfolder</th>
++                  <th className="py-2.5 px-3">M1 Bars</th>
++                  <th className="py-2.5 px-3">Tick Quotes</th>
++                  <th className="py-2.5 px-3">Total Disk Size</th>
++                  <th className="py-2.5 px-3">Last Updated</th>
++                  <th className="py-2.5 px-3 text-right">Actions</th>
++                </tr>
++              </thead>
++              <tbody className="divide-y divide-slate-800/50 text-slate-300">
++                {catalog.downloadedPairs.map((p) => (
++                  <tr key={p.pair} className="hover:bg-slate-800/30 transition-colors">
++                    <td className="py-3 px-3">
+                       <div className="flex items-center gap-2">
+-                        <span>{sym.key}</span>
+-                        {isSelected && (
+-                          <span className="text-[10px] font-semibold text-amber-300 bg-amber-900/60 border border-amber-500/40 px-1.5 py-0.2 rounded">
++                        <FolderTree className="w-4 h-4 text-amber-400" />
++                        <span className="font-bold text-white font-mono">{p.pair}</span>
++                        {p.isActive && (
++                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400 border border-blue-500/30 font-semibold">
+                             ACTIVE
+                           </span>
+                         )}
+                       </div>
+                     </td>
+-
+                     <td className="py-3 px-3">
+-                      <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-[#1e293b] text-cyan-300 border border-[#334155]">
+-                        {sym.category}
+-                      </span>
+-                    </td>
+-
+-                    <td className="py-3 px-3 font-mono text-gray-200">
+-                      {sym.customName}
++                      {p.m1Count > 0 ? (
++                        <div className="flex items-center gap-1.5">
++                          <span className="font-semibold text-emerald-400">{p.m1Count} files</span>
++                          <span className="text-slate-500">({p.m1TotalMb} MB)</span>
++                        </div>
++                      ) : (
++                        <span className="text-slate-600">—</span>
++                      )}
+                     </td>
+-
+-                    <td className="py-3 px-3 text-gray-300 flex items-center gap-1.5">
+-                      <Calendar size={13} className="text-amber-400 shrink-0" />
+-                      <span>{sym.coverage}</span>
++                    <td className="py-3 px-3">
++                      {p.tickCount > 0 ? (
++                        <div className="flex items-center gap-1.5">
++                          <span className="font-semibold text-blue-400">{p.tickCount} files</span>
++                          <span className="text-slate-500">({p.tickTotalMb} MB)</span>
++                        </div>
++                      ) : (
++                        <span className="text-slate-600">—</span>
++                      )}
+                     </td>
+-
+-                    <td className="py-3 px-3 text-right font-mono text-gray-200">
+-                      {sym.pipSize}
++                    <td className="py-3 px-3 font-mono text-emerald-400 font-semibold">
++                      {p.totalMb} MB
+                     </td>
+-
+-                    <td className="py-3 px-3">
+-                      <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-400 bg-emerald-950/60 border border-emerald-800/40 px-2 py-0.5 rounded">
+-                        <CheckCircle2 size={12} />
+-                        Complete 2013-2026
+-                      </span>
++                    <td className="py-3 px-3 text-slate-500 font-mono">
++                      {p.lastUpdated}
+                     </td>
+-
+-                    <td className="py-3 px-4 text-center">
+-                      {isSelected ? (
+-                        <span className="inline-flex items-center gap-1 text-xs text-amber-400 font-semibold">
+-                          <Check size={14} /> Active
+-                        </span>
+-                      ) : (
++                    <td className="py-3 px-3 text-right">
++                      <div className="flex items-center justify-end gap-2">
+                         <Button
+-                          variant="secondary"
+-                          onClick={() => handleSetActive(sym)}
+-                          className="text-xs py-1 px-3 hover:border-amber-400 hover:text-amber-300"
++                          variant="ghost"
++                          size="sm"
++                          onClick={() => handleSetActive(p.pair)}
++                          className="h-7 text-xs text-blue-400 hover:text-blue-300 hover:bg-blue-500/10"
+                         >
++                          <Zap className="w-3 h-3 mr-1" />
+                           Set Active
+                         </Button>
+-                      )}
++                        <Button
++                          variant="ghost"
++                          size="sm"
++                          onClick={() => handleDeletePair(p.pair)}
++                          className="h-7 text-xs text-red-400 hover:text-red-300 hover:bg-red-500/10"
++                        >
++                          <Trash2 className="w-3 h-3" />
++                        </Button>
++                      </div>
+                     </td>
+                   </tr>
+-                );
+-              })}
+-            </tbody>
+-          </table>
+-        </div>
++                ))}
++              </tbody>
++            </table>
++          </div>
++        )}
+       </Card>
+ 
+-      {/* Historical Data & Dukascopy Instructions Card */}
+-      <Card className="p-5 border border-[#2d3748] bg-[#161f30] space-y-3">
+-        <div className="flex items-center gap-2 font-bold text-white text-sm">
+-          <Sparkles size={18} className="text-amber-400" />
+-          About Dukascopy Historical Data in AlphaForge
++      {/* Terminal Live Output */}
++      <Card className="p-4 bg-slate-950 border-slate-800/80 font-mono text-xs">
++        <div className="flex items-center justify-between border-b border-slate-800 pb-2 mb-3">
++          <div className="flex items-center gap-2 text-slate-400">
++            <Terminal className="w-4 h-4 text-amber-400" />
++            <span className="font-semibold text-white">Live HistData Download Stream</span>
++            {isRunning && (
++              <span className="flex items-center gap-1 text-[10px] text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded-full border border-amber-500/20">
++                <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
++                STREAMING
++              </span>
++            )}
++          </div>
++          <button
++            onClick={() => setLogs([])}
++            className="text-[11px] text-slate-500 hover:text-slate-300 transition-colors"
++          >
++            Clear Terminal
++          </button>
++        </div>
++
++        <div className="max-h-64 overflow-y-auto space-y-1 text-slate-300 select-text">
++          {logs.length === 0 ? (
++            <div className="py-6 text-center text-slate-600">
++              Terminal idle. Launch a download above to view live progress logs and file organization.
++            </div>
++          ) : (
++            logs.map((line, idx) => (
++              <div 
++                key={idx} 
++                className={`whitespace-pre-wrap leading-relaxed ${
++                  line.includes('[SUCCESS]') || line.includes('[UNPACKED]') ? 'text-emerald-400 font-semibold' :
++                  line.includes('[ERROR]') ? 'text-red-400 font-semibold' :
++                  line.includes('[PAGE]') || line.includes('[DOWNLOAD]') ? 'text-amber-300' :
++                  line.includes('===') || line.includes('🚀') ? 'text-sky-300 font-bold' :
++                  'text-slate-300'
++                }`}
++              >
++                {line}
++              </div>
++            ))
++          )}
++          <div ref={logEndRef} />
+         </div>
+-        <p className="text-xs text-[#8b95a6] leading-relaxed">
+-          MT5 live broker accounts only provide short-term historical bars (often just the current year 2026). 
+-          AlphaForge solves this by using high-fidelity Dukascopy M1 tick data mapped directly to custom MT5 symbols 
+-          (such as <span className="font-mono text-amber-300">USDJPY Dukascopy</span> or <span className="font-mono text-amber-300">EURUSD dukascopy</span>). 
+-          This provides complete 2013-2026 tick history for institutional-grade backtesting, walk-forward analysis, and parameter optimization.
+-        </p>
+       </Card>
+     </div>
+   );
+-- 
+2.34.1
+
+
+From e9067916085f4401ae73c75331a34f2281bb9285 Mon Sep 17 00:00:00 2001
+From: VicMuli <victormuli100@gmail.com>
+Date: Tue, 27 Oct 2026 08:42:46 +0000
+Subject: [PATCH 3/3] fix(gui): support font parameter and resolve kwargs
+ collision in make_entry and UI helpers
+
+---
+ app.py | 53 ++++++++++++++++++++++++++++++++++++-----------------
+ 1 file changed, 36 insertions(+), 17 deletions(-)
+
+diff --git a/app.py b/app.py
+index a05737d..21a7eda 100644
+--- a/app.py
++++ b/app.py
+@@ -844,31 +844,50 @@ def make_card(parent, **kw) -> ctk.CTkFrame:
+ 
+ 
+ def make_label(parent, text, font=None, color=None, **kw) -> ctk.CTkLabel:
+-    return ctk.CTkLabel(parent, text=text, font=font or FB,
+-                        text_color=color or C["text"], **kw)
+-
+-
+-def make_btn(parent, text, cmd, color=None, hover=None, width=140, **kw) -> ctk.CTkButton:
+-    return ctk.CTkButton(parent, text=text, command=cmd, width=width,
+-                         fg_color=color or C["accent"],
+-                         hover_color=hover or "#d97706",
+-                         text_color="#0a0e1a", font=FH3, corner_radius=8, **kw)
++    cfg = {"font": font or FB, "text_color": color or C["text"]}
++    cfg.update(kw)
++    return ctk.CTkLabel(parent, text=text, **cfg)
++
++
++def make_btn(parent, text, cmd, color=None, hover=None, width=140, font=None, **kw) -> ctk.CTkButton:
++    cfg = {
++        "fg_color": color or C["accent"],
++        "hover_color": hover or "#d97706",
++        "text_color": "#0a0e1a",
++        "font": font or FH3,
++        "corner_radius": 8,
++    }
++    cfg.update(kw)
++    return ctk.CTkButton(parent, text=text, command=cmd, width=width, **cfg)
+ 
+ 
+-def make_entry(parent, placeholder="", width=240, show=None, **kw) -> ctk.CTkEntry:
+-    e = ctk.CTkEntry(parent, width=width, placeholder_text=placeholder,
+-                     fg_color=C["inp"], border_color=C["border"],
+-                     text_color=C["text"], font=FB, corner_radius=8, **kw)
++def make_entry(parent, placeholder="", width=240, show=None, font=None, **kw) -> ctk.CTkEntry:
++    cfg = {
++        "fg_color": C["inp"],
++        "border_color": C["border"],
++        "text_color": C["text"],
++        "font": font or FB,
++        "corner_radius": 8,
++    }
++    cfg.update(kw)
++    e = ctk.CTkEntry(parent, width=width, placeholder_text=placeholder, **cfg)
+     if show:
+         e.configure(show=show)
+     _add_context_menu(e, is_text=False)
+     return e
+ 
+ 
+-def make_log(parent, height=220, **kw) -> ctk.CTkTextbox:
+-    tb = ctk.CTkTextbox(parent, height=height, fg_color=C["sidebar"],
+-                        text_color="#a8d8a8", font=FMO, corner_radius=8,
+-                        border_width=1, border_color=C["border"], **kw)
++def make_log(parent, height=220, font=None, **kw) -> ctk.CTkTextbox:
++    cfg = {
++        "fg_color": C["sidebar"],
++        "text_color": "#a8d8a8",
++        "font": font or FMO,
++        "corner_radius": 8,
++        "border_width": 1,
++        "border_color": C["border"],
++    }
++    cfg.update(kw)
++    tb = ctk.CTkTextbox(parent, height=height, **cfg)
+     tb.configure(state="disabled")
+     _add_context_menu(tb, is_text=True)
+     return tb
+-- 
+2.34.1
+
