@@ -115,15 +115,17 @@ DEFAULT_CONFIG = {
 }
 
 NAV_ITEMS = [
-    ("🏠", "Dashboard",    "dashboard"),
-    ("🔬", "Research",     "research"),
-    ("⚙",  "Optimize",    "optimize"),
-    ("🎲", "Monte Carlo",  "montecarlo"),
-    ("📈", "Walk Forward", "walkforward"),
-    ("📋", "Full Backtest","fullbacktest"),
-    ("📦", "Portfolio",    "portfolio"),
-    ("🗂",  "Strategies",  "strategies"),
-    ("🔧", "Settings",     "settings"),
+    ("🏠", "Dashboard",         "dashboard"),
+    ("📊", "Strategy Screener", "screener"),
+    ("🌐", "Market Data",       "marketdata"),
+    ("🔬", "Research",          "research"),
+    ("⚙",  "Optimize",          "optimize"),
+    ("🎲", "Monte Carlo",       "montecarlo"),
+    ("📈", "Walk Forward",      "walkforward"),
+    ("📋", "Full Backtest",     "fullbacktest"),
+    ("📦", "Portfolio",         "portfolio"),
+    ("🗂",  "Strategies",       "strategies"),
+    ("🔧", "Settings",          "settings"),
 ]
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1232,6 +1234,648 @@ class DashboardPanel(BasePanel):
                             pass
                 self._recent_box.insert("end", f"    • {p_name}{c_info}\n")
         self._recent_box.configure(state="disabled")
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Strategy Screener Panel
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class StrategyScreenerPanel(BasePanel):
+    def __init__(self, parent, app):
+        super().__init__(parent, app)
+        self.columnconfigure(0, weight=1)
+        self._pair_vars = {}
+        self._results = []
+        self._build()
+
+    def _build(self):
+        pad = dict(padx=32, pady=(24, 0))
+        make_section_header(self, "📊  Strategy Screener",
+            "Batch-screen and compare EA performance across multiple currency pairs & market symbols"
+        ).grid(row=0, column=0, sticky="ew", **pad)
+
+        cfg = self.cfg
+        card = make_card(self)
+        card.grid(row=1, column=0, sticky="ew", padx=32, pady=(16, 0))
+        card.columnconfigure(1, weight=1)
+
+        # Row 0: Strategy / EA selector, Timeframe, Deposit
+        r0 = ctk.CTkFrame(card, fg_color="transparent")
+        r0.grid(row=0, column=0, columnspan=2, sticky="ew", padx=20, pady=(16, 8))
+
+        make_label(r0, "Strategy / EA", font=FB, color=C["sub"]).pack(side="left", padx=(0, 8))
+        available_eas = get_available_eas(cfg)
+        self._ea_var = ctk.StringVar(value=cfg.get("active_ea", "TRB"))
+        self._ea_cb = ctk.CTkComboBox(r0, values=available_eas or ["TRB"], variable=self._ea_var,
+                                      width=160, font=FB, fg_color=C["inp"],
+                                      border_color=C["border"], button_color=C["accent"],
+                                      command=lambda _: self._load_screener_results())
+        self._ea_cb.pack(side="left", padx=(0, 20))
+
+        make_label(r0, "Timeframe", font=FB, color=C["sub"]).pack(side="left", padx=(0, 8))
+        self._period_var = ctk.StringVar(value=cfg.get("period", "M15"))
+        self._period_cb = ctk.CTkComboBox(r0, values=["M1", "M5", "M15", "M30", "H1", "H4", "D1"],
+                                          variable=self._period_var, width=100, font=FB,
+                                          fg_color=C["inp"], border_color=C["border"], button_color=C["accent"])
+        self._period_cb.pack(side="left", padx=(0, 20))
+
+        make_label(r0, "Deposit ($)", font=FB, color=C["sub"]).pack(side="left", padx=(0, 8))
+        self._dep_var = make_entry(r0, width=90)
+        self._dep_var.insert(0, cfg.get("deposit", "2500"))
+        self._dep_var.pack(side="left")
+
+        # Row 1: Date Range
+        r1 = ctk.CTkFrame(card, fg_color="transparent")
+        r1.grid(row=1, column=0, columnspan=2, sticky="ew", padx=20, pady=(4, 10))
+
+        make_label(r1, "From Date", font=FB, color=C["sub"]).pack(side="left", padx=(0, 8))
+        self._from_var = make_entry(r1, width=120)
+        self._from_var.insert(0, cfg.get("train_from", "2013.01.01") or "2013.01.01")
+        self._from_var.pack(side="left", padx=(0, 20))
+
+        make_label(r1, "To Date", font=FB, color=C["sub"]).pack(side="left", padx=(0, 8))
+        self._to_var = make_entry(r1, width=120)
+        self._to_var.insert(0, cfg.get("holdout_to", "2026.07.03") or "2026.07.03")
+        self._to_var.pack(side="left", padx=(0, 20))
+
+        make_label(r1, "Note: '2013-2026' auto-splits and normalizes", font=FSM, color=C["sub"]).pack(side="left")
+
+        # Row 2: Pairs Checklist & Quick Selectors
+        r2 = ctk.CTkFrame(card, fg_color="#1a202c", corner_radius=8)
+        r2.grid(row=2, column=0, columnspan=2, sticky="ew", padx=20, pady=(6, 12))
+
+        r2_top = ctk.CTkFrame(r2, fg_color="transparent")
+        r2_top.pack(fill="x", padx=12, pady=(10, 6))
+
+        make_label(r2_top, "Select Pairs to Screen:", font=FB, color=C["text"]).pack(side="left")
+
+        btn_box = ctk.CTkFrame(r2_top, fg_color="transparent")
+        btn_box.pack(side="right")
+        make_btn(btn_box, "+ Majors", self._select_majors, color=C["card"], hover=C["hover"], width=80).pack(side="left", padx=2)
+        make_btn(btn_box, "+ Crosses", self._select_crosses, color=C["card"], hover=C["hover"], width=85).pack(side="left", padx=2)
+        make_btn(btn_box, "Select All", self._select_all_pairs, color=C["card"], hover=C["hover"], width=85).pack(side="left", padx=2)
+        make_btn(btn_box, "Clear", self._clear_pairs, color=C["card"], hover=C["hover"], width=65).pack(side="left", padx=2)
+
+        # Checkboxes container
+        self._pairs_frame = ctk.CTkFrame(r2, fg_color="transparent")
+        self._pairs_frame.pack(fill="x", padx=12, pady=(2, 10))
+
+        STANDARD_PAIRS = ["USDJPY", "EURUSD", "GBPUSD", "EURJPY", "XAUUSD", "AUDUSD", "NZDUSD", "USDCAD", "USDCHF", "GBPJPY", "AUDJPY", "CADJPY"]
+        for idx, p in enumerate(STANDARD_PAIRS):
+            row_idx = idx // 6
+            col_idx = idx % 6
+            v = ctk.BooleanVar(value=True if p in ("USDJPY", "EURUSD", "EURJPY", "GBPUSD", "XAUUSD", "AUDUSD") else False)
+            self._pair_vars[p] = v
+            cb = ctk.CTkCheckBox(self._pairs_frame, text=p, variable=v, font=FB,
+                                 fg_color=C["accent"], hover_color=C["hover"],
+                                 border_color=C["border"], text_color=C["text"])
+            cb.grid(row=row_idx, column=col_idx, sticky="w", padx=8, pady=4)
+
+        # Custom pair entry
+        custom_row = ctk.CTkFrame(r2, fg_color="transparent")
+        custom_row.pack(fill="x", padx=12, pady=(4, 10))
+        make_label(custom_row, "Add Custom Symbol:", font=FSM, color=C["sub"]).pack(side="left", padx=(0, 8))
+        self._custom_sym_entry = make_entry(custom_row, placeholder="e.g. BTCUSD, US30, EURGBP", width=180)
+        self._custom_sym_entry.pack(side="left", padx=(0, 8))
+        make_btn(custom_row, "Add", self._add_custom_pair, color=C["card"], hover=C["hover"], width=70).pack(side="left")
+
+        # Row 3: Action Buttons
+        r3 = ctk.CTkFrame(card, fg_color="transparent")
+        r3.grid(row=3, column=0, columnspan=2, sticky="ew", padx=20, pady=(8, 16))
+        make_btn(r3, "▶  Run Strategy Screener", self._run_screener, width=220).pack(side="left")
+        make_btn(r3, "⟳ Refresh Results", self._load_screener_results, color=C["card"], hover=C["hover"], width=140).pack(side="left", padx=(10, 0))
+        make_btn(r3, "📂 Open Screener Folder", self._open_screener_folder, color=C["card"], hover=C["hover"], width=170).pack(side="left", padx=(10, 0))
+
+        # ── Results Leaderboard Card ──────────────────────────────────────────
+        res_card = make_card(self)
+        res_card.grid(row=2, column=0, sticky="ew", padx=32, pady=(16, 0))
+        res_card.columnconfigure(0, weight=1)
+
+        res_hdr = ctk.CTkFrame(res_card, fg_color="transparent")
+        res_hdr.grid(row=0, column=0, sticky="ew", padx=16, pady=(12, 4))
+        make_label(res_hdr, "Screener Leaderboard", font=FH3, color=C["sub"]).pack(side="left")
+        self._lbl_summary_stats = make_label(res_hdr, "Ready to screen pairs", font=FSM, color=C["accent"])
+        self._lbl_summary_stats.pack(side="right")
+
+        # Table container
+        self._table_frame = ctk.CTkScrollableFrame(res_card, height=180, fg_color="#0a0f1d")
+        self._table_frame.grid(row=1, column=0, sticky="ew", padx=16, pady=(4, 16))
+        self._table_frame.columnconfigure((0, 1, 2, 3, 4, 5, 6, 7), weight=1)
+
+        # Header row
+        hdrs = ["Symbol", "MT5 Symbol", "Status", "Net Profit ($)", "Return %", "PF", "Max DD %", "Trades"]
+        for ci, h in enumerate(hdrs):
+            ctk.CTkLabel(self._table_frame, text=h, font=ctk.CTkFont("Segoe UI", 10, "bold"),
+                         text_color=C["sub"], anchor="w" if ci < 2 else "e").grid(row=0, column=ci, sticky="ew", padx=6, pady=4)
+
+        # ── Live Output Log ───────────────────────────────────────────────────
+        log_card = make_card(self)
+        log_card.grid(row=3, column=0, sticky="nsew", padx=32, pady=(16, 24))
+        log_card.columnconfigure(0, weight=1)
+        self.rowconfigure(3, weight=1)
+        make_label(log_card, "Live Screener Output", font=FH3, color=C["sub"]).grid(
+            row=0, column=0, sticky="w", padx=16, pady=(12, 4))
+        self._log = make_log(log_card, height=200)
+        self._log.grid(row=1, column=0, sticky="nsew", padx=16, pady=(0, 16))
+
+        self._load_screener_results()
+
+    def _select_majors(self):
+        majors = {"EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD"}
+        for p, v in self._pair_vars.items():
+            if p in majors:
+                v.set(True)
+
+    def _select_crosses(self):
+        crosses = {"EURJPY", "GBPJPY", "EURGBP", "EURAUD", "AUDJPY", "CADJPY"}
+        for p, v in self._pair_vars.items():
+            if p in crosses:
+                v.set(True)
+
+    def _select_all_pairs(self):
+        for v in self._pair_vars.values():
+            v.set(True)
+
+    def _clear_pairs(self):
+        for v in self._pair_vars.values():
+            v.set(False)
+
+    def _add_custom_pair(self):
+        sym = self._custom_sym_entry.get().strip().upper()
+        if sym and sym not in self._pair_vars:
+            v = ctk.BooleanVar(value=True)
+            self._pair_vars[sym] = v
+            idx = len(self._pair_vars) - 1
+            cb = ctk.CTkCheckBox(self._pairs_frame, text=sym, variable=v, font=FB,
+                                 fg_color=C["accent"], hover_color=C["hover"],
+                                 border_color=C["border"], text_color=C["text"])
+            cb.grid(row=idx // 6, column=idx % 6, sticky="w", padx=8, pady=4)
+            self._custom_sym_entry.delete(0, "end")
+
+    def _run_screener(self):
+        selected = [p for p, v in self._pair_vars.items() if v.get()]
+        if not selected:
+            messagebox.showwarning("Missing Pairs", "Please select at least one currency pair or symbol.")
+            return
+
+        ea = self._ea_var.get().strip()
+        period = self._period_var.get().strip() or "M15"
+        dep = self._dep_var.get().strip() or "2500"
+
+        raw_from = self._from_var.get().strip() or "2013.01.01"
+        raw_to = self._to_var.get().strip() or "2026.07.03"
+
+        for sep in [" to ", " - ", " -> ", ".."]:
+            if sep in raw_from:
+                parts = raw_from.split(sep)
+                raw_from = parts[0].strip()
+                raw_to = parts[1].strip()
+                break
+        else:
+            m_range = re.match(r"^(\d{4})\s*[-/]\s*(\d{4})$", raw_from)
+            if m_range:
+                raw_from = m_range.group(1)
+                raw_to = m_range.group(2)
+
+        norm_from = normalize_mt5_date(raw_from, default="2013.01.01", is_end=False)
+        norm_to = normalize_mt5_date(raw_to, default="2026.07.03", is_end=True)
+
+        self._from_var.delete(0, "end")
+        self._from_var.insert(0, norm_from)
+        self._to_var.delete(0, "end")
+        self._to_var.insert(0, norm_to)
+
+        symbols_str = ",".join(selected)
+
+        env_extra = {
+            "AF_ACTIVE_EA": ea,
+            "AF_SYMBOLS":   symbols_str,
+            "AF_PERIOD":    period,
+            "AF_BT_START":  norm_from,
+            "AF_BT_END":    norm_to,
+            "AF_DEPOSIT":   dep,
+        }
+
+        self.log_clear(self._log)
+        def on_done():
+            self._load_screener_results()
+
+        self.run_script("run_screener.py", self._log, env_extra=env_extra, on_done=on_done)
+
+    def _load_screener_results(self):
+        ea = self._ea_var.get().strip() if hasattr(self, "_ea_var") else "TRB"
+        manifest_path = SCRIPT_DIR / "researched_strategies" / ea / "screener" / "screener_manifest.json"
+
+        # Clear existing rows except header
+        for widget in self._table_frame.winfo_children():
+            info = widget.grid_info()
+            if info.get("row", 0) > 0:
+                widget.destroy()
+
+        if not manifest_path.exists():
+            lbl = ctk.CTkLabel(self._table_frame, text="No screener results yet. Click 'Run Strategy Screener' to test.",
+                               font=FB, text_color=C["sub"])
+            lbl.grid(row=1, column=0, columnspan=8, pady=20)
+            if hasattr(self, "_lbl_summary_stats"):
+                self._lbl_summary_stats.configure(text="No results")
+            return
+
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            results = data.get("results", [])
+            if not results:
+                return
+
+            sorted_res = sorted(results, key=lambda x: x.get("net_profit", 0), reverse=True)
+            profitable = [r for r in sorted_res if r.get("net_profit", 0) > 0]
+
+            if hasattr(self, "_lbl_summary_stats"):
+                self._lbl_summary_stats.configure(
+                    text=f"Screened: {len(sorted_res)} Pairs | Profitable: {len(profitable)} ({len(profitable)*100//len(sorted_res)}%)"
+                )
+
+            for ri, r in enumerate(sorted_res, 1):
+                sym = r.get("symbol", "")
+                res_sym = r.get("resolved_symbol", sym)
+                status = r.get("status", "Completed")
+                net_p = r.get("net_profit", 0.0)
+                pct = r.get("profit_pct", 0.0)
+                pf = r.get("profit_factor", 0.0)
+                dd = r.get("max_dd_pct", 0.0)
+                trades = r.get("total_trades", 0)
+
+                p_col = C["success"] if net_p > 0 else (C["danger"] if net_p < 0 else C["sub"])
+
+                ctk.CTkLabel(self._table_frame, text=sym, font=ctk.CTkFont("Segoe UI", 11, "bold"),
+                             text_color=C["text"], anchor="w").grid(row=ri, column=0, sticky="ew", padx=6, pady=3)
+                ctk.CTkLabel(self._table_frame, text=res_sym, font=FMO, text_color=C["sub"], anchor="w").grid(row=ri, column=1, sticky="ew", padx=6, pady=3)
+                ctk.CTkLabel(self._table_frame, text=status, font=FSM, text_color=p_col, anchor="e").grid(row=ri, column=2, sticky="ew", padx=6, pady=3)
+                ctk.CTkLabel(self._table_frame, text=f"${net_p:,.2f}", font=FMO, text_color=p_col, anchor="e").grid(row=ri, column=3, sticky="ew", padx=6, pady=3)
+                ctk.CTkLabel(self._table_frame, text=f"{pct:.1f}%", font=FMO, text_color=p_col, anchor="e").grid(row=ri, column=4, sticky="ew", padx=6, pady=3)
+                ctk.CTkLabel(self._table_frame, text=f"{pf:.2f}" if pf > 0 else "-", font=FMO, text_color=C["text"], anchor="e").grid(row=ri, column=5, sticky="ew", padx=6, pady=3)
+                ctk.CTkLabel(self._table_frame, text=f"{dd:.1f}%" if dd > 0 else "-", font=FMO, text_color=C["accent"], anchor="e").grid(row=ri, column=6, sticky="ew", padx=6, pady=3)
+                ctk.CTkLabel(self._table_frame, text=str(trades), font=FMO, text_color=C["text"], anchor="e").grid(row=ri, column=7, sticky="ew", padx=6, pady=3)
+
+        except Exception as e:
+            print(f"Error loading screener results: {e}")
+
+    def _open_screener_folder(self):
+        ea = self._ea_var.get().strip() if hasattr(self, "_ea_var") else "TRB"
+        screener_path = SCRIPT_DIR / "researched_strategies" / ea / "screener"
+        screener_path.mkdir(parents=True, exist_ok=True)
+        self._open_file_safely(screener_path)
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Market Data Panel
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class MarketDataPanel(BasePanel):
+    def __init__(self, parent, app):
+        super().__init__(parent, app)
+        self.columnconfigure(0, weight=1)
+        self._market_data_dir = SCRIPT_DIR / "market_data"
+        self._market_data_dir.mkdir(parents=True, exist_ok=True)
+        self._build()
+
+    def _build(self):
+        pad = dict(padx=32, pady=(24, 0))
+        make_section_header(self, "🌐  Market Data — HistData M1 & Tick Engine",
+            "Download M1 (1-minute) and Tick data directly from HistData, organize into market_data/<PAIR>/ subfolders, and configure active symbols"
+        ).grid(row=0, column=0, sticky="ew", **pad)
+
+        cfg = self.cfg
+
+        # ── 1. Top Metrics Cards ─────────────────────────────────────────────
+        top_card = make_card(self)
+        top_card.grid(row=1, column=0, sticky="ew", padx=32, pady=(16, 0))
+        top_card.columnconfigure((0, 1, 2), weight=1)
+
+        # Box 1: Local market_data/ repository
+        b1 = ctk.CTkFrame(top_card, fg_color="#1a202c", corner_radius=8)
+        b1.grid(row=0, column=0, sticky="nsew", padx=(16, 8), pady=16)
+        make_label(b1, "Local market_data Storage", font=FB, color=C["sub"]).pack(anchor="w", padx=12, pady=(10, 2))
+        self._lbl_repo_pairs = ctk.CTkLabel(b1, text="0 Pairs Stored", font=FH2, text_color=C["accent"])
+        self._lbl_repo_pairs.pack(anchor="w", padx=12)
+        self._lbl_repo_sub = make_label(b1, "Path: market_data/ (Organized by pair)", font=FSM, color=C["sub"])
+        self._lbl_repo_sub.pack(anchor="w", padx=12, pady=(4, 10))
+
+        # Box 2: Downloader Engine Status
+        b2 = ctk.CTkFrame(top_card, fg_color="#1a202c", corner_radius=8)
+        b2.grid(row=0, column=1, sticky="nsew", padx=8, pady=16)
+        make_label(b2, "HistData Downloader Engine", font=FB, color=C["sub"]).pack(anchor="w", padx=12, pady=(10, 2))
+        self._lbl_dl_status = ctk.CTkLabel(b2, text="● Engine Idle / Ready", font=FH2, text_color=C["success"])
+        self._lbl_dl_status.pack(anchor="w", padx=12)
+        make_label(b2, "Direct M1 Bars & Tick Archives (CSV / MT)", font=FSM, color=C["sub"]).pack(anchor="w", padx=12, pady=(4, 10))
+
+        # Box 3: Active AlphaForge Symbol
+        b3 = ctk.CTkFrame(top_card, fg_color="#1a202c", corner_radius=8)
+        b3.grid(row=0, column=2, sticky="nsew", padx=(8, 16), pady=16)
+        make_label(b3, "Active AlphaForge Symbol", font=FB, color=C["sub"]).pack(anchor="w", padx=12, pady=(10, 2))
+        active_sym = cfg.get("symbol", "USDJPY Dukascopy")
+        self._lbl_active_sym = ctk.CTkLabel(b3, text=active_sym, font=FH2, text_color=C["blue"])
+        self._lbl_active_sym.pack(anchor="w", padx=12)
+        self._lbl_active_sub = make_label(b3, f"Pip: {cfg.get('pip_size', '0.01')} | Period: {cfg.get('period', 'M15')}", font=FSM, color=C["sub"])
+        self._lbl_active_sub.pack(anchor="w", padx=12, pady=(4, 10))
+
+        # ── 2. Download & Organize Controls Card ─────────────────────────────
+        dl_card = make_card(self)
+        dl_card.grid(row=2, column=0, sticky="ew", padx=32, pady=(16, 0))
+        dl_card.columnconfigure(0, weight=1)
+
+        dl_hdr = ctk.CTkFrame(dl_card, fg_color="transparent")
+        dl_hdr.grid(row=0, column=0, sticky="ew", padx=16, pady=(12, 6))
+        make_label(dl_hdr, "📥 Download HistData M1 & Tick Quotes", font=FH3, color=C["sub"]).pack(side="left")
+
+        form_f = ctk.CTkFrame(dl_card, fg_color="transparent")
+        form_f.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 10))
+        form_f.columnconfigure((0, 1, 2, 3), weight=1)
+
+        # Col 0: Pair selection
+        col0 = ctk.CTkFrame(form_f, fg_color="transparent")
+        col0.grid(row=0, column=0, sticky="nsew", padx=6, pady=4)
+        make_label(col0, "Currency Pair / Symbol:", font=FB, color=C["sub"]).pack(anchor="w")
+        self._popular_pairs = [
+            "AUDJPY", "AUDUSD", "CHFJPY", "EURCAD", "EURCHF", "EURGBP",
+            "EURJPY", "EURUSD", "GBPAUD", "GBPJPY", "GBPUSD", "NZDUSD",
+            "USDCAD", "USDCHF", "USDJPY", "XAUUSD"
+        ]
+        self._pair_combo = ctk.CTkComboBox(col0, values=self._popular_pairs, width=170, font=FB)
+        self._pair_combo.set("AUDJPY")
+        self._pair_combo.pack(anchor="w", pady=(4, 0))
+
+        # Col 1: Data Type selection (M1 vs Tick vs Both)
+        col1 = ctk.CTkFrame(form_f, fg_color="transparent")
+        col1.grid(row=0, column=1, sticky="nsew", padx=6, pady=4)
+        make_label(col1, "Data Resolution:", font=FB, color=C["sub"]).pack(anchor="w")
+        self._type_seg = ctk.CTkSegmentedButton(col1, values=["Both (M1+Tick)", "M1 Only", "Tick Only"],
+                                               command=self._on_type_change, font=FSM)
+        self._type_seg.set("Both (M1+Tick)")
+        self._type_seg.pack(anchor="w", pady=(4, 0))
+
+        # Col 2: Years Range
+        col2 = ctk.CTkFrame(form_f, fg_color="transparent")
+        col2.grid(row=0, column=2, sticky="nsew", padx=6, pady=4)
+        make_label(col2, "Years (e.g. 2021-2024 or 2023):", font=FB, color=C["sub"]).pack(anchor="w")
+        self._years_entry = make_entry(col2, width=160, font=FMO)
+        self._years_entry.insert(0, "2022-2024")
+        self._years_entry.pack(anchor="w", pady=(4, 0))
+
+        # Col 3: Format & Auto-extract
+        col3 = ctk.CTkFrame(form_f, fg_color="transparent")
+        col3.grid(row=0, column=3, sticky="nsew", padx=6, pady=4)
+        make_label(col3, "Format & Extraction:", font=FB, color=C["sub"]).pack(anchor="w")
+        opts_row = ctk.CTkFrame(col3, fg_color="transparent")
+        opts_row.pack(anchor="w", pady=(4, 0))
+        self._extract_var = ctk.BooleanVar(value=True)
+        ctk.CTkCheckBox(opts_row, text="Unpack to CSV", variable=self._extract_var,
+                        font=FSM, fg_color=C["accent"]).pack(side="left")
+        self._platform_combo = ctk.CTkComboBox(opts_row, values=["ASCII (Generic)", "MT (MetaTrader)"],
+                                              width=140, font=FSM)
+        self._platform_combo.set("ASCII (Generic)")
+        self._platform_combo.pack(side="left", padx=(10, 0))
+
+        # Action Buttons Row
+        btn_bar = ctk.CTkFrame(dl_card, fg_color="transparent")
+        btn_bar.grid(row=2, column=0, sticky="ew", padx=16, pady=(6, 16))
+        
+        self._btn_download = make_btn(btn_bar, "📥 Download & Organise Data", self._start_download,
+                                      color=C["accent"], hover=C["hover"], width=230)
+        self._btn_download.pack(side="left")
+
+        self._btn_stop = make_btn(btn_bar, "⏹ Stop", self._stop_download,
+                                  color=C["danger"], hover=C["hover"], width=90)
+        self._btn_stop.pack(side="left", padx=(10, 0))
+
+        make_btn(btn_bar, "📁 Open market_data Folder", self._open_market_data_dir,
+                 color=C["card"], hover=C["hover"], width=200).pack(side="left", padx=(10, 0))
+
+        make_btn(btn_bar, "⚡ Set Selected as Active EA Symbol", self._set_selected_as_active,
+                 color=C["blue"], hover=C["hover"], width=250).pack(side="left", padx=(10, 0))
+
+        # ── 3. Organised market_data/ Datasets Table ──────────────────────────
+        table_card = make_card(self)
+        table_card.grid(row=3, column=0, sticky="ew", padx=32, pady=(16, 0))
+        table_card.columnconfigure(0, weight=1)
+
+        t_hdr = ctk.CTkFrame(table_card, fg_color="transparent")
+        t_hdr.grid(row=0, column=0, sticky="ew", padx=16, pady=(12, 6))
+        make_label(t_hdr, "Organised Pairs in market_data/ Directory", font=FH3, color=C["sub"]).pack(side="left")
+        make_btn(t_hdr, "⟳ Refresh Catalog", self._refresh_catalog, color=C["card"], hover=C["hover"], width=130).pack(side="right")
+
+        self._catalog_frame = ctk.CTkScrollableFrame(table_card, height=190, fg_color="#0a0f1d")
+        self._catalog_frame.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 16))
+        self._catalog_frame.columnconfigure((0, 1, 2, 3, 4, 5), weight=1)
+
+        # ── 4. Live Output Terminal ──────────────────────────────────────────
+        log_card = make_card(self)
+        log_card.grid(row=4, column=0, sticky="nsew", padx=32, pady=(16, 24))
+        log_card.columnconfigure(0, weight=1)
+        self.rowconfigure(4, weight=1)
+
+        l_hdr = ctk.CTkFrame(log_card, fg_color="transparent")
+        l_hdr.grid(row=0, column=0, sticky="ew", padx=16, pady=(12, 4))
+        make_label(l_hdr, "Market Data Download Terminal Output", font=FH3, color=C["sub"]).pack(side="left")
+        make_btn(l_hdr, "Clear Log", lambda: self.log_clear(self._log), color=C["card"], hover=C["hover"], width=90).pack(side="right")
+
+        self._log = make_log(log_card, height=180)
+        self._log.grid(row=1, column=0, sticky="nsew", padx=16, pady=(0, 16))
+
+        self._refresh_catalog()
+
+    def _on_type_change(self, val):
+        pass
+
+    def _start_download(self):
+        pair = self._pair_combo.get().strip().upper()
+        if not pair:
+            messagebox.showwarning("Missing Pair", "Please select or enter a currency pair (e.g. AUDJPY).")
+            return
+
+        type_map = {
+            "Both (M1+Tick)": "both",
+            "M1 Only": "m1",
+            "Tick Only": "tick"
+        }
+        data_type = type_map.get(self._type_seg.get(), "both")
+        years_str = self._years_entry.get().strip() or "2023"
+        platform = "ASCII" if "ASCII" in self._platform_combo.get() else "MT"
+        extract = self._extract_var.get()
+
+        args = [
+            "--pair", pair,
+            "--type", data_type,
+            "--years", years_str,
+            "--platform", platform
+        ]
+        if not extract:
+            args.append("--no-extract")
+
+        self.log_clear(self._log)
+        self._lbl_dl_status.configure(text=f"⚡ Downloading {pair} ({data_type.upper()})...", text_color=C["accent"])
+
+        def on_done():
+            self._lbl_dl_status.configure(text="● Engine Idle / Ready", text_color=C["success"])
+            self._refresh_catalog()
+
+        self.run_script("market_data_downloader.py", self._log, args=args, on_done=on_done)
+
+    def _stop_download(self):
+        self.stop_process()
+        self._lbl_dl_status.configure(text="● Engine Stopped", text_color=C["danger"])
+
+    def _open_market_data_dir(self):
+        self._open_file_safely(self._market_data_dir)
+
+    def _open_pair_folder(self, pair: str):
+        pair_dir = self._market_data_dir / pair.upper()
+        if pair_dir.exists():
+            self._open_file_safely(pair_dir)
+        else:
+            self._open_file_safely(self._market_data_dir)
+
+    def _delete_pair_folder(self, pair: str):
+        pair_dir = self._market_data_dir / pair.upper()
+        if not pair_dir.exists():
+            return
+        if messagebox.askyesno("Delete Market Data", f"Are you sure you want to delete all downloaded data for {pair}?\nPath: {pair_dir}"):
+            try:
+                shutil.rmtree(pair_dir)
+                self._refresh_catalog()
+                messagebox.showinfo("Deleted", f"Deleted market_data/{pair}")
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed deleting: {e}")
+
+    def _set_selected_as_active(self):
+        pair = self._pair_combo.get().strip().upper()
+        if not pair:
+            return
+        
+        # Check standard pip sizes
+        pip = "0.01" if "JPY" in pair or pair in ("XAUUSD", "US30", "NAS100", "BTCUSD") else "0.0001"
+        if pair == "XAUUSD":
+            pip = "0.10"
+        elif pair in ("US30", "NAS100", "BTCUSD"):
+            pip = "1.0"
+
+        # Check if custom symbol exists in bases or use standard Dukascopy name
+        custom_name = f"{pair} dukascopy"
+        if pair == "USDJPY":
+            custom_name = "USDJPY Dukascopy"
+        elif pair == "EURJPY":
+            custom_name = "EURJPY Dukascopy"
+
+        self.cfg["symbol"] = custom_name
+        self.cfg["symbol_key"] = pair
+        self.cfg["pip_size"] = pip
+        save_config(self.cfg)
+        self.app.update_topbar_meta()
+
+        if hasattr(self, "_lbl_active_sym"):
+            self._lbl_active_sym.configure(text=custom_name)
+        if hasattr(self, "_lbl_active_sub"):
+            self._lbl_active_sub.configure(text=f"Pip: {pip} | Period: {self.cfg.get('period', 'M15')}")
+
+        messagebox.showinfo("Active Symbol Updated",
+            f"Active AlphaForge Symbol set to:\n{custom_name} ({pair})\nPip Size: {pip}")
+
+    def _refresh_catalog(self):
+        for widget in self._catalog_frame.winfo_children():
+            widget.destroy()
+
+        hdrs = ["Pair", "M1 Datasets", "Tick Datasets", "Total Disk Space", "Last Updated", "Actions"]
+        for ci, h in enumerate(hdrs):
+            ctk.CTkLabel(self._catalog_frame, text=h, font=ctk.CTkFont("Segoe UI", 10, "bold"),
+                         text_color=C["sub"], anchor="w" if ci < 5 else "center").grid(row=0, column=ci, sticky="ew", padx=6, pady=4)
+
+        if not self._market_data_dir.exists():
+            self._market_data_dir.mkdir(parents=True, exist_ok=True)
+
+        pair_dirs = sorted([d for d in self._market_data_dir.iterdir() if d.is_dir() and not d.name.startswith(".")])
+
+        if not pair_dirs:
+            lbl = ctk.CTkLabel(self._catalog_frame, text="No pairs downloaded in market_data/ yet. Select a pair above and click Download.",
+                               font=FB, text_color=C["sub"])
+            lbl.grid(row=1, column=0, columnspan=6, pady=24)
+            self._lbl_repo_pairs.configure(text="0 Pairs Stored")
+            return
+
+        total_bytes = 0
+        total_m1_count = 0
+        total_tick_count = 0
+
+        for ri, p_dir in enumerate(pair_dirs, 1):
+            pair_name = p_dir.name.upper()
+            manifest_file = p_dir / "manifest.json"
+            data = {}
+            if manifest_file.exists():
+                try:
+                    with open(manifest_file, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                except Exception:
+                    pass
+
+            # Scan directories directly if manifest missing or to guarantee fresh stats
+            m1_p = p_dir / "M1"
+            tick_p = p_dir / "TICK"
+            
+            m1_files = [f for f in m1_p.iterdir() if f.is_file()] if m1_p.exists() else []
+            tick_files = [f for f in tick_p.iterdir() if f.is_file()] if tick_p.exists() else []
+
+            m1_size_mb = sum(f.stat().st_size for f in m1_files) / (1024 * 1024)
+            tick_size_mb = sum(f.stat().st_size for f in tick_files) / (1024 * 1024)
+            total_mb = m1_size_mb + tick_size_mb
+
+            total_bytes += (m1_size_mb + tick_size_mb) * (1024 * 1024)
+            total_m1_count += len(m1_files)
+            total_tick_count += len(tick_files)
+
+            last_mod = data.get("last_updated")
+            if not last_mod:
+                try:
+                    last_mod = datetime.fromtimestamp(p_dir.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+                except Exception:
+                    last_mod = "-"
+
+            # Render row
+            ctk.CTkLabel(self._catalog_frame, text=f"📁 {pair_name}", font=ctk.CTkFont("Segoe UI", 11, "bold"),
+                         text_color=C["accent"], anchor="w").grid(row=ri, column=0, sticky="ew", padx=6, pady=3)
+
+            m1_txt = f"{len(m1_files)} files ({m1_size_mb:.1f} MB)" if m1_files else "None"
+            ctk.CTkLabel(self._catalog_frame, text=m1_txt, font=FSM,
+                         text_color=C["text"] if m1_files else C["sub"], anchor="w").grid(row=ri, column=1, sticky="ew", padx=6, pady=3)
+
+            tick_txt = f"{len(tick_files)} files ({tick_size_mb:.1f} MB)" if tick_files else "None"
+            ctk.CTkLabel(self._catalog_frame, text=tick_txt, font=FSM,
+                         text_color=C["text"] if tick_files else C["sub"], anchor="w").grid(row=ri, column=2, sticky="ew", padx=6, pady=3)
+
+            ctk.CTkLabel(self._catalog_frame, text=f"{total_mb:.1f} MB", font=FMO,
+                         text_color=C["success"] if total_mb > 0 else C["sub"], anchor="w").grid(row=ri, column=3, sticky="ew", padx=6, pady=3)
+
+            ctk.CTkLabel(self._catalog_frame, text=str(last_mod), font=FSM,
+                         text_color=C["sub"], anchor="w").grid(row=ri, column=4, sticky="ew", padx=6, pady=3)
+
+            # Actions cluster
+            act_f = ctk.CTkFrame(self._catalog_frame, fg_color="transparent")
+            act_f.grid(row=ri, column=5, padx=6, pady=3)
+
+            make_btn(act_f, "Open", lambda p=pair_name: self._open_pair_folder(p),
+                     color=C["card"], hover=C["hover"], width=54).pack(side="left", padx=2)
+
+            make_btn(act_f, "Active", lambda p=pair_name: self._set_active_symbol_direct(p),
+                     color=C["blue"], hover=C["hover"], width=58).pack(side="left", padx=2)
+
+            make_btn(act_f, "✕", lambda p=pair_name: self._delete_pair_folder(p),
+                     color=C["danger"], hover=C["hover"], width=30).pack(side="left", padx=2)
+
+        tot_mb_all = total_bytes / (1024 * 1024)
+        self._lbl_repo_pairs.configure(text=f"{len(pair_dirs)} Pairs ({tot_mb_all:.1f} MB)")
+        self._lbl_repo_sub.configure(text=f"M1: {total_m1_count} files | Tick: {total_tick_count} files")
+
+    def _set_active_symbol_direct(self, pair: str):
+        self._pair_combo.set(pair)
+        self._set_selected_as_active()
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -4241,15 +4885,17 @@ class AlphaForgeApp(ctk.CTk):
 
     def _build_nav_buttons(self):
         PANEL_CLASSES = {
-            "dashboard":   DashboardPanel,
-            "research":    ResearchPanel,
-            "optimize":    OptimizePanel,
-            "montecarlo":  MonteCarloPanel,
-            "walkforward": WalkForwardPanel,
-            "fullbacktest":FullBacktestPanel,
-            "portfolio":   PortfolioPanel,
-            "strategies":  StrategiesPanel,
-            "settings":    SettingsPanel,
+            "dashboard":    DashboardPanel,
+            "screener":     StrategyScreenerPanel,
+            "marketdata":   MarketDataPanel,
+            "research":     ResearchPanel,
+            "optimize":     OptimizePanel,
+            "montecarlo":   MonteCarloPanel,
+            "walkforward":  WalkForwardPanel,
+            "fullbacktest": FullBacktestPanel,
+            "portfolio":    PortfolioPanel,
+            "strategies":   StrategiesPanel,
+            "settings":     SettingsPanel,
         }
         for i, (icon, label, key) in enumerate(NAV_ITEMS):
             btn = ctk.CTkButton(

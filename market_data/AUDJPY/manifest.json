@@ -1,0 +1,22 @@
+{
+  "pair": "AUDJPY",
+  "last_updated": "2026-10-27 08:19:07",
+  "m1_count": 2,
+  "m1_total_mb": 17.94,
+  "tick_count": 0,
+  "tick_total_mb": 0.0,
+  "total_mb": 17.94,
+  "m1_files": [
+    {
+      "name": "DAT_ASCII_AUDJPY_M1_2023.csv",
+      "size_mb": 17.86,
+      "ext": ".csv"
+    },
+    {
+      "name": "DAT_ASCII_AUDJPY_M1_2023.txt",
+      "size_mb": 0.08,
+      "ext": ".txt"
+    }
+  ],
+  "tick_files": []
+}

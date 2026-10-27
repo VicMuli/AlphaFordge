@@ -654,6 +654,166 @@ async function startServer() {
     }
   });
 
+  // Market Data & HistData Storage Inspector API
+  app.get("/api/market-data", async (req, res) => {
+    try {
+      const cwd = process.cwd();
+      let cfg: any = {};
+      try {
+        cfg = JSON.parse(await fs.readFile(path.join(cwd, 'config.json'), 'utf-8'));
+      } catch {}
+
+      const marketDataDir = path.join(cwd, 'market_data');
+      if (!existsSync(marketDataDir)) {
+        await fs.mkdir(marketDataDir, { recursive: true });
+      }
+
+      // Scan market_data/ for organized pair folders
+      const downloadedPairs: any[] = [];
+      let totalBytes = 0;
+      let totalM1Files = 0;
+      let totalTickFiles = 0;
+
+      try {
+        const entries = await fs.readdir(marketDataDir, { withFileTypes: true });
+        for (const entry of entries) {
+          if (entry.isDirectory() && !entry.name.startsWith('.')) {
+            const pairName = entry.name.toUpperCase();
+            const pairDir = path.join(marketDataDir, entry.name);
+            const m1Dir = path.join(pairDir, 'M1');
+            const tickDir = path.join(pairDir, 'TICK');
+
+            const m1Files: any[] = [];
+            let m1Bytes = 0;
+            if (existsSync(m1Dir)) {
+              try {
+                const files = await fs.readdir(m1Dir);
+                for (const f of files) {
+                  if (!f.startsWith('.')) {
+                    const st = await fs.stat(path.join(m1Dir, f));
+                    m1Bytes += st.size;
+                    m1Files.push({ name: f, sizeMb: Number((st.size / (1024 * 1024)).toFixed(2)) });
+                  }
+                }
+              } catch {}
+            }
+
+            const tickFiles: any[] = [];
+            let tickBytes = 0;
+            if (existsSync(tickDir)) {
+              try {
+                const files = await fs.readdir(tickDir);
+                for (const f of files) {
+                  if (!f.startsWith('.')) {
+                    const st = await fs.stat(path.join(tickDir, f));
+                    tickBytes += st.size;
+                    tickFiles.push({ name: f, sizeMb: Number((st.size / (1024 * 1024)).toFixed(2)) });
+                  }
+                }
+              } catch {}
+            }
+
+            const pairTotalMb = Number(((m1Bytes + tickBytes) / (1024 * 1024)).toFixed(2));
+            totalBytes += (m1Bytes + tickBytes);
+            totalM1Files += m1Files.length;
+            totalTickFiles += tickFiles.length;
+
+            let lastUpdated = '-';
+            try {
+              const pairStat = await fs.stat(pairDir);
+              lastUpdated = pairStat.mtime.toISOString().replace('T', ' ').substring(0, 16);
+            } catch {}
+
+            downloadedPairs.push({
+              pair: pairName,
+              m1Count: m1Files.length,
+              m1TotalMb: Number((m1Bytes / (1024 * 1024)).toFixed(2)),
+              m1Files,
+              tickCount: tickFiles.length,
+              tickTotalMb: Number((tickBytes / (1024 * 1024)).toFixed(2)),
+              tickFiles,
+              totalMb: pairTotalMb,
+              lastUpdated,
+              isActive: (cfg.symbol_key === pairName || cfg.symbol?.toUpperCase().includes(pairName))
+            });
+          }
+        }
+      } catch {}
+
+      const terminalDataDir = cfg.terminal_data_dir || "";
+      const customHistoryPath = terminalDataDir ? path.join(terminalDataDir, "bases", "Custom", "history") : "";
+      
+      const installedCustomSymbols: string[] = [];
+      if (customHistoryPath && existsSync(customHistoryPath)) {
+        try {
+          const entries = await fs.readdir(customHistoryPath, { withFileTypes: true });
+          for (const e of entries) {
+            if (e.isDirectory()) installedCustomSymbols.push(e.name);
+          }
+        } catch {}
+      }
+
+      const popularPairs = [
+        "AUDJPY", "AUDUSD", "CHFJPY", "EURCAD", "EURCHF", "EURGBP", 
+        "EURJPY", "EURUSD", "GBPAUD", "GBPJPY", "GBPUSD", "NZDUSD", 
+        "USDCAD", "USDCHF", "USDJPY", "XAUUSD"
+      ];
+
+      res.json({
+        marketDataDir,
+        downloadedPairs: downloadedPairs.sort((a, b) => a.pair.localeCompare(b.pair)),
+        totalPairs: downloadedPairs.length,
+        totalMb: Number((totalBytes / (1024 * 1024)).toFixed(2)),
+        totalM1Files,
+        totalTickFiles,
+        terminalDataDir,
+        customHistoryPath,
+        installedCustomSymbols,
+        activeSymbol: cfg.symbol || "USDJPY Dukascopy",
+        activeSymbolKey: cfg.symbol_key || "USDJPY",
+        popularPairs
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Delete pair data in market_data/<pair>
+  app.delete("/api/market-data/pair/:pair", async (req, res) => {
+    try {
+      const pair = req.params.pair.toUpperCase();
+      const pairDir = path.join(process.cwd(), 'market_data', pair);
+      if (existsSync(pairDir)) {
+        await fs.rm(pairDir, { recursive: true, force: true });
+        res.json({ status: "ok", message: `Deleted market_data/${pair}` });
+      } else {
+        res.status(404).json({ status: "error", message: `Pair directory market_data/${pair} not found` });
+      }
+    } catch (e: any) {
+      res.status(500).json({ status: "error", message: e.message });
+    }
+  });
+
+  // Set active symbol in config.json
+  app.post("/api/market-data/set-active", async (req, res) => {
+    try {
+      const { symbol, symbolKey, pipSize } = req.body;
+      const configPath = path.join(process.cwd(), 'config.json');
+      let cfg: any = {};
+      if (existsSync(configPath)) {
+        cfg = JSON.parse(await fs.readFile(configPath, 'utf-8'));
+      }
+      if (symbol) cfg.symbol = symbol;
+      if (symbolKey) cfg.symbol_key = symbolKey;
+      if (pipSize) cfg.pip_size = pipSize;
+
+      await fs.writeFile(configPath, JSON.stringify(cfg, null, 2), 'utf-8');
+      res.json({ status: "ok", message: `Active symbol updated to ${cfg.symbol}`, config: cfg });
+    } catch (e: any) {
+      res.status(500).json({ status: "error", message: e.message });
+    }
+  });
+
   // Researched Strategies Detailed Scanner
   app.get("/api/researched-strategies", async (req, res) => {
     try {
