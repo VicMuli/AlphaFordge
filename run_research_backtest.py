@@ -133,14 +133,51 @@ def _fmt(val, prefix="$", suffix="", decimals=2):
 def _create_research_word_report(report_dir: Path, strategy_name: str,
                                  curated: dict, derived: dict,
                                  from_date: str, to_date: str,
-                                 deposit: float, expert: str, symbol: str, period: str):
+                                 deposit: float, expert: str, symbol: str, period: str,
+                                 deals_df=None):
     if not _HAS_DOCX:
         print("    [WARN] python-docx not installed — skipping Word report generation.")
         return None
 
-    doc = docx.Document()
+    try:
+        from screener_reporting import calculate_comprehensive_metrics, create_screener_word_doc
+        comp_metrics = calculate_comprehensive_metrics(
+            parsed_report={"curated_summary": curated},
+            deals_df=deals_df,
+            deposit=float(deposit),
+            symbol=symbol,
+        )
+        charts = {}
+        for cfile in report_dir.glob("chart_*.png"):
+            charts[cfile.stem] = cfile
+        
+        heatmap_path = report_dir / "monthly_performance_heatmap.png"
+        if not heatmap_path.exists():
+            heatmap_path = report_dir / "monthly_heatmap.png"
+        if not heatmap_path.exists():
+            heatmap_path = None
 
-    # Title
+        doc_path = report_dir / f"{strategy_name}_Research_Report.docx"
+        created = create_screener_word_doc(
+            doc_path=doc_path,
+            ea_name=strategy_name,
+            symbol=symbol,
+            resolved_symbol=symbol,
+            period=period,
+            from_date=from_date,
+            to_date=to_date,
+            deposit=float(deposit),
+            metrics=comp_metrics,
+            charts=charts,
+            heatmap_path=heatmap_path,
+            deals_df=deals_df,
+        )
+        return created or doc_path
+    except Exception as e:
+        print(f"    [WARN] Advanced Word doc generation notice: {e}")
+
+    # Fallback basic document
+    doc = docx.Document()
     title = doc.add_heading("Research Strategy Default Backtest Report", 0)
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
@@ -150,21 +187,7 @@ def _create_research_word_report(report_dir: Path, strategy_name: str,
     sub_run.font.size = Pt(14)
     sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
-    info_p = doc.add_paragraph(
-        f"Expert: {expert}  |  Symbol: {symbol}  |  Timeframe: {period}\n"
-        f"Backtest Period: {from_date}  ->  {to_date}  |  Initial Deposit: ${deposit:,.2f}\n"
-        f"Generated: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}"
-    )
-    info_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
-    doc.add_paragraph(
-        "This report documents the DEFAULT (un-optimised baseline) backtest for this researched strategy. "
-        "It establishes baseline performance and trade mechanics directly from the EA's core MQL5 implementation "
-        "prior to running genetic parameter optimization and robustness stress-tests."
-    )
-
-    # Key metrics table
-    doc.add_heading("Key Performance Metrics", level=1)
+    doc.add_heading("1. Performance Overview", level=1)
     tbl = doc.add_table(rows=1, cols=2)
     tbl.style = "Table Grid"
     hdr = tbl.rows[0].cells
@@ -173,45 +196,23 @@ def _create_research_word_report(report_dir: Path, strategy_name: str,
 
     d = {**curated, **derived}
     metrics_to_show = [
-        ("Net Profit ($)",             d.get("Net Profit") or d.get("total_net_profit")),
-        ("Net Profit (%)",             d.get("Net Profit %") or d.get("profit_pct")),
-        ("Profit Factor",              d.get("Profit Factor") or d.get("profit_factor")),
-        ("Sharpe Ratio",               d.get("Sharpe Ratio") or d.get("sharpe")),
-        ("Max Balance Drawdown (%)",   d.get("Max Balance Drawdown (%)") or d.get("max_dd_pct")),
-        ("Recovery Factor",            d.get("Recovery Factor") or d.get("recovery_factor")),
-        ("Win Rate (%)",               d.get("Win Rate %") or d.get("win_rate")),
-        ("Total Trades",               d.get("Total Trades") or d.get("total_trades")),
-        ("Largest Profit Trade ($)",   d.get("Largest Profit Trade") or d.get("largest_profit")),
-        ("Largest Loss Trade ($)",     d.get("Largest Loss Trade") or d.get("largest_loss")),
+        ("Market / Symbol", symbol),
+        ("Profit / Loss ($)", f"${float(d.get('Net Profit') or d.get('total_net_profit', 0)):,.2f}"),
+        ("Profit / Loss (%)", f"{float(d.get('Net Profit %') or d.get('profit_pct', 0)):.2f}%"),
+        ("Max Balance Drawdown", f"${float(d.get('Max Balance Drawdown ($)') or d.get('max_dd', 0)):,.2f}"),
+        ("Max Balance Drawdown (%)", f"{float(d.get('Max Balance Drawdown (%)') or d.get('max_dd_pct', 0)):.2f}%"),
+        ("Profit Factor", f"{float(d.get('Profit Factor') or d.get('profit_factor', 0)):.2f}"),
+        ("Recovery Factor", f"{float(d.get('Recovery Factor') or d.get('recovery_factor', 0)):.2f}"),
+        ("Sharpe Ratio", f"{float(d.get('Sharpe Ratio') or d.get('sharpe', 0)):.2f}"),
     ]
     for label, val in metrics_to_show:
         row = tbl.add_row().cells
         row[0].text = str(label)
-        try:
-            row[1].text = f"{float(val):,.4f}" if isinstance(val, float) else str(val or "N/A")
-        except (TypeError, ValueError):
-            row[1].text = str(val or "N/A")
-
-    # Equity & Distribution Charts
-    chart_files = list(report_dir.glob("chart_*.png"))
-    if chart_files:
-        doc.add_heading("Equity & Performance Charts", level=1)
-        for ch in chart_files:
-            try:
-                doc.add_paragraph(ch.stem.replace("_", " ").title()).runs[0].bold = True
-                doc.add_picture(str(ch), width=Inches(6.2))
-                doc.add_paragraph()
-            except Exception as e:
-                print(f"    [WARN] Could not insert chart {ch.name}: {e}")
+        row[1].text = str(val)
 
     doc_path = report_dir / f"{strategy_name}_Research_Report.docx"
-    try:
-        doc.save(doc_path)
-        return doc_path
-    except PermissionError:
-        alt = report_dir / f"{strategy_name}_Research_Report_{int(time.time())}.docx"
-        doc.save(alt)
-        return alt
+    doc.save(doc_path)
+    return doc_path
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -415,14 +416,16 @@ def run_research_backtest(
             print(f"  [WARN] Analysis parser error: {e}")
 
     derived = {}
-    # Generate Equity Charts and Derived Metrics
+    deals_df = None
+    # Generate Equity Charts, Heatmap, and Derived Metrics
     if _HAS_FULL_BT:
         try:
             deals_df = parse_mt5_html_for_deals(report_path, deposit=float(deposit))
             if deals_df is not None and not deals_df.empty:
                 chart_paths = generate_equity_charts(deals_df, float(deposit), report_dir)
+                generate_monthly_heatmap(deals_df, float(deposit), report_dir)
                 derived = calculate_derived_metrics(deals_df, float(deposit))
-                print(f"  [OK] Equity charts generated: {list(chart_paths.keys())}")
+                print(f"  [OK] Equity charts & monthly heatmap generated: {list(chart_paths.keys())}")
         except Exception as e:
             print(f"  [WARN] Could not generate advanced charts: {e}")
 
@@ -438,6 +441,7 @@ def run_research_backtest(
         expert=expert_filename,
         symbol=symbol,
         period=period,
+        deals_df=deals_df,
     )
 
     # 8. Save Summary JSON Manifest

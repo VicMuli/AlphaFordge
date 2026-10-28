@@ -863,40 +863,83 @@ def generate_monthly_heatmap(deals_df: pd.DataFrame, deposit: float, output_dir:
                 matrix[r, month - 1] = float(monthly.loc[year, month])
         matrix[r, 12] = matrix[r, :12].sum()
 
-    fig, ax = plt.subplots(figsize=(13.4, max(3.2, 1.0 + 0.55 * len(all_years))))
+    fig_height = max(4.5, 1.4 + 0.54 * len(all_years))
+    fig, ax = plt.subplots(figsize=(14.2, fig_height), dpi=180)
+    fig.patch.set_facecolor("#ffffff")
+    ax.set_facecolor("#ffffff")
+
     vmax = float(np.max(np.abs(matrix[:, :12]))) if matrix.size else 1.0
-    if vmax == 0:
-        vmax = 1.0
-    im = ax.imshow(matrix[:, :12], aspect="auto", cmap="RdYlGn", vmin=-vmax, vmax=vmax,
-                    extent=(-0.5, 11.5, len(all_years) - 0.5, -0.5))
+    if vmax <= 0.0 or math.isnan(vmax):
+        vmax = 100.0
+
+    norm = matplotlib.colors.Normalize(vmin=-vmax, vmax=vmax)
+    cmap = plt.cm.RdYlGn
+
     ax.set_xlim(-0.5, 12.5)
+    ax.set_ylim(len(all_years) - 0.5, -0.5)
 
     months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec", "Total"]
-    ax.set_xticks(range(13), months)
-    ax.set_yticks(range(len(all_years)), [str(y) for y in all_years])
-    ax.set_xlabel("Month")
-    ax.set_ylabel("Year")
-    ax.set_title("Monthly Performance Heatmap", fontsize=13, fontweight="bold")
-
-    ax.axvline(11.5, color="black", linewidth=1.2)
+    ax.set_xticks(range(13))
+    ax.set_xticklabels(months, fontsize=10)
+    ax.set_yticks(range(len(all_years)))
+    ax.set_yticklabels([str(y) for y in all_years], fontsize=10)
+    ax.set_xlabel("Month", fontsize=11, labelpad=8)
+    ax.set_ylabel("Year", fontsize=11, labelpad=8)
+    ax.set_title("Monthly Performance Heatmap", fontsize=14, fontweight="bold", pad=14)
 
     for r in range(matrix.shape[0]):
         for c in range(12):
             value = matrix[r, c]
             pct = (value / effective_dep * 100.0) if effective_dep else 0.0
-            ax.text(c, r, f"${value:,.0f}\n{pct:+.1f}%", ha="center", va="center", fontsize=8)
+            cell_color = cmap(norm(value))
+            rect = plt.Rectangle((c - 0.5, r - 0.5), 1.0, 1.0, facecolor=cell_color, edgecolor="black", linewidth=0.5)
+            ax.add_patch(rect)
+
+            if value < 0:
+                val_str = f"$-{abs(int(round(value))):,}"
+            elif value == 0:
+                val_str = "$0"
+            else:
+                val_str = f"${int(round(value)):,}"
+
+            pct_str = f"{pct:+.1f}%"
+            ax.text(c, r, f"{val_str}\n{pct_str}", ha="center", va="center", fontsize=8.2, color="#000000")
 
         total_value = matrix[r, 12]
         total_pct = (total_value / effective_dep * 100.0) if effective_dep else 0.0
-        ax.add_patch(plt.Rectangle((11.5, r - 0.5), 1.0, 1.0, facecolor="#f0f0f0", edgecolor="black", linewidth=0.5))
-        ax.text(12, r, f"${total_value:,.0f}\n{total_pct:+.1f}%", ha="center", va="center",
-                fontsize=8, fontweight="bold",
-                color=("darkgreen" if total_value > 0 else ("darkred" if total_value < 0 else "black")))
+        tot_rect = plt.Rectangle((11.5, r - 0.5), 1.0, 1.0, facecolor="#ffffff", edgecolor="black", linewidth=0.8)
+        ax.add_patch(tot_rect)
 
-    fig.colorbar(im, ax=ax, label="Monthly P&L ($)")
+        if total_value < 0:
+            tot_str = f"$-{abs(int(round(total_value))):,}"
+            tot_color = "#991b1b"
+        elif total_value == 0:
+            tot_str = "$0"
+            tot_color = "#000000"
+        else:
+            tot_str = f"${int(round(total_value)):,}"
+            tot_color = "#166534"
+
+        tot_pct_str = f"{total_pct:+.1f}%"
+        ax.text(12, r, f"{tot_str}\n{tot_pct_str}", ha="center", va="center",
+                fontsize=8.5, fontweight="bold", color=tot_color)
+
+    ax.axvline(11.5, color="black", linewidth=1.5)
+
+    sm = matplotlib.cm.ScalarMappable(cmap=cmap, norm=norm)
+    sm.set_array([])
+    cbar = fig.colorbar(sm, ax=ax, pad=0.03, aspect=24, shrink=0.94)
+    cbar.set_label("Monthly P&L ($)", fontsize=11, labelpad=8)
+    cbar.ax.tick_params(labelsize=9.5)
+
     path = output_dir / "monthly_performance_heatmap.png"
     fig.tight_layout()
-    fig.savefig(path, dpi=180, bbox_inches="tight")
+    fig.savefig(path, dpi=180, bbox_inches="tight", facecolor="#ffffff")
+    alt_path = output_dir / "monthly_heatmap.png"
+    try:
+        shutil.copy2(path, alt_path)
+    except Exception:
+        pass
     plt.close(fig)
     return path, monthly
 
