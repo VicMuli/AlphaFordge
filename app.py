@@ -1953,18 +1953,21 @@ class MarketDataPanel(BasePanel):
         btn_bar.grid(row=2, column=0, sticky="ew", padx=16, pady=(6, 16))
         
         self._btn_download = make_btn(btn_bar, "📥 Download & Organise Data", self._start_download,
-                                      color=C["accent"], hover=C["hover"], width=230)
+                                      color=C["accent"], hover=C["hover"], width=220)
         self._btn_download.pack(side="left")
 
+        make_btn(btn_bar, "📊 Generate MT5 Excel Doc", self._generate_mt5_excel,
+                 color=C["success"], hover=C["hover"], width=210).pack(side="left", padx=(10, 0))
+
         self._btn_stop = make_btn(btn_bar, "⏹ Stop", self._stop_download,
-                                  color=C["danger"], hover=C["hover"], width=90)
+                                  color=C["danger"], hover=C["hover"], width=80)
         self._btn_stop.pack(side="left", padx=(10, 0))
 
-        make_btn(btn_bar, "📁 Open market_data Folder", self._open_market_data_dir,
-                 color=C["card"], hover=C["hover"], width=200).pack(side="left", padx=(10, 0))
+        make_btn(btn_bar, "📁 Open Folder", self._open_market_data_dir,
+                 color=C["card"], hover=C["hover"], width=130).pack(side="left", padx=(10, 0))
 
-        make_btn(btn_bar, "⚡ Set Selected as Active EA Symbol", self._set_selected_as_active,
-                 color=C["blue"], hover=C["hover"], width=250).pack(side="left", padx=(10, 0))
+        make_btn(btn_bar, "⚡ Set Active EA Symbol", self._set_selected_as_active,
+                 color=C["blue"], hover=C["hover"], width=190).pack(side="left", padx=(10, 0))
 
         # ── 3. Organised market_data/ Datasets Table ──────────────────────────
         table_card = make_card(self)
@@ -2172,6 +2175,9 @@ class MarketDataPanel(BasePanel):
             act_f = ctk.CTkFrame(self._catalog_frame, fg_color="transparent")
             act_f.grid(row=ri, column=5, padx=6, pady=3)
 
+            make_btn(act_f, "📗 Excel", lambda p=pair_name: self._open_or_gen_excel(p),
+                     color=C["success"], hover=C["hover"], width=62).pack(side="left", padx=2)
+
             make_btn(act_f, "Open", lambda p=pair_name: self._open_pair_folder(p),
                      color=C["card"], hover=C["hover"], width=54).pack(side="left", padx=2)
 
@@ -2184,6 +2190,36 @@ class MarketDataPanel(BasePanel):
         tot_mb_all = total_bytes / (1024 * 1024)
         self._lbl_repo_pairs.configure(text=f"{len(pair_dirs)} Pairs ({tot_mb_all:.1f} MB)")
         self._lbl_repo_sub.configure(text=f"M1: {total_m1_count} files | Tick: {total_tick_count} files")
+
+    def _generate_mt5_excel(self):
+        pair = self._pair_combo.get().strip().upper()
+        if not pair:
+            messagebox.showwarning("Missing Pair", "Please select or enter a currency pair (e.g. EURJPY).")
+            return
+
+        self.log_clear(self._log)
+        self._lbl_dl_status.configure(text=f"📊 Compiling MT5 Excel for {pair}...", text_color=C["accent"])
+        args = ["--pair", pair, "--export-excel"]
+
+        def on_done():
+            self._lbl_dl_status.configure(text="● Engine Idle / Ready", text_color=C["success"])
+            self._refresh_catalog()
+            xlsx_path = self._market_data_dir / pair / f"{pair}_MT5_M1_bars.xlsx"
+            if xlsx_path.exists():
+                if messagebox.askyesno("Excel Doc Generated",
+                    f"Successfully compiled MT5 Excel Document for {pair}!\nFile: {xlsx_path.name}\n\nWould you like to open it now?"):
+                    self._open_file_safely(xlsx_path)
+
+        self.run_script("market_data_downloader.py", self._log, args=args, on_done=on_done)
+
+    def _open_or_gen_excel(self, pair: str):
+        pair_upper = pair.upper()
+        xlsx_path = self._market_data_dir / pair_upper / f"{pair_upper}_MT5_M1_bars.xlsx"
+        if xlsx_path.exists():
+            self._open_file_safely(xlsx_path)
+        else:
+            self._pair_combo.set(pair_upper)
+            self._generate_mt5_excel()
 
     def _set_active_symbol_direct(self, pair: str):
         self._pair_combo.set(pair)

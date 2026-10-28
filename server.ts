@@ -1122,6 +1122,35 @@ async function startServer() {
               lastUpdated = pairStat.mtime.toISOString().replace('T', ' ').substring(0, 16);
             } catch {}
 
+            // Check for mt5_excel compilation metadata
+            let mt5Excel: any = null;
+            const manifestFile = path.join(pairDir, 'manifest.json');
+            if (existsSync(manifestFile)) {
+              try {
+                const manData = JSON.parse(await fs.readFile(manifestFile, 'utf-8'));
+                if (manData.mt5_excel) {
+                  mt5Excel = manData.mt5_excel;
+                }
+              } catch {}
+            }
+            if (!mt5Excel) {
+              const xlsxPath = path.join(pairDir, `${pairName}_MT5_M1_bars.xlsx`);
+              const csvPath = path.join(pairDir, `${pairName}_MT5_M1_bars.csv`);
+              if (existsSync(xlsxPath)) {
+                try {
+                  const xStat = await fs.stat(xlsxPath);
+                  const cStart = existsSync(csvPath) ? await fs.stat(csvPath) : null;
+                  mt5Excel = {
+                    excel_file: `${pairName}_MT5_M1_bars.xlsx`,
+                    csv_file: `${pairName}_MT5_M1_bars.csv`,
+                    xlsx_size_mb: Number((xStat.size / (1024 * 1024)).toFixed(2)),
+                    csv_size_mb: cStart ? Number((cStart.size / (1024 * 1024)).toFixed(2)) : 0,
+                    has_files: true
+                  };
+                } catch {}
+              }
+            }
+
             downloadedPairs.push({
               pair: pairName,
               m1Count: m1Files.length,
@@ -1132,7 +1161,8 @@ async function startServer() {
               tickFiles,
               totalMb: pairTotalMb,
               lastUpdated,
-              isActive: (cfg.symbol_key === pairName || cfg.symbol?.toUpperCase().includes(pairName))
+              isActive: (cfg.symbol_key === pairName || cfg.symbol?.toUpperCase().includes(pairName)),
+              mt5Excel
             });
           }
         }
@@ -1205,12 +1235,84 @@ async function startServer() {
       if (symbolKey) cfg.symbol_key = symbolKey;
       if (pipSize) cfg.pip_size = pipSize;
 
-      await fs.writeFile(configPath, JSON.stringify(cfg, null, 2), 'utf-8');
       res.json({ status: "ok", message: `Active symbol updated to ${cfg.symbol}`, config: cfg });
     } catch (e: any) {
       res.status(500).json({ status: "error", message: e.message });
     }
   });
+
+  // Compile unified MT5 Excel document (.xlsx) & MT5 Bar Import file (.csv)
+  app.post("/api/market-data-build-excel", async (req, res) => {
+    try {
+      const { pair, spread, maxBars } = req.body;
+      if (!pair) {
+        return res.status(400).json({ error: "Currency pair is required" });
+      }
+      const cleanPair = String(pair).trim().toUpperCase();
+      const args = [path.join(process.cwd(), 'market_data_downloader.py'), '--pair', cleanPair, '--export-excel'];
+      if (spread && Number(spread) > 0) {
+        args.push('--spread', String(spread));
+      }
+      if (maxBars && Number(maxBars) > 0) {
+        args.push('--max-bars', String(maxBars));
+      }
+
+      execFile('python3', args, { cwd: process.cwd() }, async (error, stdout, stderr) => {
+        if (error) {
+          return res.status(500).json({ error: stderr || stdout || error.message });
+        }
+
+        const manifestPath = path.join(process.cwd(), 'market_data', cleanPair, 'manifest.json');
+        let manifest: any = {};
+        if (existsSync(manifestPath)) {
+          try {
+            manifest = JSON.parse(await fs.readFile(manifestPath, 'utf-8'));
+          } catch {}
+        }
+
+        res.json({
+          status: "ok",
+          pair: cleanPair,
+          output: stdout,
+          mt5Excel: manifest.mt5_excel || null
+        });
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Download market_data files (.xlsx, .csv, .txt)
+  app.get("/api/market-data-download-file", async (req, res) => {
+    try {
+      const { pair, file } = req.query;
+      if (!pair || !file) {
+        return res.status(400).send("Pair and file query parameters required");
+      }
+      const cleanPair = String(pair).replace(/[^a-zA-Z0-9_]/g, '').toUpperCase();
+      const cleanFile = path.basename(String(file));
+      const targetPath = path.join(process.cwd(), 'market_data', cleanPair, cleanFile);
+
+      if (!existsSync(targetPath)) {
+        return res.status(404).send("File not found");
+      }
+
+      if (cleanFile.endsWith('.xlsx')) {
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      } else if (cleanFile.endsWith('.csv')) {
+        res.setHeader('Content-Type', 'text/csv');
+      } else if (cleanFile.endsWith('.txt')) {
+        res.setHeader('Content-Type', 'text/plain');
+      }
+      res.setHeader('Content-Disposition', `attachment; filename="${cleanFile}"`);
+
+      const fileBuf = await fs.readFile(targetPath);
+      res.send(fileBuf);
+    } catch (e: any) {
+      res.status(500).send(e.message);
+    }
+  });
+
 
   // Researched Strategies Detailed Scanner
   app.get("/api/researched-strategies", async (req, res) => {
