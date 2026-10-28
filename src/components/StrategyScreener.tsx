@@ -29,7 +29,13 @@ import {
   ChevronDown,
   ChevronUp,
   Sparkles,
-  Filter
+  Filter,
+  FileText,
+  Download,
+  ExternalLink,
+  FolderOpen,
+  Image,
+  X
 } from 'lucide-react';
 import { useScriptRunner } from '../useScriptRunner';
 
@@ -46,6 +52,17 @@ interface PairResult {
   sharpe: number;
   error?: string;
   report_file?: string;
+  files?: {
+    report_html?: string;
+    trades_csv?: string;
+    equity_growth_chart?: string;
+    profit_dollars_chart?: string;
+    percent_gain_chart?: string;
+    monthly_heatmap?: string;
+    word_report?: string;
+    summary_json?: string;
+    set_file?: string;
+  };
 }
 
 const DEFAULT_MAJORS = ['USDJPY', 'EURUSD', 'GBPUSD', 'AUDUSD', 'USDCAD', 'USDCHF', 'NZDUSD'];
@@ -74,6 +91,28 @@ export default function StrategyScreener({ config }: { config: any }) {
   const [sortField, setSortField] = useState<keyof PairResult>('net_profit');
   const [sortAsc, setSortAsc] = useState<boolean>(false);
   const [loadingResults, setLoadingResults] = useState<boolean>(false);
+
+  // Artifacts Modal & markets_screened viewer
+  const [selectedArtifactPair, setSelectedArtifactPair] = useState<PairResult | null>(null);
+  const [activeChartTab, setActiveChartTab] = useState<'equity' | 'heatmap' | 'profit' | 'gain'>('equity');
+  const [showMarketsDrawer, setShowMarketsDrawer] = useState<boolean>(false);
+  const [marketsData, setMarketsData] = useState<any[]>([]);
+  const [loadingMarkets, setLoadingMarkets] = useState<boolean>(false);
+
+  const fetchMarketsScreened = async () => {
+    setLoadingMarkets(true);
+    try {
+      const res = await fetch('/api/markets-screened');
+      if (res.ok) {
+        const data = await res.json();
+        setMarketsData(data.pairs || []);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoadingMarkets(false);
+    }
+  };
 
   // Fetch available EAs
   useEffect(() => {
@@ -340,8 +379,10 @@ export default function StrategyScreener({ config }: { config: any }) {
     }));
     setResults(initialResults);
 
+    const activeSetFile = setFile || ((hasCustomInputs || setFileExists) ? 'screener_inputs.set' : '');
+
     runScript('run_screener.py', {
-      args: `--ea "${selectedEa}" --symbols "${symbolsStr}" --period "${period}" --from-date "${normFrom}" --to-date "${normTo}" --deposit ${deposit} ${setFile ? `--set-file "${setFile}"` : ''}`,
+      args: `--ea "${selectedEa}" --symbols "${symbolsStr}" --period "${period}" --from-date "${normFrom}" --to-date "${normTo}" --deposit ${deposit} ${activeSetFile ? `--set-file "${activeSetFile}"` : ''}`,
       envOverrides: {
         AF_ACTIVE_EA: selectedEa,
         AF_SYMBOLS: symbolsStr,
@@ -349,7 +390,7 @@ export default function StrategyScreener({ config }: { config: any }) {
         AF_BT_START: normFrom,
         AF_BT_END: normTo,
         AF_DEPOSIT: deposit,
-        AF_SET_FILE: setFile,
+        AF_SET_FILE: activeSetFile,
       },
       onDone: () => {
         fetchScreenerResults(selectedEa);
@@ -893,6 +934,9 @@ export default function StrategyScreener({ config }: { config: any }) {
             <Button variant="secondary" onClick={() => fetchScreenerResults(selectedEa)} disabled={loadingResults}>
               <RefreshCw size={14} className={loadingResults ? "animate-spin" : ""} /> Refresh Results
             </Button>
+            <Button variant="secondary" onClick={() => { setShowMarketsDrawer(true); fetchMarketsScreened(); }}>
+              <FolderOpen size={14} className="text-amber-400" /> markets_screened
+            </Button>
             <Button variant="secondary" onClick={clearLogs}>
               <Trash2 size={14} /> Clear Log
             </Button>
@@ -984,6 +1028,9 @@ export default function StrategyScreener({ config }: { config: any }) {
                 <th className="py-2.5 px-3 text-right cursor-pointer hover:text-white" onClick={() => handleSort('sharpe')}>
                   <div className="flex items-center justify-end gap-1">Sharpe <ArrowUpDown size={11} /></div>
                 </th>
+                <th className="py-2.5 px-3 text-center">
+                  Artifacts
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[#243048]">
@@ -1058,12 +1105,24 @@ export default function StrategyScreener({ config }: { config: any }) {
                       <td className="py-3 px-3 text-right font-mono text-gray-300">
                         {r.sharpe > 0 ? r.sharpe.toFixed(2) : '-'}
                       </td>
+
+                      <td className="py-3 px-3 text-center">
+                        <button
+                          onClick={() => {
+                            setSelectedArtifactPair(r);
+                            setActiveChartTab('equity');
+                          }}
+                          className="px-2.5 py-1 text-[11px] font-semibold bg-[#1e293b] hover:bg-[#283548] text-amber-300 hover:text-amber-200 border border-amber-500/30 rounded-md transition-colors inline-flex items-center gap-1.5 shadow-xs"
+                        >
+                          <FolderOpen size={12} className="text-amber-400" /> Artifacts
+                        </button>
+                      </td>
                     </tr>
                   );
                 })
               ) : (
                 <tr>
-                  <td colSpan={9} className="py-8 text-center text-gray-400 text-xs">
+                  <td colSpan={10} className="py-8 text-center text-gray-400 text-xs">
                     No pairs screened yet. Select pairs above and click <span className="text-amber-400 font-semibold">"Run Strategy Screener"</span> to test your strategy across markets.
                   </td>
                 </tr>
@@ -1077,6 +1136,346 @@ export default function StrategyScreener({ config }: { config: any }) {
       <div className="flex-1 min-h-[260px] flex flex-col">
         <LogViewer logs={logs} title={`Screener Live Execution Log ${isRunning ? '(Active Batch Test)' : ''}`} />
       </div>
+
+      {/* ── ARTIFACTS MODAL ─────────────────────────────────────────────────── */}
+      {selectedArtifactPair && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-xs">
+          <div className="bg-[#121927] border border-[#2d3748] rounded-xl w-full max-w-4xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden">
+            {/* Modal Header */}
+            <div className="px-6 py-4 border-b border-[#243048] flex items-center justify-between bg-[#0e1422]">
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-400">
+                  <BarChart3 size={20} />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white flex items-center gap-2">
+                    {selectedArtifactPair.symbol} — {selectedEa} Backtest Artifacts
+                    <span className="text-xs font-mono font-normal px-2 py-0.5 rounded bg-amber-950/60 text-amber-300 border border-amber-800/40">
+                      {selectedArtifactPair.status}
+                    </span>
+                  </h3>
+                  <div className="text-xs text-[#8b95a6] font-mono mt-0.5">
+                    Storage: <span className="text-cyan-300">markets_screened/{selectedArtifactPair.symbol}/{selectedEa}/</span>
+                  </div>
+                </div>
+              </div>
+
+              <button
+                onClick={() => setSelectedArtifactPair(null)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-[#1a2540] transition-colors"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6 overflow-y-auto space-y-6 flex-1">
+              {/* Performance Metrics Bar */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
+                <div className="p-3 bg-[#162032] border border-[#232f46] rounded-lg">
+                  <div className="text-[10px] uppercase font-semibold text-[#8b95a6]">Net Profit</div>
+                  <div className={`text-base font-bold font-mono mt-0.5 ${selectedArtifactPair.net_profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    ${selectedArtifactPair.net_profit.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </div>
+                </div>
+
+                <div className="p-3 bg-[#162032] border border-[#232f46] rounded-lg">
+                  <div className="text-[10px] uppercase font-semibold text-[#8b95a6]">Return %</div>
+                  <div className={`text-base font-bold font-mono mt-0.5 ${selectedArtifactPair.profit_pct >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    {selectedArtifactPair.profit_pct.toFixed(1)}%
+                  </div>
+                </div>
+
+                <div className="p-3 bg-[#162032] border border-[#232f46] rounded-lg">
+                  <div className="text-[10px] uppercase font-semibold text-[#8b95a6]">Profit Factor</div>
+                  <div className="text-base font-bold font-mono mt-0.5 text-white">
+                    {selectedArtifactPair.profit_factor > 0 ? selectedArtifactPair.profit_factor.toFixed(2) : '-'}
+                  </div>
+                </div>
+
+                <div className="p-3 bg-[#162032] border border-[#232f46] rounded-lg">
+                  <div className="text-[10px] uppercase font-semibold text-[#8b95a6]">Max Drawdown</div>
+                  <div className="text-base font-bold font-mono mt-0.5 text-amber-400">
+                    {selectedArtifactPair.max_dd_pct > 0 ? `${selectedArtifactPair.max_dd_pct.toFixed(1)}%` : '-'}
+                  </div>
+                </div>
+
+                <div className="p-3 bg-[#162032] border border-[#232f46] rounded-lg">
+                  <div className="text-[10px] uppercase font-semibold text-[#8b95a6]">Total Trades</div>
+                  <div className="text-base font-bold font-mono mt-0.5 text-white">
+                    {selectedArtifactPair.total_trades}
+                  </div>
+                </div>
+
+                <div className="p-3 bg-[#162032] border border-[#232f46] rounded-lg">
+                  <div className="text-[10px] uppercase font-semibold text-[#8b95a6]">Win Rate</div>
+                  <div className="text-base font-bold font-mono mt-0.5 text-cyan-300">
+                    {selectedArtifactPair.win_rate > 0 ? `${selectedArtifactPair.win_rate.toFixed(1)}%` : '-'}
+                  </div>
+                </div>
+              </div>
+
+              {/* Artifact Document & Data Download Action Bar */}
+              <div className="p-4 bg-[#0d1424] border border-[#232f46] rounded-xl flex flex-wrap items-center justify-between gap-3">
+                <div className="text-xs font-semibold text-white flex items-center gap-2">
+                  <FileText className="text-amber-400" size={15} />
+                  <span>Download Research Artifacts:</span>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <a
+                    href={`/api/markets-screened-file?path=${encodeURIComponent(`markets_screened/${selectedArtifactPair.symbol}/${selectedEa}/${selectedEa}_${selectedArtifactPair.symbol}_Research_Report.docx`)}`}
+                    download
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-blue-950/70 text-blue-300 border border-blue-600/40 hover:bg-blue-900/60 transition-colors shadow-xs"
+                  >
+                    <FileText size={13} />
+                    <span>Word Report (.docx)</span>
+                    <Download size={11} className="opacity-70 ml-0.5" />
+                  </a>
+
+                  <a
+                    href={`/api/markets-screened-file?path=${encodeURIComponent(`markets_screened/${selectedArtifactPair.symbol}/${selectedEa}/trades.csv`)}`}
+                    download
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-950/70 text-emerald-300 border border-emerald-600/40 hover:bg-emerald-900/60 transition-colors shadow-xs"
+                  >
+                    <BarChart3 size={13} />
+                    <span>Trades CSV</span>
+                    <Download size={11} className="opacity-70 ml-0.5" />
+                  </a>
+
+                  <a
+                    href={`/api/markets-screened-file?path=${encodeURIComponent(`markets_screened/${selectedArtifactPair.symbol}/${selectedEa}/report.html`)}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-cyan-950/70 text-cyan-300 border border-cyan-600/40 hover:bg-cyan-900/60 transition-colors shadow-xs"
+                  >
+                    <ExternalLink size={13} />
+                    <span>MT5 HTML Report</span>
+                  </a>
+
+                  <a
+                    href={`/api/markets-screened-file?path=${encodeURIComponent(`markets_screened/${selectedArtifactPair.symbol}/${selectedEa}/screener_inputs.set`)}`}
+                    download
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-amber-950/70 text-amber-300 border border-amber-600/40 hover:bg-amber-900/60 transition-colors shadow-xs"
+                  >
+                    <Sliders size={13} />
+                    <span>Inputs (.set)</span>
+                    <Download size={11} className="opacity-70 ml-0.5" />
+                  </a>
+                </div>
+              </div>
+
+              {/* Chart Previews Tabs */}
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#232f46] pb-2">
+                  <div className="flex items-center gap-2 text-xs font-semibold text-white">
+                    <Image size={15} className="text-cyan-400" />
+                    <span>Visual Analytics & Growth Curves:</span>
+                  </div>
+
+                  <div className="flex gap-1">
+                    <button
+                      onClick={() => setActiveChartTab('equity')}
+                      className={`px-3 py-1 rounded text-xs font-medium transition-colors ${activeChartTab === 'equity' ? 'bg-amber-400 text-slate-950 font-bold' : 'bg-[#1a2540] text-slate-300 hover:text-white'}`}
+                    >
+                      📈 Equity Growth
+                    </button>
+                    <button
+                      onClick={() => setActiveChartTab('heatmap')}
+                      className={`px-3 py-1 rounded text-xs font-medium transition-colors ${activeChartTab === 'heatmap' ? 'bg-amber-400 text-slate-950 font-bold' : 'bg-[#1a2540] text-slate-300 hover:text-white'}`}
+                    >
+                      🗓️ Monthly Heatmap
+                    </button>
+                    <button
+                      onClick={() => setActiveChartTab('profit')}
+                      className={`px-3 py-1 rounded text-xs font-medium transition-colors ${activeChartTab === 'profit' ? 'bg-amber-400 text-slate-950 font-bold' : 'bg-[#1a2540] text-slate-300 hover:text-white'}`}
+                    >
+                      💵 Profit ($)
+                    </button>
+                    <button
+                      onClick={() => setActiveChartTab('gain')}
+                      className={`px-3 py-1 rounded text-xs font-medium transition-colors ${activeChartTab === 'gain' ? 'bg-amber-400 text-slate-950 font-bold' : 'bg-[#1a2540] text-slate-300 hover:text-white'}`}
+                    >
+                      📊 Return (%)
+                    </button>
+                  </div>
+                </div>
+
+                <div className="p-3 bg-[#0a0f1d] border border-[#232f46] rounded-xl flex items-center justify-center min-h-[380px]">
+                  {activeChartTab === 'equity' && (
+                    <img
+                      src={`/api/markets-screened-file?path=${encodeURIComponent(`markets_screened/${selectedArtifactPair.symbol}/${selectedEa}/chart_equity_growth.png`)}`}
+                      alt="Equity Growth Chart"
+                      className="max-h-[360px] w-auto object-contain rounded border border-[#232f46]"
+                      onError={(e) => {
+                        (e.target as HTMLElement).style.display = 'none';
+                        const el = (e.target as HTMLElement).nextElementSibling;
+                        if (el) (el as HTMLElement).style.display = 'flex';
+                      }}
+                    />
+                  )}
+                  {activeChartTab === 'heatmap' && (
+                    <img
+                      src={`/api/markets-screened-file?path=${encodeURIComponent(`markets_screened/${selectedArtifactPair.symbol}/${selectedEa}/monthly_heatmap.png`)}`}
+                      alt="Monthly Performance Heatmap"
+                      className="max-h-[360px] w-auto object-contain rounded border border-[#232f46]"
+                      onError={(e) => {
+                        (e.target as HTMLElement).style.display = 'none';
+                        const el = (e.target as HTMLElement).nextElementSibling;
+                        if (el) (el as HTMLElement).style.display = 'flex';
+                      }}
+                    />
+                  )}
+                  {activeChartTab === 'profit' && (
+                    <img
+                      src={`/api/markets-screened-file?path=${encodeURIComponent(`markets_screened/${selectedArtifactPair.symbol}/${selectedEa}/chart_profit_dollars.png`)}`}
+                      alt="Profit Dollars Chart"
+                      className="max-h-[360px] w-auto object-contain rounded border border-[#232f46]"
+                      onError={(e) => {
+                        (e.target as HTMLElement).style.display = 'none';
+                        const el = (e.target as HTMLElement).nextElementSibling;
+                        if (el) (el as HTMLElement).style.display = 'flex';
+                      }}
+                    />
+                  )}
+                  {activeChartTab === 'gain' && (
+                    <img
+                      src={`/api/markets-screened-file?path=${encodeURIComponent(`markets_screened/${selectedArtifactPair.symbol}/${selectedEa}/chart_percent_gain.png`)}`}
+                      alt="Percent Gain Chart"
+                      className="max-h-[360px] w-auto object-contain rounded border border-[#232f46]"
+                      onError={(e) => {
+                        (e.target as HTMLElement).style.display = 'none';
+                        const el = (e.target as HTMLElement).nextElementSibling;
+                        if (el) (el as HTMLElement).style.display = 'flex';
+                      }}
+                    />
+                  )}
+                  <div style={{ display: 'none' }} className="flex-col items-center justify-center p-8 text-center text-[#8b95a6] space-y-2">
+                    <Activity size={32} className="text-amber-400/60" />
+                    <p className="text-xs">Chart not available or generating in progress.</p>
+                    <p className="text-[11px] text-slate-500 font-mono">Run screener on this pair to produce equity curve and heatmap artifacts.</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="px-6 py-3 border-t border-[#243048] flex justify-end bg-[#0e1422]">
+              <button
+                onClick={() => setSelectedArtifactPair(null)}
+                className="px-4 py-1.5 text-xs font-semibold text-white bg-[#1e293b] hover:bg-[#283548] border border-[#334155] rounded-lg transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── MARKETS_SCREENED REPOSITORY DRAWER ──────────────────────────────── */}
+      {showMarketsDrawer && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-xs">
+          <div className="bg-[#121927] border border-[#2d3748] rounded-xl w-full max-w-3xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
+            <div className="px-6 py-4 border-b border-[#243048] flex items-center justify-between bg-[#0e1422]">
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-400">
+                  <FolderOpen size={20} />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">
+                    AlphaForge markets_screened Repository
+                  </h3>
+                  <div className="text-xs text-[#8b95a6]">
+                    Hierarchical structure: <code className="text-amber-300 font-mono">markets_screened/&lt;PAIR&gt;/&lt;STRATEGY&gt;/</code>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={fetchMarketsScreened}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-[#1a2540] transition-colors"
+                  title="Refresh"
+                >
+                  <RefreshCw size={16} className={loadingMarkets ? "animate-spin" : ""} />
+                </button>
+                <button
+                  onClick={() => setShowMarketsDrawer(false)}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-[#1a2540] transition-colors"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+            </div>
+
+            <div className="p-6 overflow-y-auto space-y-4 flex-1">
+              {marketsData.length === 0 ? (
+                <div className="p-12 text-center text-[#8b95a6] space-y-3">
+                  <FolderOpen size={36} className="mx-auto text-slate-600" />
+                  <p className="text-sm font-medium">No screened markets found in markets_screened/</p>
+                  <p className="text-xs text-slate-500">
+                    Run the Strategy Screener on pairs like EURJPY, USDJPY, EURUSD to populate backtest folders.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {marketsData.map((pairItem) => (
+                    <div key={pairItem.symbol} className="p-4 bg-[#162032] border border-[#232f46] rounded-xl space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono text-base font-bold text-white">{pairItem.symbol}</span>
+                          <span className="text-xs text-[#8b95a6]">({pairItem.strategies?.length || 0} strategies screened)</span>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {pairItem.strategies?.map((strat: any) => (
+                          <div key={strat.strategy} className="p-3 bg-[#0f172a] border border-[#283548] rounded-lg flex items-center justify-between">
+                            <div>
+                              <div className="text-xs font-bold text-amber-300 font-mono">{strat.strategy}</div>
+                              <div className="text-[11px] text-slate-400 mt-0.5">{strat.filesCount} artifact files</div>
+                            </div>
+
+                            <button
+                              onClick={() => {
+                                setShowMarketsDrawer(false);
+                                setSelectedArtifactPair({
+                                  symbol: pairItem.symbol,
+                                  resolved_symbol: pairItem.symbol,
+                                  status: 'Completed',
+                                  net_profit: strat.summary?.net_profit || 0,
+                                  profit_pct: strat.summary?.profit_pct || 0,
+                                  profit_factor: strat.summary?.profit_factor || 0,
+                                  max_dd_pct: strat.summary?.max_dd_pct || 0,
+                                  total_trades: strat.summary?.total_trades || 0,
+                                  win_rate: strat.summary?.win_rate || 0,
+                                  sharpe: strat.summary?.sharpe || 0,
+                                });
+                              }}
+                              className="px-2.5 py-1 text-xs font-semibold bg-[#1e293b] hover:bg-[#283548] text-amber-300 border border-amber-500/30 rounded transition-colors"
+                            >
+                              View
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="px-6 py-3 border-t border-[#243048] flex justify-end bg-[#0e1422]">
+              <button
+                onClick={() => setShowMarketsDrawer(false)}
+                className="px-4 py-1.5 text-xs font-semibold text-white bg-[#1e293b] hover:bg-[#283548] border border-[#334155] rounded-lg transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

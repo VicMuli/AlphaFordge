@@ -376,8 +376,16 @@ def run_single_backtest(
             try:
                 prof_tester = Path(terminal_data_dir) / "MQL5" / "Profiles" / "Tester"
                 prof_tester.mkdir(parents=True, exist_ok=True)
-                (prof_tester / set_filename).write_bytes(set_p.read_bytes())
-                (work_dir / set_filename).write_bytes(set_p.read_bytes())
+                raw_bytes = set_p.read_bytes()
+                # Ensure UTF-16LE encoding required by MT5 Strategy Tester
+                if not (raw_bytes.startswith(b'\xff\xfe') or raw_bytes.startswith(b'\xfe\xff')):
+                    try:
+                        txt = raw_bytes.decode('utf-8')
+                    except Exception:
+                        txt = raw_bytes.decode('latin-1', errors='replace')
+                    raw_bytes = ('\ufeff' + txt).encode('utf-16le')
+                (prof_tester / set_filename).write_bytes(raw_bytes)
+                (work_dir / set_filename).write_bytes(raw_bytes)
             except Exception as e:
                 print(f"  [WARN] Failed to sync set file to Profiles/Tester: {e}")
 

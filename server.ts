@@ -639,18 +639,218 @@ async function startServer() {
     }
   });
 
-  // Get Screener Results for an EA
+  // Get Screener Results for an EA (checks researched_strategies and markets_screened)
   app.get("/api/screener-results", async (req, res) => {
     try {
       const ea = (req.query.ea as string) || "TRB";
-      const screenerManifest = path.join(process.cwd(), 'researched_strategies', ea, 'screener', 'screener_manifest.json');
-      if (existsSync(screenerManifest)) {
-        const data = await fs.readFile(screenerManifest, 'utf-8');
-        return res.json(JSON.parse(data));
+      const cleanEa = ea.replace(/\.(ex5|mq5)$/i, '').trim().toLowerCase();
+
+      // Check candidate manifest locations
+      const candidateManifests = [
+        path.join(process.cwd(), 'markets_screened', 'screener_manifest.json'),
+        path.join(process.cwd(), 'researched_strategies', ea, 'screener', 'screener_manifest.json'),
+      ];
+
+      // Also search researched_strategies for folder matching ea
+      const rsDir = path.join(process.cwd(), 'researched_strategies');
+      if (existsSync(rsDir)) {
+        try {
+          const subs = await fs.readdir(rsDir);
+          for (const s of subs) {
+            const sLow = s.toLowerCase();
+            if (sLow === cleanEa || sLow.startsWith(cleanEa) || cleanEa.startsWith(sLow)) {
+              candidateManifests.push(path.join(rsDir, s, 'screener', 'screener_manifest.json'));
+            }
+          }
+        } catch {}
       }
+
+      let manifestData: any = null;
+      for (const mPath of candidateManifests) {
+        if (existsSync(mPath)) {
+          try {
+            const raw = await fs.readFile(mPath, 'utf-8');
+            const parsed = JSON.parse(raw);
+            if (parsed && Array.isArray(parsed.results) && parsed.results.length > 0) {
+              manifestData = parsed;
+              break;
+            }
+          } catch {}
+        }
+      }
+
+      // Check markets_screened/ directory directly to enrich or build results
+      const msDir = path.join(process.cwd(), 'markets_screened');
+      const enrichedResults: any[] = manifestData?.results ? [...manifestData.results] : [];
+
+      if (existsSync(msDir)) {
+        try {
+          const symDirs = await fs.readdir(msDir, { withFileTypes: true });
+          for (const sDir of symDirs) {
+            if (sDir.isDirectory() && !sDir.name.startsWith('.')) {
+              const sym = sDir.name;
+              const symPath = path.join(msDir, sym);
+              const eaSubs = await fs.readdir(symPath, { withFileTypes: true });
+              for (const eaSub of eaSubs) {
+                if (eaSub.isDirectory() && !eaSub.name.startsWith('.')) {
+                  const subLow = eaSub.name.toLowerCase();
+                  if (subLow === cleanEa || subLow.startsWith(cleanEa) || cleanEa.startsWith(subLow)) {
+                    const stratPath = path.join(symPath, eaSub.name);
+                    const summaryPath = path.join(stratPath, 'summary.json');
+                    if (existsSync(summaryPath)) {
+                      try {
+                        const sumRaw = await fs.readFile(summaryPath, 'utf-8');
+                        const sumData = JSON.parse(sumRaw);
+                        const existingIdx = enrichedResults.findIndex(r => r.symbol.toUpperCase() === sym.toUpperCase());
+                        const item = {
+                          symbol: sym,
+                          resolved_symbol: sumData.resolved_symbol || sym,
+                          ea_name: eaSub.name,
+                          status: sumData.status || "Completed",
+                          net_profit: sumData.net_profit || 0.0,
+                          profit_pct: sumData.profit_pct || 0.0,
+                          profit_factor: sumData.profit_factor || 0.0,
+                          max_dd_pct: sumData.max_dd_pct || 0.0,
+                          total_trades: sumData.total_trades || 0,
+                          win_rate: sumData.win_rate || 0.0,
+                          sharpe: sumData.sharpe || 0.0,
+                          recovery_factor: sumData.recovery_factor || 0.0,
+                          markets_screened_dir: `markets_screened/${sym}/${eaSub.name}`,
+                          files: sumData.files || {},
+                        };
+                        if (existingIdx >= 0) {
+                          enrichedResults[existingIdx] = { ...enrichedResults[existingIdx], ...item };
+                        } else {
+                          enrichedResults.push(item);
+                        }
+                      } catch {}
+                    }
+                  }
+                }
+              }
+            }
+          }
+        } catch {}
+      }
+
+      if (manifestData || enrichedResults.length > 0) {
+        return res.json({
+          ea_name: manifestData?.ea_name || ea,
+          expert: manifestData?.expert || `${ea}.ex5`,
+          period: manifestData?.period || "M15",
+          date_range: manifestData?.date_range || "2013.01.01 -> 2026.07.03",
+          deposit: manifestData?.deposit || 2500,
+          pairs_total: enrichedResults.length,
+          pairs_completed: enrichedResults.filter(r => r.status !== 'Running' && r.status !== 'Pending').length,
+          results: enrichedResults,
+        });
+      }
+
       res.json({ results: [], pairs_total: 0, pairs_completed: 0 });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Get all markets screened directory structure
+  app.get("/api/markets-screened", async (req, res) => {
+    try {
+      const msDir = path.join(process.cwd(), 'markets_screened');
+      if (!existsSync(msDir)) {
+        return res.json({ status: "ok", pairs: [] });
+      }
+
+      const pairsList: any[] = [];
+      const symDirs = await fs.readdir(msDir, { withFileTypes: true });
+
+      for (const sDir of symDirs) {
+        if (sDir.isDirectory() && !sDir.name.startsWith('.')) {
+          const sym = sDir.name;
+          const symPath = path.join(msDir, sym);
+          const eaDirs = await fs.readdir(symPath, { withFileTypes: true });
+          const strats: any[] = [];
+
+          for (const eaDir of eaDirs) {
+            if (eaDir.isDirectory() && !eaDir.name.startsWith('.')) {
+              const stratPath = path.join(symPath, eaDir.name);
+              const summaryPath = path.join(stratPath, 'summary.json');
+              let summary: any = null;
+              if (existsSync(summaryPath)) {
+                try {
+                  summary = JSON.parse(await fs.readFile(summaryPath, 'utf-8'));
+                } catch {}
+              }
+
+              const files: Record<string, string> = {};
+              const fList = await fs.readdir(stratPath);
+              fList.forEach(fn => {
+                if (fn === 'report.html') files.reportHtml = fn;
+                if (fn === 'trades.csv') files.tradesCsv = fn;
+                if (fn === 'chart_equity_growth.png') files.equityChart = fn;
+                if (fn === 'chart_profit_dollars.png') files.profitChart = fn;
+                if (fn === 'chart_percent_gain.png') files.percentChart = fn;
+                if (fn === 'monthly_heatmap.png') files.heatmap = fn;
+                if (fn.endsWith('.docx')) files.wordDoc = fn;
+                if (fn.endsWith('.set')) files.setFile = fn;
+                if (fn === 'summary.json') files.summaryJson = fn;
+              });
+
+              strats.push({
+                ea: eaDir.name,
+                dir: `markets_screened/${sym}/${eaDir.name}`,
+                summary,
+                files
+              });
+            }
+          }
+
+          if (strats.length > 0) {
+            pairsList.push({ symbol: sym, strategies: strats });
+          }
+        }
+      }
+
+      res.json({ status: "ok", pairs: pairsList });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Serve or download generated report files from markets_screened
+  app.get("/api/markets-screened-file", async (req, res) => {
+    try {
+      const relPath = req.query.path as string;
+      if (!relPath) {
+        return res.status(400).send("Path parameter is required");
+      }
+
+      const safePath = path.normalize(relPath).replace(/^(\.\.[\/\\])+/, '');
+      if (!safePath.startsWith('markets_screened') && !safePath.startsWith('researched_strategies')) {
+        return res.status(403).send("Forbidden file path");
+      }
+
+      const fullPath = path.join(process.cwd(), safePath);
+      if (!existsSync(fullPath)) {
+        return res.status(404).send("File not found");
+      }
+
+      if (safePath.endsWith('.png')) {
+        res.setHeader('Content-Type', 'image/png');
+      } else if (safePath.endsWith('.docx')) {
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+        res.setHeader('Content-Disposition', `attachment; filename="${path.basename(safePath)}"`);
+      } else if (safePath.endsWith('.csv')) {
+        res.setHeader('Content-Type', 'text/csv');
+      } else if (safePath.endsWith('.html') || safePath.endsWith('.htm')) {
+        res.setHeader('Content-Type', 'text/html');
+      } else if (safePath.endsWith('.json')) {
+        res.setHeader('Content-Type', 'application/json');
+      }
+
+      const fileBuffer = await fs.readFile(fullPath);
+      res.send(fileBuffer);
+    } catch (e: any) {
+      res.status(500).send(e.message);
     }
   });
 
@@ -782,7 +982,27 @@ async function startServer() {
       }
 
       const setFileContent = setLines.join('\n') + '\n';
-      await fs.writeFile(setFilePath, setFileContent, 'utf-8');
+      const bom = '\ufeff';
+      const utf16Buffer = Buffer.from(bom + setFileContent, 'utf16le');
+      await fs.writeFile(setFilePath, utf16Buffer);
+
+      // Also copy to any matching folder in researched_strategies
+      const rsBase = path.join(process.cwd(), 'researched_strategies');
+      if (existsSync(rsBase)) {
+        try {
+          const subs = await fs.readdir(rsBase);
+          const clean = targetEa.toLowerCase();
+          for (const s of subs) {
+            const sLow = s.toLowerCase();
+            if (sLow === clean || sLow.startsWith(clean) || clean.startsWith(sLow)) {
+              const matchedDir = path.join(rsBase, s, 'screener');
+              await fs.mkdir(matchedDir, { recursive: true });
+              await fs.writeFile(path.join(matchedDir, 'screener_inputs.set'), utf16Buffer);
+              await fs.writeFile(path.join(matchedDir, 'screener_inputs.json'), JSON.stringify(payload, null, 2), 'utf-8');
+            }
+          }
+        } catch {}
+      }
 
       // Also sync to terminal_data_dir/MQL5/Profiles/Tester if configured
       try {
@@ -792,7 +1012,7 @@ async function startServer() {
           if (cfg.terminal_data_dir) {
             const mt5Profiles = path.join(cfg.terminal_data_dir, 'MQL5', 'Profiles', 'Tester');
             if (existsSync(mt5Profiles)) {
-              await fs.writeFile(path.join(mt5Profiles, 'screener_inputs.set'), setFileContent, 'utf-8');
+              await fs.writeFile(path.join(mt5Profiles, 'screener_inputs.set'), utf16Buffer);
             }
           }
         }

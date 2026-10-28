@@ -1135,6 +1135,21 @@ class BasePanel(ctk.CTkFrame, SubprocessMixin):
     def cfg(self):
         return self.app.config
 
+    def _open_file_safely(self, target_path):
+        if not target_path or not Path(target_path).exists():
+            messagebox.showinfo("Not Found", f"File not found: {target_path}")
+            return
+        p_str = str(Path(target_path).resolve())
+        try:
+            if sys.platform == "win32":
+                os.startfile(p_str)
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", p_str])
+            else:
+                subprocess.Popen(["xdg-open", p_str])
+        except Exception as e:
+            messagebox.showerror("Open Error", f"Could not open:\n{e}")
+
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Dashboard Panel
@@ -1365,9 +1380,10 @@ class StrategyScreenerPanel(BasePanel):
         # Row 3: Action Buttons
         r3 = ctk.CTkFrame(card, fg_color="transparent")
         r3.grid(row=3, column=0, columnspan=2, sticky="ew", padx=20, pady=(8, 16))
-        make_btn(r3, "▶  Run Strategy Screener", self._run_screener, width=220).pack(side="left")
-        make_btn(r3, "⟳ Refresh Results", self._load_screener_results, color=C["card"], hover=C["hover"], width=140).pack(side="left", padx=(10, 0))
-        make_btn(r3, "📂 Open Screener Folder", self._open_screener_folder, color=C["card"], hover=C["hover"], width=170).pack(side="left", padx=(10, 0))
+        make_btn(r3, "▶  Run Strategy Screener", self._run_screener, width=210).pack(side="left")
+        make_btn(r3, "⟳ Refresh Results", self._load_screener_results, color=C["card"], hover=C["hover"], width=130).pack(side="left", padx=(8, 0))
+        make_btn(r3, "📂 Open markets_screened", self._open_markets_screened, color=C["card"], hover=C["hover"], width=195).pack(side="left", padx=(8, 0))
+        make_btn(r3, "📁 Strategy Folder", self._open_screener_folder, color=C["card"], hover=C["hover"], width=140).pack(side="left", padx=(8, 0))
 
         # ── Results Leaderboard Card ──────────────────────────────────────────
         res_card = make_card(self)
@@ -1383,13 +1399,13 @@ class StrategyScreenerPanel(BasePanel):
         # Table container
         self._table_frame = ctk.CTkScrollableFrame(res_card, height=180, fg_color="#0a0f1d")
         self._table_frame.grid(row=1, column=0, sticky="ew", padx=16, pady=(4, 16))
-        self._table_frame.columnconfigure((0, 1, 2, 3, 4, 5, 6, 7), weight=1)
+        self._table_frame.columnconfigure((0, 1, 2, 3, 4, 5, 6, 7, 8), weight=1)
 
         # Header row
-        hdrs = ["Symbol", "MT5 Symbol", "Status", "Net Profit ($)", "Return %", "PF", "Max DD %", "Trades"]
+        hdrs = ["Symbol", "MT5 Symbol", "Status", "Net Profit ($)", "Return %", "PF", "Max DD %", "Trades", "Artifacts"]
         for ci, h in enumerate(hdrs):
             ctk.CTkLabel(self._table_frame, text=h, font=ctk.CTkFont("Segoe UI", 10, "bold"),
-                         text_color=C["sub"], anchor="w" if ci < 2 else "e").grid(row=0, column=ci, sticky="ew", padx=6, pady=4)
+                         text_color=C["sub"], anchor="w" if ci < 2 else ("center" if ci == 8 else "e")).grid(row=0, column=ci, sticky="ew", padx=6, pady=4)
 
         # ── Live Output Log ───────────────────────────────────────────────────
         log_card = make_card(self)
@@ -1481,15 +1497,35 @@ class StrategyScreenerPanel(BasePanel):
         }
 
         # Check for custom screener parameter set file
-        custom_set = SCRIPT_DIR / "researched_strategies" / ea / "screener" / "screener_inputs.set"
-        if custom_set.exists():
+        custom_set = None
+        cand_sets = [
+            SCRIPT_DIR / "researched_strategies" / ea / "screener" / "screener_inputs.set",
+            SCRIPT_DIR / "screener_inputs.set",
+            SCRIPT_DIR / "researched_strategies" / ea / "screener_inputs.set",
+        ]
+        for cset in cand_sets:
+            if cset.exists():
+                custom_set = cset
+                break
+
+        args = [
+            "--ea", ea,
+            "--symbols", symbols_str,
+            "--period", period,
+            "--from-date", norm_from,
+            "--to-date", norm_to,
+            "--deposit", dep,
+        ]
+
+        if custom_set:
             env_extra["AF_SET_FILE"] = str(custom_set)
+            args.extend(["--set-file", str(custom_set)])
 
         self.log_clear(self._log)
         def on_done():
             self._load_screener_results()
 
-        self.run_script("run_screener.py", self._log, env_extra=env_extra, on_done=on_done)
+        self.run_script("run_screener.py", self._log, args=args, env_extra=env_extra, on_done=on_done)
 
     def _update_inputs_badge(self):
         ea = self._ea_var.get().strip() if hasattr(self, "_ea_var") else "TRB"
@@ -1647,16 +1683,22 @@ class StrategyScreenerPanel(BasePanel):
                 set_lines.append(f"{k}={out_v}")
 
             set_content = "\n".join(set_lines) + "\n"
+            # Write UTF-8 version for inspection
             with open(set_file_path, "w", encoding="utf-8") as f:
                 f.write(set_content)
+            # Write to root directory as well
+            try:
+                (SCRIPT_DIR / "screener_inputs.set").write_text(set_content, encoding="utf-8")
+            except Exception:
+                pass
 
-            # Sync to MT5 Profiles/Tester if exists
+            # Sync to MT5 Profiles/Tester in UTF-16LE with BOM
             tdir = self.cfg.get("terminal_data_dir")
             if tdir:
                 try:
                     prof_dir = Path(tdir) / "MQL5" / "Profiles" / "Tester"
                     prof_dir.mkdir(parents=True, exist_ok=True)
-                    (prof_dir / "screener_inputs.set").write_text(set_content, encoding="utf-8")
+                    (prof_dir / "screener_inputs.set").write_bytes(("\ufeff" + set_content).encode("utf-16le"))
                 except Exception:
                     pass
 
@@ -1667,10 +1709,24 @@ class StrategyScreenerPanel(BasePanel):
         def _reset_inputs():
             if messagebox.askyesno("Reset Inputs", f"Reset all parameters and indicators for {ea} to compiled defaults?"):
                 set_file_path = screener_dir / "screener_inputs.set"
+                root_set = SCRIPT_DIR / "screener_inputs.set"
                 if inputs_json.exists():
                     inputs_json.unlink()
                 if set_file_path.exists():
                     set_file_path.unlink()
+                if root_set.exists():
+                    try:
+                        root_set.unlink()
+                    except Exception:
+                        pass
+                tdir = self.cfg.get("terminal_data_dir")
+                if tdir:
+                    try:
+                        mt5_set = Path(tdir) / "MQL5" / "Profiles" / "Tester" / "screener_inputs.set"
+                        if mt5_set.exists():
+                            mt5_set.unlink()
+                    except Exception:
+                        pass
                 self._update_inputs_badge()
                 dlg.destroy()
 
@@ -1680,7 +1736,11 @@ class StrategyScreenerPanel(BasePanel):
 
     def _load_screener_results(self):
         ea = self._ea_var.get().strip() if hasattr(self, "_ea_var") else "TRB"
-        manifest_path = SCRIPT_DIR / "researched_strategies" / ea / "screener" / "screener_manifest.json"
+        
+        # Check markets_screened manifest first, fallback to strategy screener dir
+        manifest_path = SCRIPT_DIR / "markets_screened" / "screener_manifest.json"
+        if not manifest_path.exists():
+            manifest_path = SCRIPT_DIR / "researched_strategies" / ea / "screener" / "screener_manifest.json"
 
         # Clear existing rows except header
         for widget in self._table_frame.winfo_children():
@@ -1691,7 +1751,7 @@ class StrategyScreenerPanel(BasePanel):
         if not manifest_path.exists():
             lbl = ctk.CTkLabel(self._table_frame, text="No screener results yet. Click 'Run Strategy Screener' to test.",
                                font=FB, text_color=C["sub"])
-            lbl.grid(row=1, column=0, columnspan=8, pady=20)
+            lbl.grid(row=1, column=0, columnspan=9, pady=20)
             if hasattr(self, "_lbl_summary_stats"):
                 self._lbl_summary_stats.configure(text="No results")
             return
@@ -1701,14 +1761,18 @@ class StrategyScreenerPanel(BasePanel):
                 data = json.load(f)
             results = data.get("results", [])
             if not results:
+                lbl = ctk.CTkLabel(self._table_frame, text="No results found in manifest.",
+                                   font=FB, text_color=C["sub"])
+                lbl.grid(row=1, column=0, columnspan=9, pady=20)
                 return
 
             sorted_res = sorted(results, key=lambda x: x.get("net_profit", 0), reverse=True)
             profitable = [r for r in sorted_res if r.get("net_profit", 0) > 0]
 
             if hasattr(self, "_lbl_summary_stats"):
+                pct_prof = (len(profitable) * 100 // len(sorted_res)) if sorted_res else 0
                 self._lbl_summary_stats.configure(
-                    text=f"Screened: {len(sorted_res)} Pairs | Profitable: {len(profitable)} ({len(profitable)*100//len(sorted_res)}%)"
+                    text=f"Screened: {len(sorted_res)} Pairs | Profitable: {len(profitable)} ({pct_prof}%)"
                 )
 
             for ri, r in enumerate(sorted_res, 1):
@@ -1733,8 +1797,40 @@ class StrategyScreenerPanel(BasePanel):
                 ctk.CTkLabel(self._table_frame, text=f"{dd:.1f}%" if dd > 0 else "-", font=FMO, text_color=C["accent"], anchor="e").grid(row=ri, column=6, sticky="ew", padx=6, pady=3)
                 ctk.CTkLabel(self._table_frame, text=str(trades), font=FMO, text_color=C["text"], anchor="e").grid(row=ri, column=7, sticky="ew", padx=6, pady=3)
 
+                # Column 8: Artifacts action
+                art_btn = make_btn(self._table_frame, "📂 Open", lambda s=sym: self._open_pair_market_dir(s),
+                                   color=C["card"], hover=C["hover"], width=68)
+                art_btn.grid(row=ri, column=8, padx=4, pady=3)
+
         except Exception as e:
             print(f"Error loading screener results: {e}")
+
+    def _open_pair_market_dir(self, symbol: str):
+        ea = self._ea_var.get().strip() if hasattr(self, "_ea_var") else "TRB"
+        clean_sym = symbol.split()[0].upper()
+        # Look in markets_screened/<SYMBOL>/<EA>
+        pair_dir = SCRIPT_DIR / "markets_screened" / clean_sym
+        if pair_dir.exists():
+            ea_dirs = [d for d in pair_dir.iterdir() if d.is_dir() and not d.name.startswith(".")]
+            if ea_dirs:
+                # If exact ea dir exists, open that, else first
+                target = next((d for d in ea_dirs if d.name.lower() == ea.lower() or ea.lower() in d.name.lower()), ea_dirs[0])
+                self._open_file_safely(target)
+                return
+            self._open_file_safely(pair_dir)
+            return
+
+        # Fallback to research strategy folder
+        alt = SCRIPT_DIR / "researched_strategies" / ea / "screener"
+        if alt.exists():
+            self._open_file_safely(alt)
+        else:
+            self._open_file_safely(SCRIPT_DIR / "markets_screened")
+
+    def _open_markets_screened(self):
+        target = SCRIPT_DIR / "markets_screened"
+        target.mkdir(parents=True, exist_ok=True)
+        self._open_file_safely(target)
 
     def _open_screener_folder(self):
         ea = self._ea_var.get().strip() if hasattr(self, "_ea_var") else "TRB"
