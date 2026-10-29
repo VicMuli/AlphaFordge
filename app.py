@@ -1926,31 +1926,67 @@ class MarketDataPanel(BasePanel):
         self._type_seg.set("Both (M1+Tick)")
         self._type_seg.pack(anchor="w", pady=(4, 0))
 
-        # Col 2: Years Range
+        # Col 2: From Date (Year, Month, Day)
         col2 = ctk.CTkFrame(form_f, fg_color="transparent")
         col2.grid(row=0, column=2, sticky="nsew", padx=6, pady=4)
-        make_label(col2, "Years (e.g. 2021-2024 or 2023):", font=FB, color=C["sub"]).pack(anchor="w")
-        self._years_entry = make_entry(col2, width=160, font=FMO)
-        self._years_entry.insert(0, "2022-2024")
-        self._years_entry.pack(anchor="w", pady=(4, 0))
+        make_label(col2, "📅 From Date (YYYY-MM-DD):", font=FB, color=C["sub"]).pack(anchor="w")
+        self._from_date_entry = make_entry(col2, width=160, font=FMO)
+        self._from_date_entry.insert(0, "2012-12-31")
+        self._from_date_entry.pack(anchor="w", pady=(4, 0))
 
-        # Col 3: Format & Auto-extract
+        # Col 3: To Date (Year, Month, Day)
         col3 = ctk.CTkFrame(form_f, fg_color="transparent")
         col3.grid(row=0, column=3, sticky="nsew", padx=6, pady=4)
-        make_label(col3, "Format & Extraction:", font=FB, color=C["sub"]).pack(anchor="w")
-        opts_row = ctk.CTkFrame(col3, fg_color="transparent")
-        opts_row.pack(anchor="w", pady=(4, 0))
+        make_label(col3, "📅 To Date (YYYY-MM-DD):", font=FB, color=C["sub"]).pack(anchor="w")
+        self._to_date_entry = make_entry(col3, width=160, font=FMO)
+        self._to_date_entry.insert(0, "2024-12-31")
+        self._to_date_entry.pack(anchor="w", pady=(4, 0))
+
+        # Compatibility reference
+        self._years_entry = self._from_date_entry
+
+        # Row 1: Presets & Format Options
+        sub_row = ctk.CTkFrame(dl_card, fg_color="transparent")
+        sub_row.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 6))
+
+        presets_f = ctk.CTkFrame(sub_row, fg_color="transparent")
+        presets_f.pack(side="left")
+        make_label(presets_f, "Quick Presets:", font=FSM, color=C["sub"]).pack(side="left", padx=(0, 6))
+
+        def _set_dates(s, e):
+            self._from_date_entry.delete(0, "end")
+            self._from_date_entry.insert(0, s)
+            self._to_date_entry.delete(0, "end")
+            self._to_date_entry.insert(0, e)
+
+        make_btn(presets_f, "Dukascopy Ref (2012-12-31 → 2013-01-02)", lambda: _set_dates("2012-12-31", "2013-01-02"),
+                 color="#064e3b", hover="#047857", width=220, font=FSM).pack(side="left", padx=2)
+        make_btn(presets_f, "2022-2024", lambda: _set_dates("2022-01-01", "2024-12-31"),
+                 color=C["card"], hover=C["hover"], width=90, font=FSM).pack(side="left", padx=2)
+        make_btn(presets_f, "2023 Full Year", lambda: _set_dates("2023-01-01", "2023-12-31"),
+                 color=C["card"], hover=C["hover"], width=100, font=FSM).pack(side="left", padx=2)
+        make_btn(presets_f, "2020-2024", lambda: _set_dates("2020-01-01", "2024-12-31"),
+                 color=C["card"], hover=C["hover"], width=90, font=FSM).pack(side="left", padx=2)
+
+        opts_row = ctk.CTkFrame(sub_row, fg_color="transparent")
+        opts_row.pack(side="right")
         self._extract_var = ctk.BooleanVar(value=True)
         ctk.CTkCheckBox(opts_row, text="Unpack to CSV", variable=self._extract_var,
                         font=FSM, fg_color=C["accent"]).pack(side="left")
         self._platform_combo = ctk.CTkComboBox(opts_row, values=["ASCII (Generic)", "MT (MetaTrader)"],
-                                              width=140, font=FSM)
+                                              width=135, font=FSM)
         self._platform_combo.set("ASCII (Generic)")
-        self._platform_combo.pack(side="left", padx=(10, 0))
+        self._platform_combo.pack(side="left", padx=(8, 0))
+
+        # Notice badge for combined M1 + Tick Volume
+        notice_f = ctk.CTkFrame(dl_card, fg_color="#0b1b15", corner_radius=6)
+        notice_f.grid(row=3, column=0, sticky="ew", padx=16, pady=(0, 8))
+        make_label(notice_f, "✨ MT5 Unified Bar Export: HistData M1 OHLC prices and real Tick Volume are combined into 1 Excel doc (<DATE>, <TIME>, <OPEN>, <HIGH>, <LOW>, <CLOSE>, <TICKVOL>, <VOL>, <SPREAD>) ready for MT5 Terminal upload.",
+                   font=FSM, color="#34d399").pack(anchor="w", padx=10, pady=5)
 
         # Action Buttons Row
         btn_bar = ctk.CTkFrame(dl_card, fg_color="transparent")
-        btn_bar.grid(row=2, column=0, sticky="ew", padx=16, pady=(6, 16))
+        btn_bar.grid(row=4, column=0, sticky="ew", padx=16, pady=(4, 16))
         
         self._btn_download = make_btn(btn_bar, "📥 Download & Organise Data", self._start_download,
                                       color=C["accent"], hover=C["hover"], width=220)
@@ -1971,7 +2007,7 @@ class MarketDataPanel(BasePanel):
 
         # ── 3. Organised market_data/ Datasets Table ──────────────────────────
         table_card = make_card(self)
-        table_card.grid(row=3, column=0, sticky="ew", padx=32, pady=(16, 0))
+        table_card.grid(row=5, column=0, sticky="ew", padx=32, pady=(16, 0))
         table_card.columnconfigure(0, weight=1)
 
         t_hdr = ctk.CTkFrame(table_card, fg_color="transparent")
@@ -1985,9 +2021,9 @@ class MarketDataPanel(BasePanel):
 
         # ── 4. Live Output Terminal ──────────────────────────────────────────
         log_card = make_card(self)
-        log_card.grid(row=4, column=0, sticky="nsew", padx=32, pady=(16, 24))
+        log_card.grid(row=6, column=0, sticky="nsew", padx=32, pady=(16, 24))
         log_card.columnconfigure(0, weight=1)
-        self.rowconfigure(4, weight=1)
+        self.rowconfigure(6, weight=1)
 
         l_hdr = ctk.CTkFrame(log_card, fg_color="transparent")
         l_hdr.grid(row=0, column=0, sticky="ew", padx=16, pady=(12, 4))
@@ -2014,21 +2050,23 @@ class MarketDataPanel(BasePanel):
             "Tick Only": "tick"
         }
         data_type = type_map.get(self._type_seg.get(), "both")
-        years_str = self._years_entry.get().strip() or "2023"
+        from_date = self._from_date_entry.get().strip() or "2012-12-31"
+        to_date = self._to_date_entry.get().strip() or "2024-12-31"
         platform = "ASCII" if "ASCII" in self._platform_combo.get() else "MT"
         extract = self._extract_var.get()
 
         args = [
             "--pair", pair,
             "--type", data_type,
-            "--years", years_str,
+            "--from-date", from_date,
+            "--to-date", to_date,
             "--platform", platform
         ]
         if not extract:
             args.append("--no-extract")
 
         self.log_clear(self._log)
-        self._lbl_dl_status.configure(text=f"⚡ Downloading {pair} ({data_type.upper()})...", text_color=C["accent"])
+        self._lbl_dl_status.configure(text=f"⚡ Downloading {pair} ({from_date} → {to_date})...", text_color=C["accent"])
 
         def on_done():
             self._lbl_dl_status.configure(text="● Engine Idle / Ready", text_color=C["success"])
@@ -2197,9 +2235,12 @@ class MarketDataPanel(BasePanel):
             messagebox.showwarning("Missing Pair", "Please select or enter a currency pair (e.g. EURJPY).")
             return
 
+        from_date = self._from_date_entry.get().strip() if hasattr(self, "_from_date_entry") else "2012-12-31"
+        to_date = self._to_date_entry.get().strip() if hasattr(self, "_to_date_entry") else "2024-12-31"
+
         self.log_clear(self._log)
-        self._lbl_dl_status.configure(text=f"📊 Compiling MT5 Excel for {pair}...", text_color=C["accent"])
-        args = ["--pair", pair, "--export-excel"]
+        self._lbl_dl_status.configure(text=f"📊 Compiling MT5 Excel for {pair} ({from_date} → {to_date})...", text_color=C["accent"])
+        args = ["--pair", pair, "--export-excel", "--from-date", from_date, "--to-date", to_date]
 
         def on_done():
             self._lbl_dl_status.configure(text="● Engine Idle / Ready", text_color=C["success"])

@@ -1244,12 +1244,18 @@ async function startServer() {
   // Compile unified MT5 Excel document (.xlsx) & MT5 Bar Import file (.csv)
   app.post("/api/market-data-build-excel", async (req, res) => {
     try {
-      const { pair, spread, maxBars } = req.body;
+      const { pair, spread, maxBars, fromDate, toDate } = req.body;
       if (!pair) {
         return res.status(400).json({ error: "Currency pair is required" });
       }
       const cleanPair = String(pair).trim().toUpperCase();
       const args = [path.join(process.cwd(), 'market_data_downloader.py'), '--pair', cleanPair, '--export-excel'];
+      if (fromDate) {
+        args.push('--from-date', String(fromDate));
+      }
+      if (toDate) {
+        args.push('--to-date', String(toDate));
+      }
       if (spread && Number(spread) > 0) {
         args.push('--spread', String(spread));
       }

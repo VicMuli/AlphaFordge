@@ -67,9 +67,30 @@ export default function MarketData({ config, onUpdateConfig }: { config: any; on
   const [selectedPair, setSelectedPair] = useState<string>('EURJPY');
   const [customPair, setCustomPair] = useState<string>('');
   const [dataType, setDataType] = useState<'both' | 'm1' | 'tick'>('both');
-  const [years, setYears] = useState<string>('2022-2024');
+  const [years, setYears] = useState<string>('2012-2024');
   const [platform, setPlatform] = useState<'ASCII' | 'MT'>('ASCII');
   const [autoExtract, setAutoExtract] = useState<boolean>(true);
+
+  // Exact Date Range Selection: Year, Month, Day (From & To)
+  const [fromDate, setFromDate] = useState<string>('2012-12-31');
+  const [toDate, setToDate] = useState<string>('2024-12-31');
+
+  // Sync date picker and dropdown helpers
+  const handleFromDateChange = (val: string) => {
+    setFromDate(val);
+  };
+
+  const handleToDateChange = (val: string) => {
+    setToDate(val);
+  };
+
+  const setDatePreset = (start: string, end: string) => {
+    setFromDate(start);
+    setToDate(end);
+    const startYr = start.split('-')[0];
+    const endYr = end.split('-')[0];
+    setYears(startYr === endYr ? startYr : `${startYr}-${endYr}`);
+  };
 
   // MT5 Excel Engine State
   const [excelPair, setExcelPair] = useState<string>('EURJPY');
@@ -132,9 +153,13 @@ export default function MarketData({ config, onUpdateConfig }: { config: any; on
     const args = [
       '--pair', activePairName,
       '--type', dataType,
-      '--years', years.trim() || '2023',
+      '--from-date', fromDate,
+      '--to-date', toDate,
       '--platform', platform
     ];
+    if (years.trim()) {
+      args.push('--years', years.trim());
+    }
     if (!autoExtract) {
       args.push('--no-extract');
     }
@@ -261,13 +286,15 @@ export default function MarketData({ config, onUpdateConfig }: { config: any; on
     setExcelSpread(getSuggestedSpread(p));
   };
 
-  const handleCompileExcel = async (targetPair?: string, targetSpread?: number) => {
+  const handleCompileExcel = async (targetPair?: string, targetSpread?: number, targetFrom?: string, targetTo?: string) => {
     const p = (targetPair || excelPair).toUpperCase().trim();
     if (!p) {
       setExcelResultMsg({ type: 'error', text: 'Please select a pair to compile MT5 Excel document.' });
       return;
     }
     const sp = targetSpread !== undefined ? targetSpread : excelSpread;
+    const sFrom = targetFrom !== undefined ? targetFrom : fromDate;
+    const sTo = targetTo !== undefined ? targetTo : toDate;
     setIsCompilingExcel(true);
     setExcelResultMsg(null);
 
@@ -275,7 +302,7 @@ export default function MarketData({ config, onUpdateConfig }: { config: any; on
       const res = await fetch('/api/market-data-build-excel', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pair: p, spread: sp })
+        body: JSON.stringify({ pair: p, spread: sp, fromDate: sFrom, toDate: sTo })
       });
       const data = await res.json();
       if (res.ok && data.status === 'ok') {
@@ -310,7 +337,7 @@ export default function MarketData({ config, onUpdateConfig }: { config: any; on
         <div>
           <SectionHeader
             title="Market Data & HistData Engine"
-            description="Download M1 (1-minute) and real tick quotes from HistData, organize into market_data/<PAIR>/ subfolders, and sync with AlphaForge."
+            description="Download M1 (1-minute) and real tick quotes from HistData, organize into market_data/<PAIR>/ subfolders, and combine M1 OHLC + Tick Volume into MT5 Excel documents."
           />
         </div>
         <div className="flex items-center gap-3">
@@ -386,30 +413,35 @@ export default function MarketData({ config, onUpdateConfig }: { config: any; on
 
         <Card className="p-4 bg-slate-900/60 border-slate-800/80">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Active Symbol</span>
-            <CheckCircle2 className="w-4 h-4 text-indigo-400" />
+            <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">MT5 Combined Bar Format</span>
+            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
           </div>
           <div className="mt-2 flex items-baseline gap-2">
-            <span className="text-xl font-bold text-indigo-300 truncate">
-              {config?.symbol || catalog?.activeSymbol || 'USDJPY'}
+            <span className="text-xl font-bold text-emerald-300 truncate">
+              M1 OHLC + Tick Vol
             </span>
           </div>
-          <p className="mt-1 text-xs text-slate-500">Pip: {config?.pip_size || '0.01'} | {config?.period || 'M15'}</p>
+          <p className="mt-1 text-xs text-slate-500">9 Columns • Ready for MT5 Import</p>
         </Card>
       </div>
 
-      {/* Downloader Form Card */}
+      {/* Downloader Form Card with Exact Year, Month, Date Range Controls */}
       <Card className="p-5 bg-slate-900/60 border-slate-800/80 space-y-5">
-        <div className="flex items-center justify-between border-b border-slate-800/80 pb-3">
+        <div className="flex flex-col md:flex-row md:items-center justify-between border-b border-slate-800/80 pb-3 gap-2">
           <div className="flex items-center gap-2">
             <Download className="w-4 h-4 text-amber-400" />
             <h3 className="text-sm font-bold text-white uppercase tracking-wider">
               Download HistData Quotes to market_data/
             </h3>
           </div>
-          <span className="text-xs text-slate-500 font-mono">
-            Output: market_data/{activePairName}/{dataType.toUpperCase()}/
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="text-xs px-2.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono">
+              Combined M1 OHLC + Tick Volume: Active
+            </span>
+            <span className="text-xs text-slate-500 font-mono hidden sm:inline">
+              market_data/{activePairName}/
+            </span>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -476,61 +508,75 @@ export default function MarketData({ config, onUpdateConfig }: { config: any; on
               </button>
             </div>
             <p className="mt-1.5 text-[11px] text-slate-500">
-              {dataType === 'both' && 'Downloads 1-min bars + monthly tick archives'}
+              {dataType === 'both' && 'Downloads 1-min bars + monthly tick archives and merges into MT5 Excel'}
               {dataType === 'm1' && 'Downloads annual 1-minute historical bars'}
               {dataType === 'tick' && 'Downloads high-resolution tick quote data'}
             </p>
           </div>
 
-          {/* Years Range */}
-          <div>
-            <label className="block text-xs font-semibold text-slate-400 mb-1.5">
-              Years Range
-            </label>
-            <input
-              type="text"
-              value={years}
-              onChange={(e) => setYears(e.target.value)}
-              placeholder="e.g. 2022-2024 or 2023"
-              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white font-mono focus:outline-none focus:border-amber-500/50"
-            />
-            <div className="flex gap-1.5 mt-2">
-              {['2023', '2022-2024', '2020-2024'].map((y) => (
-                <button
-                  key={y}
-                  type="button"
-                  onClick={() => setYears(y)}
-                  className="px-2 py-0.5 text-[10px] bg-slate-800 text-slate-400 hover:text-white rounded border border-slate-700 font-mono"
-                >
-                  {y}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Format & Extract */}
-          <div>
-            <label className="block text-xs font-semibold text-slate-400 mb-1.5">
-              Platform & Unpacking
-            </label>
-            <div className="space-y-2">
-              <select
-                value={platform}
-                onChange={(e) => setPlatform(e.target.value as any)}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-500/50"
-              >
-                <option value="ASCII">Generic ASCII (CSV format)</option>
-                <option value="MT">MetaTrader (MT format)</option>
-              </select>
-              <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer pt-0.5">
+          {/* Date Range Selection (From & To) */}
+          <div className="md:col-span-2 space-y-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {/* From Date: Year, Month, Date */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-400 mb-1.5 flex items-center justify-between">
+                  <span>📅 From Date (Year / Month / Day)</span>
+                  <span className="text-[10px] text-amber-400 font-mono">{fromDate}</span>
+                </label>
                 <input
-                  type="checkbox"
-                  checked={autoExtract}
-                  onChange={(e) => setAutoExtract(e.target.checked)}
-                  className="rounded border-slate-800 bg-slate-950 text-amber-500 focus:ring-0"
+                  type="date"
+                  value={fromDate}
+                  onChange={(e) => handleFromDateChange(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white font-mono focus:outline-none focus:border-amber-500/50"
                 />
-                <span>Automatically unpack ZIP to CSV</span>
-              </label>
+              </div>
+
+              {/* To Date: Year, Month, Date */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-400 mb-1.5 flex items-center justify-between">
+                  <span>📅 To Date (Year / Month / Day)</span>
+                  <span className="text-[10px] text-amber-400 font-mono">{toDate}</span>
+                </label>
+                <input
+                  type="date"
+                  value={toDate}
+                  onChange={(e) => handleToDateChange(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white font-mono focus:outline-none focus:border-amber-500/50"
+                />
+              </div>
+            </div>
+
+            {/* Quick Range Presets */}
+            <div className="flex flex-wrap items-center gap-1.5 pt-1">
+              <span className="text-[10px] text-slate-500 mr-1">Presets:</span>
+              <button
+                type="button"
+                onClick={() => setDatePreset('2012-12-31', '2013-01-02')}
+                className="px-2 py-0.5 text-[10px] bg-emerald-950/60 text-emerald-300 hover:text-white rounded border border-emerald-800/80 font-mono"
+              >
+                Dukascopy Reference (2012-12-31 → 2013-01-02)
+              </button>
+              <button
+                type="button"
+                onClick={() => setDatePreset('2022-01-01', '2024-12-31')}
+                className="px-2 py-0.5 text-[10px] bg-slate-800 text-slate-300 hover:text-white rounded border border-slate-700 font-mono"
+              >
+                2022-2024 (3 Yrs)
+              </button>
+              <button
+                type="button"
+                onClick={() => setDatePreset('2023-01-01', '2023-12-31')}
+                className="px-2 py-0.5 text-[10px] bg-slate-800 text-slate-300 hover:text-white rounded border border-slate-700 font-mono"
+              >
+                2023 Full Year
+              </button>
+              <button
+                type="button"
+                onClick={() => setDatePreset('2020-01-01', '2024-12-31')}
+                className="px-2 py-0.5 text-[10px] bg-slate-800 text-slate-300 hover:text-white rounded border border-slate-700 font-mono"
+              >
+                2020-2024 (5 Yrs)
+              </button>
             </div>
           </div>
         </div>
@@ -544,7 +590,7 @@ export default function MarketData({ config, onUpdateConfig }: { config: any; on
             className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold px-5"
           >
             <Download className="w-4 h-4 mr-2" />
-            {isRunning ? 'Downloading Data...' : `Download ${activePairName} Data`}
+            {isRunning ? 'Downloading Data...' : `Download ${activePairName} (${fromDate} → ${toDate})`}
           </Button>
 
           {isRunning && (
@@ -582,16 +628,19 @@ export default function MarketData({ config, onUpdateConfig }: { config: any; on
                 <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono normal-case">
                   Dukascopy Format
                 </span>
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20 font-mono normal-case">
+                  Combined M1 + Tick Volume
+                </span>
               </h3>
               <p className="text-xs text-slate-400">
-                Download and organise quotes into a unified Excel document (<span className="font-mono text-emerald-400">.xlsx</span>) and MT5 bar import file (<span className="font-mono text-emerald-400">.csv</span>) structured in the exact 9-column order for MT5 Terminal Symbol Import.
+                Download and organise quotes into a unified Excel document (<span className="font-mono text-emerald-400">.xlsx</span>) and MT5 bar import file (<span className="font-mono text-emerald-400">.csv</span>) combining HistData M1 OHLC prices and aggregated real tick volume in the exact 9-column order for MT5 Terminal Symbol Import.
               </p>
             </div>
           </div>
         </div>
 
-        {/* Form Controls */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 bg-slate-950/60 p-4 rounded-xl border border-slate-800/60">
+        {/* Form Controls: Pair, Spread, Date Filter (From & To) */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 bg-slate-950/60 p-4 rounded-xl border border-slate-800/60">
           <div>
             <label className="block text-xs font-semibold text-slate-400 mb-1.5">
               Select Pair / Symbol
@@ -626,10 +675,30 @@ export default function MarketData({ config, onUpdateConfig }: { config: any; on
             </div>
           </div>
 
+          <div>
+            <label className="block text-xs font-semibold text-slate-400 mb-1.5">
+              Date Filter Range (From → To)
+            </label>
+            <div className="grid grid-cols-2 gap-2">
+              <input
+                type="date"
+                value={fromDate}
+                onChange={(e) => handleFromDateChange(e.target.value)}
+                className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-emerald-500/50"
+              />
+              <input
+                type="date"
+                value={toDate}
+                onChange={(e) => handleToDateChange(e.target.value)}
+                className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-emerald-500/50"
+              />
+            </div>
+          </div>
+
           <div className="flex items-end">
             <Button
               variant="default"
-              onClick={() => handleCompileExcel(excelPair, excelSpread)}
+              onClick={() => handleCompileExcel(excelPair, excelSpread, fromDate, toDate)}
               disabled={isCompilingExcel}
               className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold h-10 shadow-lg shadow-emerald-950/40"
             >

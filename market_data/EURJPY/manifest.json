@@ -3,13 +3,17 @@
     "excel_file": "EURJPY_MT5_M1_bars.xlsx",
     "csv_file": "EURJPY_MT5_M1_bars.csv",
     "txt_file": "EURJPY_MT5_M1_bars.txt",
-    "total_bars": 7200,
+    "total_bars": 1440,
     "spread_points": 30,
+    "from_date": "2012-12-31",
+    "to_date": "2012-12-31",
     "start_date": "2012.12.31 0:00",
-    "end_date": "2013.01.06 23:59",
-    "xlsx_size_mb": 0.28,
-    "csv_size_mb": 0.47,
-    "last_compiled": "2026-10-28 08:41:03",
+    "end_date": "2012.12.31 23:59",
+    "xlsx_size_mb": 0.06,
+    "csv_size_mb": 0.1,
+    "tick_volume_combined": true,
+    "tick_merged_bars": 6,
+    "last_compiled": "2026-10-29 13:42:44",
     "columns": [
       "<DATE>",
       "<TIME>",
@@ -40,8 +44,8 @@
         113.233,
         113.209,
         113.217,
-        10230000,
-        10230000,
+        10200000,
+        10200000,
         30
       ],
       [
@@ -51,8 +55,8 @@
         113.205,
         113.162,
         113.205,
-        30110000,
-        30110000,
+        30100000,
+        30100000,
         30
       ],
       [
@@ -91,5 +95,5 @@
     ]
   },
   "pair": "EURJPY",
-  "last_updated": "2026-10-28 08:41:03"
+  "last_updated": "2026-10-29 13:42:44"
 }
