@@ -935,7 +935,7 @@ class SubprocessMixin:
 
     def run_script(self, script_name: str, log_widget: ctk.CTkTextbox,
                    env_extra: dict = None, args: list = None,
-                   on_done=None):
+                   on_done=None, on_line=None):
         """Launch a script in a daemon thread, streaming output to log_widget."""
         script_path = SCRIPT_DIR / script_name
         if not script_path.exists():
@@ -968,6 +968,11 @@ class SubprocessMixin:
                 )
                 for line in iter(proc.stdout.readline, ""):
                     self.log_append(log_widget, line)
+                    if on_line:
+                        try:
+                            log_widget.after(0, lambda l=line: on_line(l))
+                        except Exception:
+                            pass
                 proc.wait()
                 self.log_append(log_widget,
                     f"\n{'─'*60}\n✔  Finished  (code {proc.returncode})  "
@@ -1931,7 +1936,7 @@ class MarketDataPanel(BasePanel):
         col2.grid(row=0, column=2, sticky="nsew", padx=6, pady=4)
         make_label(col2, "📅 From Date (YYYY-MM-DD):", font=FB, color=C["sub"]).pack(anchor="w")
         self._from_date_entry = make_entry(col2, width=160, font=FMO)
-        self._from_date_entry.insert(0, "2012-12-31")
+        self._from_date_entry.insert(0, "2016-01-01")
         self._from_date_entry.pack(anchor="w", pady=(4, 0))
 
         # Col 3: To Date (Year, Month, Day)
@@ -1939,7 +1944,7 @@ class MarketDataPanel(BasePanel):
         col3.grid(row=0, column=3, sticky="nsew", padx=6, pady=4)
         make_label(col3, "📅 To Date (YYYY-MM-DD):", font=FB, color=C["sub"]).pack(anchor="w")
         self._to_date_entry = make_entry(col3, width=160, font=FMO)
-        self._to_date_entry.insert(0, "2024-12-31")
+        self._to_date_entry.insert(0, "2026-11-01")
         self._to_date_entry.pack(anchor="w", pady=(4, 0))
 
         # Compatibility reference
@@ -1959,14 +1964,16 @@ class MarketDataPanel(BasePanel):
             self._to_date_entry.delete(0, "end")
             self._to_date_entry.insert(0, e)
 
-        make_btn(presets_f, "Dukascopy Ref (2012-12-31 → 2013-01-02)", lambda: _set_dates("2012-12-31", "2013-01-02"),
-                 color="#064e3b", hover="#047857", width=220, font=FSM).pack(side="left", padx=2)
-        make_btn(presets_f, "2022-2024", lambda: _set_dates("2022-01-01", "2024-12-31"),
-                 color=C["card"], hover=C["hover"], width=90, font=FSM).pack(side="left", padx=2)
+        make_btn(presets_f, "⭐ 2016 to Date (2016-2026)", lambda: _set_dates("2016-01-01", "2026-11-01"),
+                 color="#78350f", hover="#92400e", width=190, font=ctk.CTkFont("Segoe UI", 10, "bold")).pack(side="left", padx=2)
+        make_btn(presets_f, "Dukascopy Ref (2012-12-31)", lambda: _set_dates("2012-12-31", "2013-01-02"),
+                 color="#064e3b", hover="#047857", width=170, font=FSM).pack(side="left", padx=2)
+        make_btn(presets_f, "2020-2026", lambda: _set_dates("2020-01-01", "2026-11-01"),
+                 color=C["card"], hover=C["hover"], width=85, font=FSM).pack(side="left", padx=2)
+        make_btn(presets_f, "2022-2026", lambda: _set_dates("2022-01-01", "2026-11-01"),
+                 color=C["card"], hover=C["hover"], width=85, font=FSM).pack(side="left", padx=2)
         make_btn(presets_f, "2023 Full Year", lambda: _set_dates("2023-01-01", "2023-12-31"),
-                 color=C["card"], hover=C["hover"], width=100, font=FSM).pack(side="left", padx=2)
-        make_btn(presets_f, "2020-2024", lambda: _set_dates("2020-01-01", "2024-12-31"),
-                 color=C["card"], hover=C["hover"], width=90, font=FSM).pack(side="left", padx=2)
+                 color=C["card"], hover=C["hover"], width=95, font=FSM).pack(side="left", padx=2)
 
         opts_row = ctk.CTkFrame(sub_row, fg_color="transparent")
         opts_row.pack(side="right")
@@ -1986,7 +1993,7 @@ class MarketDataPanel(BasePanel):
 
         # Action Buttons Row
         btn_bar = ctk.CTkFrame(dl_card, fg_color="transparent")
-        btn_bar.grid(row=4, column=0, sticky="ew", padx=16, pady=(4, 16))
+        btn_bar.grid(row=4, column=0, sticky="ew", padx=16, pady=(4, 12))
         
         self._btn_download = make_btn(btn_bar, "📥 Download & Organise Data", self._start_download,
                                       color=C["accent"], hover=C["hover"], width=220)
@@ -2004,6 +2011,26 @@ class MarketDataPanel(BasePanel):
 
         make_btn(btn_bar, "⚡ Set Active EA Symbol", self._set_selected_as_active,
                  color=C["blue"], hover=C["hover"], width=190).pack(side="left", padx=(10, 0))
+
+        # ── Real-time Progress Bar Card ──────────────────────────────────────
+        self._pbar_box = ctk.CTkFrame(dl_card, fg_color="#0e1726", corner_radius=8, border_width=1, border_color="#1e293b")
+        self._pbar_box.grid(row=5, column=0, sticky="ew", padx=16, pady=(0, 16))
+        self._pbar_box.columnconfigure(0, weight=1)
+
+        pbar_top = ctk.CTkFrame(self._pbar_box, fg_color="transparent")
+        pbar_top.pack(fill="x", padx=14, pady=(10, 4))
+        self._lbl_progress_stage = ctk.CTkLabel(pbar_top, text="● Engine Idle / Ready", font=FB, text_color=C["text"])
+        self._lbl_progress_stage.pack(side="left")
+        self._lbl_progress_pct = ctk.CTkLabel(pbar_top, text="0.0%", font=ctk.CTkFont("Segoe UI", 13, "bold"), text_color=C["accent"])
+        self._lbl_progress_pct.pack(side="right")
+
+        self._progress_bar = ctk.CTkProgressBar(self._pbar_box, height=13, corner_radius=6,
+                                                fg_color="#1a2234", progress_color=C["accent"])
+        self._progress_bar.set(0.0)
+        self._progress_bar.pack(fill="x", padx=14, pady=(0, 6))
+
+        self._lbl_progress_detail = make_label(self._pbar_box, "Download progress, unpacked files, and MT5 Excel compiler stages appear here in real time.", font=FSM, color=C["sub"])
+        self._lbl_progress_detail.pack(anchor="w", padx=14, pady=(0, 10))
 
         # ── 3. Organised market_data/ Datasets Table ──────────────────────────
         table_card = make_card(self)
@@ -2038,6 +2065,35 @@ class MarketDataPanel(BasePanel):
     def _on_type_change(self, val):
         pass
 
+    def _handle_progress_line(self, line: str):
+        if not line:
+            return
+        m = re.search(r'\[PROGRESS:([\d\.]+)%\]\s*(?:\[(\d+/\d+)\])?\s*(.*)', line)
+        if m:
+            try:
+                pct = float(m.group(1))
+                step_info = m.group(2) or ""
+                msg = m.group(3) or ""
+                val = max(0.0, min(1.0, pct / 100.0))
+                self._progress_bar.set(val)
+                self._lbl_progress_pct.configure(text=f"{pct:.1f}%")
+                if pct >= 100.0:
+                    self._progress_bar.configure(progress_color=C["success"])
+                    self._lbl_progress_pct.configure(text_color=C["success"])
+                    self._lbl_progress_stage.configure(text="✔ All Downloads & MT5 Excel Compilation Complete!")
+                else:
+                    self._progress_bar.configure(progress_color=C["accent"])
+                    self._lbl_progress_pct.configure(text_color=C["accent"])
+                if msg:
+                    self._lbl_progress_stage.configure(text=f"⚡ {msg}")
+                if step_info:
+                    self._lbl_progress_detail.configure(text=f"Progress Step: {step_info} | Real-time organization in market_data/")
+            except Exception:
+                pass
+        elif "[DOWNLOAD]" in line or "[UNPACKED]" in line or "[EXCEL]" in line or "[CSV]" in line or "[SUCCESS]" in line:
+            clean_txt = line.strip().replace("\n", " ")
+            self._lbl_progress_detail.configure(text=clean_txt[:120])
+
     def _start_download(self):
         pair = self._pair_combo.get().strip().upper()
         if not pair:
@@ -2050,16 +2106,21 @@ class MarketDataPanel(BasePanel):
             "Tick Only": "tick"
         }
         data_type = type_map.get(self._type_seg.get(), "both")
-        from_date = self._from_date_entry.get().strip() or "2012-12-31"
-        to_date = self._to_date_entry.get().strip() or "2024-12-31"
+        from_date = self._from_date_entry.get().strip() or "2016-01-01"
+        to_date = self._to_date_entry.get().strip() or "2026-11-01"
         platform = "ASCII" if "ASCII" in self._platform_combo.get() else "MT"
         extract = self._extract_var.get()
+
+        from_yr = from_date.split("-")[0] if "-" in from_date else "2016"
+        to_yr = to_date.split("-")[0] if "-" in to_date else "2026"
+        years_arg = f"{from_yr}-{to_yr}" if from_yr != to_yr else from_yr
 
         args = [
             "--pair", pair,
             "--type", data_type,
             "--from-date", from_date,
             "--to-date", to_date,
+            "--years", years_arg,
             "--platform", platform
         ]
         if not extract:
@@ -2067,16 +2128,29 @@ class MarketDataPanel(BasePanel):
 
         self.log_clear(self._log)
         self._lbl_dl_status.configure(text=f"⚡ Downloading {pair} ({from_date} → {to_date})...", text_color=C["accent"])
+        self._progress_bar.set(0.02)
+        self._progress_bar.configure(progress_color=C["accent"])
+        self._lbl_progress_pct.configure(text="2.0%", text_color=C["accent"])
+        self._lbl_progress_stage.configure(text=f"⚡ Initializing {pair} ({data_type.upper()}) Download...")
+        self._lbl_progress_detail.configure(text=f"Target: market_data/{pair}/ | Date Filter: {from_date} to {to_date}")
 
         def on_done():
             self._lbl_dl_status.configure(text="● Engine Idle / Ready", text_color=C["success"])
+            self._progress_bar.set(1.0)
+            self._progress_bar.configure(progress_color=C["success"])
+            self._lbl_progress_pct.configure(text="100.0%", text_color=C["success"])
+            self._lbl_progress_stage.configure(text=f"✔ Successfully Completed {pair} Download & MT5 Excel Export!")
+            self._lbl_progress_detail.configure(text=f"All datasets organized in market_data/{pair}/ and ready for MT5 Terminal import.")
             self._refresh_catalog()
 
-        self.run_script("market_data_downloader.py", self._log, args=args, on_done=on_done)
+        self.run_script("market_data_downloader.py", self._log, args=args, on_done=on_done, on_line=self._handle_progress_line)
 
     def _stop_download(self):
         self.stop_process()
         self._lbl_dl_status.configure(text="● Engine Stopped", text_color=C["danger"])
+        self._progress_bar.configure(progress_color=C["danger"])
+        self._lbl_progress_stage.configure(text="⏹ Download Halted by User")
+        self._lbl_progress_detail.configure(text="Process stopped before finishing.")
 
     def _open_market_data_dir(self):
         self._open_file_safely(self._market_data_dir)
@@ -2240,10 +2314,19 @@ class MarketDataPanel(BasePanel):
 
         self.log_clear(self._log)
         self._lbl_dl_status.configure(text=f"📊 Compiling MT5 Excel for {pair} ({from_date} → {to_date})...", text_color=C["accent"])
+        self._progress_bar.set(0.10)
+        self._progress_bar.configure(progress_color=C["accent"])
+        self._lbl_progress_pct.configure(text="10.0%", text_color=C["accent"])
+        self._lbl_progress_stage.configure(text=f"📊 Compiling MT5 Excel & Merging Tick Volume for {pair}...")
+        self._lbl_progress_detail.configure(text=f"Formatting 9 columns matching Dukascopy MT5 import specification.")
         args = ["--pair", pair, "--export-excel", "--from-date", from_date, "--to-date", to_date]
 
         def on_done():
             self._lbl_dl_status.configure(text="● Engine Idle / Ready", text_color=C["success"])
+            self._progress_bar.set(1.0)
+            self._progress_bar.configure(progress_color=C["success"])
+            self._lbl_progress_pct.configure(text="100.0%", text_color=C["success"])
+            self._lbl_progress_stage.configure(text=f"✔ MT5 Excel Document for {pair} Ready!")
             self._refresh_catalog()
             xlsx_path = self._market_data_dir / pair / f"{pair}_MT5_M1_bars.xlsx"
             if xlsx_path.exists():
@@ -2251,7 +2334,7 @@ class MarketDataPanel(BasePanel):
                     f"Successfully compiled MT5 Excel Document for {pair}!\nFile: {xlsx_path.name}\n\nWould you like to open it now?"):
                     self._open_file_safely(xlsx_path)
 
-        self.run_script("market_data_downloader.py", self._log, args=args, on_done=on_done)
+        self.run_script("market_data_downloader.py", self._log, args=args, on_done=on_done, on_line=self._handle_progress_line)
 
     def _open_or_gen_excel(self, pair: str):
         pair_upper = pair.upper()

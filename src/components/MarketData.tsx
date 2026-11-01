@@ -16,8 +16,22 @@ import {
   ChevronRight,
   Layers,
   FileSpreadsheet,
-  Check
+  Check,
+  Activity,
+  Loader2
 } from 'lucide-react';
+
+interface DownloadProgress {
+  percent: number;
+  stage: string;
+  detail: string;
+  step?: number;
+  totalSteps?: number;
+  active: boolean;
+  pair?: string;
+  completedAt?: string;
+  mode?: 'download' | 'excel';
+}
 
 interface MT5ExcelMetadata {
   excel_file?: string;
@@ -67,13 +81,13 @@ export default function MarketData({ config, onUpdateConfig }: { config: any; on
   const [selectedPair, setSelectedPair] = useState<string>('EURJPY');
   const [customPair, setCustomPair] = useState<string>('');
   const [dataType, setDataType] = useState<'both' | 'm1' | 'tick'>('both');
-  const [years, setYears] = useState<string>('2012-2024');
+  const [years, setYears] = useState<string>('2016-2026');
   const [platform, setPlatform] = useState<'ASCII' | 'MT'>('ASCII');
   const [autoExtract, setAutoExtract] = useState<boolean>(true);
 
-  // Exact Date Range Selection: Year, Month, Day (From & To)
-  const [fromDate, setFromDate] = useState<string>('2012-12-31');
-  const [toDate, setToDate] = useState<string>('2024-12-31');
+  // Exact Date Range Selection: Year, Month, Day (From & To) - Default 2016 to Date (2016-2026)
+  const [fromDate, setFromDate] = useState<string>('2016-01-01');
+  const [toDate, setToDate] = useState<string>('2026-11-01');
 
   // Sync date picker and dropdown helpers
   const handleFromDateChange = (val: string) => {
@@ -102,6 +116,15 @@ export default function MarketData({ config, onUpdateConfig }: { config: any; on
   const [isRunning, setIsRunning] = useState<boolean>(false);
   const [logs, setLogs] = useState<string[]>([]);
   const [feedbackMsg, setFeedbackMsg] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
+
+  // Real-time Progress Bar State
+  const [downloadProgress, setDownloadProgress] = useState<DownloadProgress | null>({
+    percent: 0,
+    stage: 'Engine idle / Ready to download',
+    detail: 'Select currency pair & date range above, then click Download.',
+    active: false,
+    pair: 'EURJPY',
+  });
 
   const eventSourceRef = useRef<EventSource | null>(null);
   const logEndRef = useRef<HTMLDivElement | null>(null);
@@ -150,16 +173,29 @@ export default function MarketData({ config, onUpdateConfig }: { config: any; on
     setLogs([]);
     setFeedbackMsg(null);
 
+    setDownloadProgress({
+      percent: 3.0,
+      stage: `Connecting to HistData & initializing download for ${activePairName}...`,
+      detail: `Date filter: ${fromDate} → ${toDate} | Type: ${dataType.toUpperCase()}`,
+      step: 0,
+      totalSteps: 1,
+      active: true,
+      pair: activePairName,
+      mode: 'download'
+    });
+
+    const fromYear = fromDate ? fromDate.split('-')[0] : '2016';
+    const toYear = toDate ? toDate.split('-')[0] : '2026';
+    const computedYears = fromYear === toYear ? fromYear : `${fromYear}-${toYear}`;
+
     const args = [
       '--pair', activePairName,
       '--type', dataType,
       '--from-date', fromDate,
       '--to-date', toDate,
+      '--years', computedYears,
       '--platform', platform
     ];
-    if (years.trim()) {
-      args.push('--years', years.trim());
-    }
     if (!autoExtract) {
       args.push('--no-extract');
     }
@@ -178,11 +214,49 @@ export default function MarketData({ config, onUpdateConfig }: { config: any; on
         const payload = JSON.parse(event.data);
         if (payload.text) {
           setLogs((prev) => [...prev, payload.text]);
+
+          // Parse [PROGRESS:X%] message format emitted by market_data_downloader.py
+          const progressMatch = payload.text.match(/\[PROGRESS:([\d\.]+)%\]\s*(?:\[(\d+)\/(\d+)\])?\s*(.*)/);
+          if (progressMatch) {
+            const pct = Math.min(100, Math.max(0, parseFloat(progressMatch[1])));
+            const curStep = progressMatch[2] ? parseInt(progressMatch[2], 10) : undefined;
+            const totSteps = progressMatch[3] ? parseInt(progressMatch[3], 10) : undefined;
+            const msg = progressMatch[4]?.trim() || '';
+
+            setDownloadProgress((prev) => ({
+              percent: pct,
+              stage: msg || prev?.stage || 'Processing market data...',
+              detail: curStep && totSteps ? `Item ${curStep} of ${totSteps} processed` : prev?.detail || '',
+              step: curStep ?? prev?.step,
+              totalSteps: totSteps ?? prev?.totalSteps,
+              active: pct < 100,
+              pair: activePairName,
+              completedAt: pct >= 100 ? new Date().toLocaleTimeString() : prev?.completedAt,
+              mode: 'download'
+            }));
+          } else if (payload.text.includes('[DOWNLOAD]')) {
+            setDownloadProgress((prev) => prev ? { ...prev, detail: payload.text.trim() } : null);
+          } else if (payload.text.includes('[UNPACKED]')) {
+            setDownloadProgress((prev) => prev ? { ...prev, detail: payload.text.trim() } : null);
+          } else if (payload.text.includes('[EXCEL]') || payload.text.includes('[CSV]')) {
+            setDownloadProgress((prev) => prev ? { ...prev, detail: payload.text.trim() } : null);
+          }
         }
         if (payload.done) {
           es.close();
           setIsRunning(false);
           fetchCatalog();
+          setDownloadProgress((prev) => ({
+            percent: 100.0,
+            stage: payload.code === 0 
+              ? `Completed download & MT5 Excel compilation for ${activePairName}!` 
+              : `Download halted (code ${payload.code})`,
+            detail: payload.code === 0 ? `Datasets organized in market_data/${activePairName}/` : 'Process finished',
+            active: false,
+            pair: activePairName,
+            completedAt: new Date().toLocaleTimeString(),
+            mode: 'download'
+          }));
           setFeedbackMsg({
             type: payload.code === 0 ? 'success' : 'error',
             text: payload.code === 0 
@@ -209,6 +283,12 @@ export default function MarketData({ config, onUpdateConfig }: { config: any; on
         eventSourceRef.current.close();
       }
       setIsRunning(false);
+      setDownloadProgress((prev) => prev ? {
+        ...prev,
+        active: false,
+        stage: 'Download stopped by user',
+        detail: 'Download process was interrupted.',
+      } : null);
       setFeedbackMsg({ type: 'info', text: 'Download process stopped.' });
       fetchCatalog();
     } catch (e: any) {
@@ -297,6 +377,16 @@ export default function MarketData({ config, onUpdateConfig }: { config: any; on
     const sTo = targetTo !== undefined ? targetTo : toDate;
     setIsCompilingExcel(true);
     setExcelResultMsg(null);
+    setDownloadProgress({
+      percent: 15,
+      stage: `Compiling MT5 Excel document & merging tick volume for ${p}...`,
+      detail: `Structuring 9 columns (<DATE>, <TIME>, <OPEN>, <HIGH>, <LOW>, <CLOSE>, <TICKVOL>, <VOL>, <SPREAD>)`,
+      step: 1,
+      totalSteps: 3,
+      active: true,
+      pair: p,
+      mode: 'excel'
+    });
 
     try {
       const res = await fetch('/api/market-data-build-excel', {
@@ -310,15 +400,36 @@ export default function MarketData({ config, onUpdateConfig }: { config: any; on
           type: 'success',
           text: `Successfully compiled MT5 Excel document & CSV for ${p}! Ready to download and upload into MT5 Terminal.`
         });
+        setDownloadProgress({
+          percent: 100,
+          stage: `MT5 Excel document compiled successfully for ${p}!`,
+          detail: `Generated .xlsx workbook & MT5 .csv bar import file in market_data/${p}/`,
+          active: false,
+          pair: p,
+          completedAt: new Date().toLocaleTimeString(),
+          mode: 'excel'
+        });
         await fetchCatalog();
       } else {
         setExcelResultMsg({
           type: 'error',
           text: data.error || 'Failed compiling MT5 Excel document'
         });
+        setDownloadProgress((prev) => prev ? {
+          ...prev,
+          active: false,
+          stage: 'Compilation failed',
+          detail: data.error || 'Failed compiling MT5 Excel document'
+        } : null);
       }
     } catch (e: any) {
       setExcelResultMsg({ type: 'error', text: e.message });
+      setDownloadProgress((prev) => prev ? {
+        ...prev,
+        active: false,
+        stage: 'Compilation error',
+        detail: e.message
+      } : null);
     } finally {
       setIsCompilingExcel(false);
     }
@@ -551,17 +662,31 @@ export default function MarketData({ config, onUpdateConfig }: { config: any; on
               <span className="text-[10px] text-slate-500 mr-1">Presets:</span>
               <button
                 type="button"
-                onClick={() => setDatePreset('2012-12-31', '2013-01-02')}
-                className="px-2 py-0.5 text-[10px] bg-emerald-950/60 text-emerald-300 hover:text-white rounded border border-emerald-800/80 font-mono"
+                onClick={() => setDatePreset('2016-01-01', '2026-11-01')}
+                className="px-2.5 py-1 text-xs bg-amber-500/20 text-amber-300 hover:text-white rounded border border-amber-500/40 font-mono font-bold shadow-sm"
               >
-                Dukascopy Reference (2012-12-31 → 2013-01-02)
+                ⭐ 2016 to Date (2016–2026 Full Period)
               </button>
               <button
                 type="button"
-                onClick={() => setDatePreset('2022-01-01', '2024-12-31')}
+                onClick={() => setDatePreset('2012-12-31', '2013-01-02')}
+                className="px-2 py-0.5 text-[10px] bg-emerald-950/60 text-emerald-300 hover:text-white rounded border border-emerald-800/80 font-mono"
+              >
+                Dukascopy Sample (2012-12-31 → 2013-01-02)
+              </button>
+              <button
+                type="button"
+                onClick={() => setDatePreset('2020-01-01', '2026-11-01')}
                 className="px-2 py-0.5 text-[10px] bg-slate-800 text-slate-300 hover:text-white rounded border border-slate-700 font-mono"
               >
-                2022-2024 (3 Yrs)
+                2020-2026 (Recent 6 Yrs)
+              </button>
+              <button
+                type="button"
+                onClick={() => setDatePreset('2022-01-01', '2026-11-01')}
+                className="px-2 py-0.5 text-[10px] bg-slate-800 text-slate-300 hover:text-white rounded border border-slate-700 font-mono"
+              >
+                2022-2026
               </button>
               <button
                 type="button"
@@ -569,13 +694,6 @@ export default function MarketData({ config, onUpdateConfig }: { config: any; on
                 className="px-2 py-0.5 text-[10px] bg-slate-800 text-slate-300 hover:text-white rounded border border-slate-700 font-mono"
               >
                 2023 Full Year
-              </button>
-              <button
-                type="button"
-                onClick={() => setDatePreset('2020-01-01', '2024-12-31')}
-                className="px-2 py-0.5 text-[10px] bg-slate-800 text-slate-300 hover:text-white rounded border border-slate-700 font-mono"
-              >
-                2020-2024 (5 Yrs)
               </button>
             </div>
           </div>
@@ -612,6 +730,162 @@ export default function MarketData({ config, onUpdateConfig }: { config: any; on
             <Zap className="w-4 h-4 mr-2" />
             Set {activePairName} as Active EA Symbol
           </Button>
+        </div>
+      </Card>
+
+      {/* ── Real-Time Market Download Progress Bar Card ── */}
+      <Card className="p-5 bg-slate-900/80 border-slate-800/90 shadow-xl space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800/80 pb-3">
+          <div className="flex items-center gap-3">
+            <div className={`w-9 h-9 rounded-xl flex items-center justify-center border transition-all ${
+              isRunning || isCompilingExcel
+                ? 'bg-amber-500/10 border-amber-500/30 text-amber-400 shadow-lg shadow-amber-500/10'
+                : downloadProgress?.percent === 100
+                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 shadow-lg shadow-emerald-500/10'
+                : 'bg-slate-800/80 border-slate-700 text-slate-400'
+            }`}>
+              {isRunning || isCompilingExcel ? (
+                <Loader2 className="w-4 h-4 animate-spin text-amber-400" />
+              ) : downloadProgress?.percent === 100 ? (
+                <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+              ) : (
+                <Activity className="w-4 h-4" />
+              )}
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="text-sm font-bold text-white uppercase tracking-wider">
+                  Market Download & Processing Progress Bar
+                </h3>
+                {isRunning ? (
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 font-mono flex items-center gap-1 animate-pulse">
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping" />
+                    STREAMING
+                  </span>
+                ) : isCompilingExcel ? (
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-mono flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                    COMPILING EXCEL
+                  </span>
+                ) : downloadProgress?.percent === 100 ? (
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-mono">
+                    COMPLETED
+                  </span>
+                ) : (
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700 font-mono">
+                    READY
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-slate-400 truncate max-w-xl">
+                {downloadProgress?.stage || 'Ready to download quotes from HistData and combine into MT5 Excel format.'}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3 self-end sm:self-center">
+            {downloadProgress?.pair && (
+              <span className="text-xs font-mono px-2.5 py-1 rounded bg-slate-950 border border-slate-800 text-slate-300">
+                Pair: <span className="font-bold text-amber-400">{downloadProgress.pair}</span>
+              </span>
+            )}
+            <div className="text-right">
+              <span className="text-2xl font-extrabold font-mono text-transparent bg-clip-text bg-gradient-to-r from-amber-400 via-emerald-400 to-teal-300">
+                {(downloadProgress?.percent ?? 0).toFixed(1)}%
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* The Animated Progress Track & Fill */}
+        <div className="space-y-1.5">
+          <div className="relative w-full h-3.5 bg-slate-950 rounded-full border border-slate-800 overflow-hidden shadow-inner p-0.5">
+            <div
+              className={`h-full rounded-full transition-all duration-300 ease-out relative ${
+                downloadProgress?.percent === 100
+                  ? 'bg-gradient-to-r from-emerald-500 via-teal-400 to-emerald-400 shadow-[0_0_12px_rgba(16,185,129,0.5)]'
+                  : 'bg-gradient-to-r from-amber-500 via-emerald-500 to-teal-400 shadow-[0_0_12px_rgba(245,158,11,0.5)]'
+              }`}
+              style={{ width: `${Math.max(2, Math.min(100, downloadProgress?.percent ?? 0))}%` }}
+            >
+              {(isRunning || isCompilingExcel) && (
+                <div className="absolute inset-0 bg-white/20 animate-pulse rounded-full" />
+              )}
+            </div>
+          </div>
+
+          {/* Progress Subtext & Details */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between text-[11px] text-slate-400 font-mono gap-1">
+            <span className="truncate text-slate-300 flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 inline-block" />
+              {downloadProgress?.detail || 'Select pair & date range, then click "Download & Organise Data".'}
+            </span>
+            <div className="flex items-center gap-3 shrink-0">
+              {downloadProgress?.step && downloadProgress?.totalSteps && (
+                <span className="px-2 py-0.5 rounded bg-slate-950 border border-slate-800 text-slate-300">
+                  Step: <strong className="text-amber-400">{downloadProgress.step}</strong> / {downloadProgress.totalSteps}
+                </span>
+              )}
+              {downloadProgress?.completedAt && (
+                <span className="text-emerald-400">
+                  Completed at {downloadProgress.completedAt}
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* 4 Multi-stage Milestones Stepper */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 pt-2 border-t border-slate-800/60">
+          {[
+            {
+              label: '1. HistData Request',
+              desc: 'Fetch archive payload',
+              done: (downloadProgress?.percent ?? 0) >= 20,
+              active: (isRunning || isCompilingExcel) && (downloadProgress?.percent ?? 0) < 20
+            },
+            {
+              label: '2. M1 Historical Bars',
+              desc: 'Annual 1-min candles',
+              done: (downloadProgress?.percent ?? 0) >= 60,
+              active: isRunning && (downloadProgress?.percent ?? 0) >= 20 && (downloadProgress?.percent ?? 0) < 60
+            },
+            {
+              label: '3. Tick Precision Quotes',
+              desc: 'Monthly tick data',
+              done: (downloadProgress?.percent ?? 0) >= 88,
+              active: isRunning && (downloadProgress?.percent ?? 0) >= 60 && (downloadProgress?.percent ?? 0) < 88
+            },
+            {
+              label: '4. MT5 Excel Document',
+              desc: '9-column bar import file',
+              done: (downloadProgress?.percent ?? 0) === 100,
+              active: (isRunning && (downloadProgress?.percent ?? 0) >= 88) || isCompilingExcel
+            }
+          ].map((stage, sIdx) => (
+            <div
+              key={sIdx}
+              className={`p-2.5 rounded-lg border text-xs transition-all ${
+                stage.done
+                  ? 'bg-emerald-950/20 border-emerald-500/30 text-emerald-400'
+                  : stage.active
+                  ? 'bg-amber-950/30 border-amber-500/40 text-amber-300 shadow-sm'
+                  : 'bg-slate-950/40 border-slate-800/80 text-slate-500'
+              }`}
+            >
+              <div className="flex items-center justify-between mb-1">
+                <span className="font-semibold">{stage.label}</span>
+                {stage.done ? (
+                  <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                ) : stage.active ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-400 shrink-0" />
+                ) : (
+                  <Clock className="w-3.5 h-3.5 opacity-40 shrink-0" />
+                )}
+              </div>
+              <p className="text-[10px] opacity-75">{stage.desc}</p>
+            </div>
+          ))}
         </div>
       </Card>
 
