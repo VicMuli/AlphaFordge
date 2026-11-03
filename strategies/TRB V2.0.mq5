@@ -112,7 +112,17 @@ input double RiskPercent             = 1.0;      // % of equity risked per trade
 //  only a fallback (used if UseRiskBasedSizing is false, or if the broker
 //  doesn't report tick value/size).
 
+//--- Take Profit Mode
+enum ENUM_TP_MODE
+{
+   TP_OPPOSITE_RANGE = 0, // Opposite Range Target
+   TP_FIXED_RR       = 1, // Fixed Risk:Reward Ratio
+   TP_ATR_MULT       = 2, // ATR Volatility Multiple
+   TP_FIXED_PIPS     = 3  // Fixed Pips Target
+};
+
 //--- Strategy Parameters
+input ENUM_TP_MODE TakeProfitMode    = TP_OPPOSITE_RANGE; // Take Profit Calculation Mode
 input int    PipsOffset              = 7;         // Range Buffer (Pips)
 input double TPMultiplier            = 2.0;       // Take Profit Multiplier
 input int    MinRangePips            = 35;        // Minimum Range Size to Trade (Pips)
@@ -632,10 +642,28 @@ void PlaceTokyoOrders(datetime gmtNow)
    //--- Order levels
    double buyEntry  = NormalizeDouble(rangeHigh + offset, digits);
    double buySL     = NormalizeDouble(rangeLow  - offset, digits);
-   double buyTP     = NormalizeDouble(buyEntry  + rangeWidth * TPMultiplier, digits);
    double sellEntry = NormalizeDouble(rangeLow  - offset, digits);
    double sellSL    = NormalizeDouble(rangeHigh + offset, digits);
-   double sellTP    = NormalizeDouble(sellEntry - rangeWidth * TPMultiplier, digits);
+   double buyTP     = 0.0;
+   double sellTP    = 0.0;
+
+   if(TakeProfitMode == TP_FIXED_RR)
+   {
+      double buyRiskDist = buyEntry - buySL;
+      double sellRiskDist = sellSL - sellEntry;
+      buyTP = NormalizeDouble(buyEntry + buyRiskDist * TPMultiplier, digits);
+      sellTP = NormalizeDouble(sellEntry - sellRiskDist * TPMultiplier, digits);
+   }
+   else if(TakeProfitMode == TP_FIXED_PIPS)
+   {
+      buyTP = NormalizeDouble(buyEntry + TPMultiplier * 10.0 * pip, digits);
+      sellTP = NormalizeDouble(sellEntry - TPMultiplier * 10.0 * pip, digits);
+   }
+   else // TP_OPPOSITE_RANGE (Default)
+   {
+      buyTP = NormalizeDouble(buyEntry + rangeWidth * TPMultiplier, digits);
+      sellTP = NormalizeDouble(sellEntry - rangeWidth * TPMultiplier, digits);
+   }
 
    double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
    double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);

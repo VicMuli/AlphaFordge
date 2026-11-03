@@ -69,6 +69,24 @@ export const DEFAULT_TRB_PARAMS: StrategyParam[] = [
     description: 'Buffer pips added above session high / below session low for pending orders',
   },
   {
+    name: 'TakeProfitMode',
+    label: 'Take Profit Calculation Mode',
+    type: 'ENUM_TP_MODE',
+    category: 'core',
+    mode: 'fixed',
+    fixedValue: 'TP_OPPOSITE_RANGE',
+    range: { start: 0, step: 1, stop: 3 },
+    description: 'Method used to calculate take profit target level',
+    isDropdown: true,
+    options: [
+      { value: 'TP_OPPOSITE_RANGE', label: 'Opposite Range Target (TP_OPPOSITE_RANGE)' },
+      { value: 'TP_FIXED_RR', label: 'Fixed Risk:Reward Ratio (TP_FIXED_RR)' },
+      { value: 'TP_ATR_MULT', label: 'ATR Volatility Multiple (TP_ATR_MULT)' },
+      { value: 'TP_FIXED_PIPS', label: 'Fixed Pips Target (TP_FIXED_PIPS)' }
+    ],
+    optionValues: ['TP_OPPOSITE_RANGE', 'TP_FIXED_RR', 'TP_ATR_MULT', 'TP_FIXED_PIPS']
+  },
+  {
     name: 'TPMultiplier',
     label: 'TP Multiplier',
     category: 'core',

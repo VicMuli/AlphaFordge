@@ -1630,9 +1630,30 @@ class StrategyScreenerPanel(BasePanel):
                 row=r_idx, column=c_idx, padx=(12, 6), pady=6, sticky="w"
             )
 
-            e = make_entry(params_container, width=150)
-            e.insert(0, str(cur_val))
-            e.grid(row=r_idx, column=c_idx + 1, padx=(0, 16), pady=6, sticky="ew")
+            is_drop = p.get("isDropdown", False)
+            raw_opts = p.get("options", [])
+            opts_vals = []
+            if raw_opts:
+                for opt in raw_opts:
+                    if isinstance(opt, dict):
+                        opts_vals.append(str(opt.get("value", "")))
+                    else:
+                        opts_vals.append(str(opt))
+            elif ptype.lower() == "bool" or isinstance(def_val, bool):
+                is_drop = True
+                opts_vals = ["true", "false"]
+
+            cur_str = str(cur_val)
+            if is_drop and opts_vals:
+                if cur_str not in opts_vals:
+                    opts_vals = [cur_str] + opts_vals
+                e = ctk.CTkComboBox(params_container, values=opts_vals, width=160, font=FSM, dropdown_font=FSM)
+                e.set(cur_str)
+                e.grid(row=r_idx, column=c_idx + 1, padx=(0, 16), pady=6, sticky="ew")
+            else:
+                e = make_entry(params_container, width=150)
+                e.insert(0, cur_str)
+                e.grid(row=r_idx, column=c_idx + 1, padx=(0, 16), pady=6, sticky="ew")
             param_entries[pname] = (e, def_val, ptype)
 
         # Action Buttons row
@@ -2991,39 +3012,48 @@ class OptimizePanel(BasePanel):
                     p["name"],
                     p.get("mode", "fixed"),
                     p.get("fixedValue", 0),
-                    rng_tuple
+                    rng_tuple,
+                    p.get("isDropdown", False),
+                    p.get("options", []),
+                    p.get("type", "double")
                 ))
         elif ea == "ORB":
             default_params = [
-                ("InpTPRatio", "optimize", 1.5, (1.0, 0.25, 3.0)),
-                ("InpSLBufferPips", "optimize", 1, (0, 1, 10)),
-                ("InpMaxRangePips", "optimize", 50, (30, 10, 150)),
-                ("InpFixedLotSize", "fixed", 1.0, (0.1, 0.1, 2.0)),
-                ("InpRiskPercent", "optimize", 1.0, (0.25, 0.25, 2.0)),
-                ("InpRangeStartHour", "optimize", 8, (6, 1, 10)),
-                ("InpRangeEndHour", "optimize", 9, (9, 1, 12)),
-                ("InpEntryCutoffHour", "optimize", 15, (12, 1, 20)),
-                ("InpMacdFast", "optimize", 12, (6, 1, 16)),
-                ("InpMacdSlow", "optimize", 26, (18, 2, 34)),
-                ("InpMacdSignal", "optimize", 9, (5, 1, 13)),
+                ("InpTPRatio", "optimize", 1.5, (1.0, 0.25, 3.0), False, [], "double"),
+                ("InpSLBufferPips", "optimize", 1, (0, 1, 10), False, [], "int"),
+                ("InpMaxRangePips", "optimize", 50, (30, 10, 150), False, [], "int"),
+                ("InpFixedLotSize", "fixed", 1.0, (0.1, 0.1, 2.0), False, [], "double"),
+                ("InpRiskPercent", "optimize", 1.0, (0.25, 0.25, 2.0), False, [], "double"),
+                ("InpRangeStartHour", "optimize", 8, (6, 1, 10), False, [], "int"),
+                ("InpRangeEndHour", "optimize", 9, (9, 1, 12), False, [], "int"),
+                ("InpEntryCutoffHour", "optimize", 15, (12, 1, 20), False, [], "int"),
+                ("InpMacdFast", "optimize", 12, (6, 1, 16), False, [], "int"),
+                ("InpMacdSlow", "optimize", 26, (18, 2, 34), False, [], "int"),
+                ("InpMacdSignal", "optimize", 9, (5, 1, 13), False, [], "int"),
             ]
         else:
             default_params = [
-                ("LotSize", "fixed", 0.2, (0.1, 0.05, 0.5)),
-                ("PipsOffset", "fixed", 13, (8, 1, 20)),
-                ("TPMultiplier", "fixed", 3.0, (1.5, 0.5, 4.5)),
-                ("MinRangePips", "fixed", 25, (15, 5, 50)),
-                ("MaxRangePips", "fixed", 180, (100, 20, 240)),
-                ("StartHourGMT", "fixed", 0, (0, 1, 3)),
-                ("EndHourGMT", "fixed", 7, (5, 1, 9)),
-                ("CancelHourGMT", "fixed", 10, (8, 1, 14)),
-                ("CloseHourGMT", "fixed", 13, (11, 1, 17)),
-                ("RiskPercent", "fixed", 1.0, (0.25, 0.25, 2.0)),
-                ("EMAPeriod", "fixed", 200, (50, 25, 300)),
-                ("AdxPeriod", "optimize", 14, (7, 1, 21)),
-                ("AdxMin", "optimize", 20.0, (15.0, 2.5, 40.0)),
-                ("AtrPeriod", "optimize", 14, (7, 1, 21)),
-                ("AtrMinPips", "optimize", 0.0, (0.0, 2.0, 30.0)),
+                ("TakeProfitMode", "fixed", "TP_OPPOSITE_RANGE", (0, 1, 3), True, [
+                    {"value": "TP_OPPOSITE_RANGE", "label": "Opposite Range Target (TP_OPPOSITE_RANGE)"},
+                    {"value": "TP_FIXED_RR", "label": "Fixed Risk:Reward Ratio (TP_FIXED_RR)"},
+                    {"value": "TP_ATR_MULT", "label": "ATR Volatility Multiple (TP_ATR_MULT)"},
+                    {"value": "TP_FIXED_PIPS", "label": "Fixed Pips Target (TP_FIXED_PIPS)"}
+                ], "ENUM_TP_MODE"),
+                ("LotSize", "fixed", 0.2, (0.1, 0.05, 0.5), False, [], "double"),
+                ("PipsOffset", "fixed", 13, (8, 1, 20), False, [], "int"),
+                ("TPMultiplier", "fixed", 3.0, (1.5, 0.5, 4.5), False, [], "double"),
+                ("MinRangePips", "fixed", 25, (15, 5, 50), False, [], "int"),
+                ("MaxRangePips", "fixed", 180, (100, 20, 240), False, [], "int"),
+                ("StartHourGMT", "fixed", 0, (0, 1, 3), False, [], "int"),
+                ("EndHourGMT", "fixed", 7, (5, 1, 9), False, [], "int"),
+                ("CancelHourGMT", "fixed", 10, (8, 1, 14), False, [], "int"),
+                ("CloseHourGMT", "fixed", 13, (11, 1, 17), False, [], "int"),
+                ("RiskPercent", "fixed", 1.0, (0.25, 0.25, 2.0), False, [], "double"),
+                ("EMAPeriod", "fixed", 200, (50, 25, 300), False, [], "int"),
+                ("AdxPeriod", "optimize", 14, (7, 1, 21), False, [], "int"),
+                ("AdxMin", "optimize", 20.0, (15.0, 2.5, 40.0), False, [], "double"),
+                ("AtrPeriod", "optimize", 14, (7, 1, 21), False, [], "int"),
+                ("AtrMinPips", "optimize", 0.0, (0.0, 2.0, 30.0), False, [], "double"),
             ]
 
         # Indicator Toggles UI
@@ -3046,7 +3076,13 @@ class OptimizePanel(BasePanel):
         params_container.pack(fill="x", padx=12, pady=4)
 
         param_rows = {}
-        for p_name, def_mode, def_fixed, def_range in default_params:
+        for p_item in default_params:
+            if len(p_item) >= 7:
+                p_name, def_mode, def_fixed, def_range, is_drop, raw_opts, p_type = p_item[:7]
+            else:
+                p_name, def_mode, def_fixed, def_range = p_item[:4]
+                is_drop, raw_opts, p_type = False, [], "double"
+
             # Current value from config if exists
             cur_is_opt = p_name in ranges_dict or (def_mode == "optimize" and p_name not in fixed_dict)
             cur_fixed = fixed_dict.get(p_name, def_fixed)
@@ -3067,9 +3103,26 @@ class OptimizePanel(BasePanel):
             inp_frame = ctk.CTkFrame(rf, fg_color="transparent")
             inp_frame.pack(side="left", fill="x", expand=True, padx=8)
 
-            # Fixed entry
-            e_fixed = make_entry(inp_frame, width=90)
-            e_fixed.insert(0, str(cur_fixed))
+            opts_vals = []
+            if raw_opts:
+                for opt in raw_opts:
+                    if isinstance(opt, dict):
+                        opts_vals.append(str(opt.get("value", "")))
+                    else:
+                        opts_vals.append(str(opt))
+            elif p_type.lower() == "bool" or isinstance(def_fixed, bool):
+                is_drop = True
+                opts_vals = ["true", "false"]
+
+            cur_str = str(cur_fixed)
+            if is_drop and opts_vals:
+                if cur_str not in opts_vals:
+                    opts_vals = [cur_str] + opts_vals
+                e_fixed = ctk.CTkComboBox(inp_frame, values=opts_vals, width=160, font=FSM, dropdown_font=FSM)
+                e_fixed.set(cur_str)
+            else:
+                e_fixed = make_entry(inp_frame, width=90)
+                e_fixed.insert(0, cur_str)
 
             # Range entries (start, step, stop)
             range_frame = ctk.CTkFrame(inp_frame, fg_color="transparent")

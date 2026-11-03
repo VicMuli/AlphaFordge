@@ -196,19 +196,26 @@ export default function StrategyScreener({ config }: { config: any }) {
     setStrategyParams(prev => prev.map(p => {
       if (p.name === paramName) {
         let parsedVal = val;
-        if (p.type === 'int' || p.type === 'ulong' || p.type === 'long') {
+        if (p.type === 'bool' || typeof p.fixedValue === 'boolean') {
+          parsedVal = val === true || val === 'true' || val === 1 || val === '1';
+        } else if (p.isDropdown || (p.options && p.options.length > 0)) {
+          // Keep enum string or convert to numeric if options are numeric
+          if (typeof p.fixedValue === 'number' && !isNaN(Number(val))) {
+            parsedVal = Number(val);
+          } else {
+            parsedVal = val;
+          }
+        } else if (p.type === 'int' || p.type === 'ulong' || p.type === 'long') {
           const num = parseInt(val, 10);
           parsedVal = isNaN(num) ? val : num;
         } else if (p.type === 'double' || p.type === 'float') {
           const num = parseFloat(val);
           parsedVal = isNaN(num) ? val : num;
-        } else if (p.type === 'bool') {
-          parsedVal = val === true || val === 'true' || val === 1;
         }
         return {
           ...p,
           currentValue: parsedVal,
-          isModified: parsedVal !== p.fixedValue
+          isModified: String(parsedVal) !== String(p.fixedValue)
         };
       }
       return p;
@@ -760,31 +767,56 @@ export default function StrategyScreener({ config }: { config: any }) {
                           </div>
 
                           <div className="flex items-center gap-2">
-                            {typeof p.fixedValue === 'boolean' || p.type === 'bool' ? (
-                              <select
-                                value={String(curVal)}
-                                onChange={e => handleParamChange(p.name, e.target.value === 'true')}
-                                className="w-full bg-[#0f172a] border border-[#2d3748] text-white rounded px-2.5 py-1 text-xs focus:outline-none focus:border-amber-400"
-                              >
-                                <option value="true">True (Enabled)</option>
-                                <option value="false">False (Disabled)</option>
-                              </select>
-                            ) : isNum ? (
-                              <input
-                                type="number"
-                                step={step}
-                                value={curVal !== undefined ? curVal : ''}
-                                onChange={e => handleParamChange(p.name, e.target.value)}
-                                className="w-full bg-[#0f172a] border border-[#2d3748] text-white font-mono rounded px-2.5 py-1 text-xs focus:outline-none focus:border-amber-400"
-                              />
-                            ) : (
-                              <input
-                                type="text"
-                                value={curVal !== undefined ? curVal : ''}
-                                onChange={e => handleParamChange(p.name, e.target.value)}
-                                className="w-full bg-[#0f172a] border border-[#2d3748] text-white font-mono rounded px-2.5 py-1 text-xs focus:outline-none focus:border-amber-400"
-                              />
-                            )}
+                            {(() => {
+                              const isDropdown = p.isDropdown || (p.options && p.options.length > 0) || typeof p.fixedValue === 'boolean' || p.type === 'bool';
+                              const optionsList = (p.options && p.options.length > 0)
+                                ? p.options.map(o => typeof o === 'string' ? { value: o, label: o } : o)
+                                : (typeof p.fixedValue === 'boolean' || p.type === 'bool')
+                                ? [{ value: 'true', label: 'True (Enabled / Yes)' }, { value: 'false', label: 'False (Disabled / No)' }]
+                                : null;
+
+                              if (isDropdown && optionsList && optionsList.length > 0) {
+                                const curStr = String(curVal !== undefined ? curVal : p.fixedValue);
+                                const hasMatch = optionsList.some(o => String(o.value) === curStr);
+                                return (
+                                  <select
+                                    value={curStr}
+                                    onChange={e => handleParamChange(p.name, e.target.value)}
+                                    className="w-full bg-[#0f172a] border border-[#2d3748] text-white rounded px-2.5 py-1 text-xs focus:outline-none focus:border-amber-400 font-mono"
+                                  >
+                                    {!hasMatch && (
+                                      <option value={curStr}>{curStr}</option>
+                                    )}
+                                    {optionsList.map(opt => (
+                                      <option key={String(opt.value)} value={String(opt.value)}>
+                                        {opt.label}
+                                      </option>
+                                    ))}
+                                  </select>
+                                );
+                              }
+
+                              if (isNum) {
+                                return (
+                                  <input
+                                    type="number"
+                                    step={step}
+                                    value={curVal !== undefined ? curVal : ''}
+                                    onChange={e => handleParamChange(p.name, e.target.value)}
+                                    className="w-full bg-[#0f172a] border border-[#2d3748] text-white font-mono rounded px-2.5 py-1 text-xs focus:outline-none focus:border-amber-400"
+                                  />
+                                );
+                              }
+
+                              return (
+                                <input
+                                  type="text"
+                                  value={curVal !== undefined ? curVal : ''}
+                                  onChange={e => handleParamChange(p.name, e.target.value)}
+                                  className="w-full bg-[#0f172a] border border-[#2d3748] text-white font-mono rounded px-2.5 py-1 text-xs focus:outline-none focus:border-amber-400"
+                                />
+                              );
+                            })()}
 
                             {p.isModified && (
                               <button

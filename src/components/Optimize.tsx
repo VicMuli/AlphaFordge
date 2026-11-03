@@ -1188,14 +1188,55 @@ export default function Optimize({
                       <td className="py-2.5 px-3">
                         {!isOptimizing ? (
                           <div className="flex items-center gap-2">
-                            <input
-                              type="text"
-                              value={p.fixedValue !== undefined ? p.fixedValue : ''}
-                              onChange={e => updateFixedValue(p.name, e.target.value)}
-                              disabled={isParentDisabled}
-                              className="w-28 px-2.5 py-1 bg-[#0a0f1d] border border-[#2d3a54] rounded text-white font-mono text-xs focus:outline-none focus:border-blue-500"
-                              placeholder="Value"
-                            />
+                            {(() => {
+                              const isDropdown = p.isDropdown || (p.options && p.options.length > 0) || typeof p.fixedValue === 'boolean' || p.type === 'bool';
+                              const optionsList = (p.options && p.options.length > 0)
+                                ? p.options.map(o => typeof o === 'string' ? { value: o, label: o } : o)
+                                : (typeof p.fixedValue === 'boolean' || p.type === 'bool')
+                                ? [{ value: 'true', label: 'True (Enabled / Yes)' }, { value: 'false', label: 'False (Disabled / No)' }]
+                                : null;
+
+                              if (isDropdown && optionsList && optionsList.length > 0) {
+                                const curStr = String(p.fixedValue !== undefined ? p.fixedValue : '');
+                                const hasMatch = optionsList.some(o => String(o.value) === curStr);
+                                return (
+                                  <select
+                                    value={curStr}
+                                    onChange={e => {
+                                      const raw = e.target.value;
+                                      const val = (p.type === 'bool' || typeof p.fixedValue === 'boolean')
+                                        ? (raw === 'true')
+                                        : (typeof p.fixedValue === 'number' && !isNaN(Number(raw)))
+                                        ? Number(raw)
+                                        : raw;
+                                      updateFixedValue(p.name, val);
+                                    }}
+                                    disabled={isParentDisabled}
+                                    className="min-w-[180px] max-w-[260px] px-2.5 py-1 bg-[#0a0f1d] border border-[#2d3a54] rounded text-white font-mono text-xs focus:outline-none focus:border-amber-500"
+                                  >
+                                    {!hasMatch && (
+                                      <option value={curStr}>{curStr}</option>
+                                    )}
+                                    {optionsList.map(opt => (
+                                      <option key={String(opt.value)} value={String(opt.value)}>
+                                        {opt.label}
+                                      </option>
+                                    ))}
+                                  </select>
+                                );
+                              }
+
+                              return (
+                                <input
+                                  type="text"
+                                  value={p.fixedValue !== undefined ? p.fixedValue : ''}
+                                  onChange={e => updateFixedValue(p.name, e.target.value)}
+                                  disabled={isParentDisabled}
+                                  className="w-28 px-2.5 py-1 bg-[#0a0f1d] border border-[#2d3a54] rounded text-white font-mono text-xs focus:outline-none focus:border-blue-500"
+                                  placeholder="Value"
+                                />
+                              );
+                            })()}
                             <span className="text-[11px] text-[#64748b]">
                               {isParentDisabled ? '(Indicator disabled)' : 'Fixed constant for all passes'}
                             </span>

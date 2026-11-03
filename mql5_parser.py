@@ -14,6 +14,81 @@ import json
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple
 
+# Standard Built-in MT5 Enums and Dropdown Options
+BUILTIN_ENUMS: Dict[str, List[Dict[str, Any]]] = {
+    "bool": [
+        {"value": True, "label": "true (Enabled / Yes)"},
+        {"value": False, "label": "false (Disabled / No)"}
+    ],
+    "boolean": [
+        {"value": True, "label": "true (Enabled / Yes)"},
+        {"value": False, "label": "false (Disabled / No)"}
+    ],
+    "enum_timeframes": [
+        {"value": "PERIOD_CURRENT", "label": "PERIOD_CURRENT (Current Timeframe)"},
+        {"value": "PERIOD_M1", "label": "PERIOD_M1 (1 Minute)"},
+        {"value": "PERIOD_M5", "label": "PERIOD_M5 (5 Minutes)"},
+        {"value": "PERIOD_M15", "label": "PERIOD_M15 (15 Minutes)"},
+        {"value": "PERIOD_M30", "label": "PERIOD_M30 (30 Minutes)"},
+        {"value": "PERIOD_H1", "label": "PERIOD_H1 (1 Hour)"},
+        {"value": "PERIOD_H4", "label": "PERIOD_H4 (4 Hours)"},
+        {"value": "PERIOD_D1", "label": "PERIOD_D1 (Daily)"},
+        {"value": "PERIOD_W1", "label": "PERIOD_W1 (Weekly)"},
+        {"value": "PERIOD_MN1", "label": "PERIOD_MN1 (Monthly)"}
+    ],
+    "enum_tp_mode": [
+        {"value": "TP_OPPOSITE_RANGE", "label": "Opposite Range Target (TP_OPPOSITE_RANGE)"},
+        {"value": "TP_FIXED_RR", "label": "Fixed Risk:Reward Ratio (TP_FIXED_RR)"},
+        {"value": "TP_ATR_MULT", "label": "ATR Volatility Multiple (TP_ATR_MULT)"},
+        {"value": "TP_FIXED_PIPS", "label": "Fixed Pips Target (TP_FIXED_PIPS)"}
+    ],
+    "enum_sl_mode": [
+        {"value": "SL_RANGE_OPPOSITE", "label": "Opposite Range Boundary (SL_RANGE_OPPOSITE)"},
+        {"value": "SL_FIXED_PIPS", "label": "Fixed Pips Stop Loss (SL_FIXED_PIPS)"},
+        {"value": "SL_ATR_MULT", "label": "ATR Volatility Stop (SL_ATR_MULT)"}
+    ],
+    "enum_applied_price": [
+        {"value": "PRICE_CLOSE", "label": "Close Price (PRICE_CLOSE)"},
+        {"value": "PRICE_OPEN", "label": "Open Price (PRICE_OPEN)"},
+        {"value": "PRICE_HIGH", "label": "High Price (PRICE_HIGH)"},
+        {"value": "PRICE_LOW", "label": "Low Price (PRICE_LOW)"},
+        {"value": "PRICE_MEDIAN", "label": "Median Price HL/2 (PRICE_MEDIAN)"},
+        {"value": "PRICE_TYPICAL", "label": "Typical Price HLC/3 (PRICE_TYPICAL)"},
+        {"value": "PRICE_WEIGHTED", "label": "Weighted Price HLCC/4 (PRICE_WEIGHTED)"}
+    ],
+    "enum_ma_method": [
+        {"value": "MODE_SMA", "label": "Simple MA (MODE_SMA)"},
+        {"value": "MODE_EMA", "label": "Exponential MA (MODE_EMA)"},
+        {"value": "MODE_SMMA", "label": "Smoothed MA (MODE_SMMA)"},
+        {"value": "MODE_LWMA", "label": "Linear Weighted MA (MODE_LWMA)"}
+    ],
+    "enum_order_type": [
+        {"value": "ORDER_TYPE_BUY_STOP", "label": "Pending Breakout (Stop Orders)"},
+        {"value": "ORDER_TYPE_BUY_LIMIT", "label": "Retest Pullback (Limit Orders)"},
+        {"value": "ORDER_TYPE_BUY", "label": "Market Execution"}
+    ],
+    "enum_entry_type": [
+        {"value": "ORDER_TYPE_BUY_STOP", "label": "Pending Breakout (Stop Orders)"},
+        {"value": "ORDER_TYPE_BUY_LIMIT", "label": "Retest Pullback (Limit Orders)"},
+        {"value": "ORDER_TYPE_BUY", "label": "Market Execution"}
+    ]
+}
+
+# Alias mapping for built-in enums
+BUILTIN_ENUM_ALIASES = {
+    "timeframe": "enum_timeframes",
+    "period": "enum_timeframes",
+    "tp_mode": "enum_tp_mode",
+    "takeprofitmode": "enum_tp_mode",
+    "enum_takeprofit_mode": "enum_tp_mode",
+    "sl_mode": "enum_sl_mode",
+    "stoplossmode": "enum_sl_mode",
+    "enum_stoploss_mode": "enum_sl_mode",
+    "applied_price": "enum_applied_price",
+    "ma_method": "enum_ma_method",
+    "entry_type": "enum_entry_type",
+}
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 # Known curated parameter defaults and optimization ranges for standard AlphaFordge strategies
@@ -43,6 +118,7 @@ KNOWN_PRESETS = {
         "fixed_defaults": {
             "LotSize": 0.2,
             "PipsOffset": 13,
+            "TakeProfitMode": "TP_OPPOSITE_RANGE",
             "TPMultiplier": 3.0,
             "MinRangePips": 25,
             "MaxRangePips": 180,
@@ -90,6 +166,112 @@ KNOWN_PRESETS = {
 }
 
 
+def parse_mql5_enums(content: str) -> Dict[str, List[Dict[str, Any]]]:
+    """
+    Extract custom enum declarations from MQL5 source code:
+    enum ENUM_TP_MODE
+    {
+       TP_OPPOSITE_RANGE, // Opposite Range
+       TP_FIXED_RR,        // Fixed Risk:Reward
+       TP_ATR_MULT         // ATR Multiplier
+    };
+    """
+    enums: Dict[str, List[Dict[str, Any]]] = {}
+    enum_pattern = re.compile(r'\benum\s+([\w_]+)\s*\{([^}]+)\}', re.MULTILINE | re.DOTALL)
+    for match in enum_pattern.finditer(content):
+        enum_name = match.group(1).strip()
+        body = match.group(2)
+        items = []
+        for line in body.splitlines():
+            line = line.strip()
+            if not line or line.startswith("//") or line.startswith("/*"):
+                continue
+            comment = ""
+            if "//" in line:
+                parts = line.split("//", 1)
+                line = parts[0].strip()
+                comment = parts[1].strip()
+            line = line.rstrip(',;').strip()
+            if not line:
+                continue
+            if "=" in line:
+                val_name = line.split("=")[0].strip()
+            else:
+                val_name = line.strip()
+
+            if val_name:
+                label = f"{comment} ({val_name})" if comment else val_name
+                items.append({
+                    "value": val_name,
+                    "label": label
+                })
+        if items:
+            enums[enum_name] = items
+            enums[enum_name.lower()] = items
+            # Also register with or without ENUM_ prefix
+            if enum_name.lower().startswith("enum_"):
+                short_name = enum_name.lower().replace("enum_", "")
+                enums[short_name] = items
+
+    return enums
+
+
+def resolve_dropdown_options(var_name: str, var_type: str, raw_val: Any, file_enums: Dict[str, List[Dict[str, Any]]]) -> Tuple[bool, List[Dict[str, Any]]]:
+    """
+    Determines if a parameter is an enum/dropdown in MT5 and resolves its option list.
+    """
+    t_low = var_type.lower().strip()
+    n_low = var_name.lower().strip()
+    val_str = str(raw_val).strip()
+
+    # 1. Boolean types
+    if t_low in ("bool", "boolean") or isinstance(raw_val, bool):
+        return True, BUILTIN_ENUMS["bool"]
+
+    # 2. Match in file-parsed custom enums
+    if var_type in file_enums:
+        return True, file_enums[var_type]
+    if t_low in file_enums:
+        return True, file_enums[t_low]
+    if t_low.startswith("enum_"):
+        stripped = t_low.replace("enum_", "")
+        if stripped in file_enums:
+            return True, file_enums[stripped]
+
+    # 3. Match in built-in enums directly or via alias
+    if t_low in BUILTIN_ENUMS:
+        return True, BUILTIN_ENUMS[t_low]
+    if t_low in BUILTIN_ENUM_ALIASES:
+        return True, BUILTIN_ENUMS[BUILTIN_ENUM_ALIASES[t_low]]
+
+    # 4. Value-based detection (e.g. if default value is TP_OPPOSITE_RANGE or PERIOD_M15)
+    for enum_key, opts in BUILTIN_ENUMS.items():
+        if any(str(opt["value"]).lower() == val_str.lower() for opt in opts):
+            return True, opts
+
+    for enum_key, opts in file_enums.items():
+        if any(str(opt["value"]).lower() == val_str.lower() for opt in opts):
+            return True, opts
+
+    # 5. Name-based heuristic (e.g. timeframe, takeprofitmode, tp_mode)
+    if "timeframe" in n_low or "period" in n_low and val_str.startswith("PERIOD_"):
+        return True, BUILTIN_ENUMS["enum_timeframes"]
+    if ("tp_mode" in n_low or "takeprofitmode" in n_low or "tpmode" in n_low):
+        return True, BUILTIN_ENUMS["enum_tp_mode"]
+    if ("sl_mode" in n_low or "stoplossmode" in n_low or "slmode" in n_low):
+        return True, BUILTIN_ENUMS["enum_sl_mode"]
+
+    # 6. Integer boolean toggles (Use*, Enable*, Show*, Avoid*)
+    is_bool_toggle_name = any(n_low.startswith(pfx) for pfx in ["use", "enable", "show", "avoid", "inpuse", "inpavoid", "inpshow"])
+    if is_bool_toggle_name and (val_str in ("0", "1", "true", "false", "True", "False") or raw_val in (0, 1)):
+        return True, [
+            {"value": 1, "label": "1 (Enabled / True)"},
+            {"value": 0, "label": "0 (Disabled / False)"}
+        ]
+
+    return False, []
+
+
 def _clean_val(val_str: str) -> Any:
     """Parse raw string into bool, int, float, or str."""
     if not val_str:
@@ -106,6 +288,7 @@ def _clean_val(val_str: str) -> Any:
 
 
 def _generate_range_for_val(val: Any) -> Tuple[float, float, float]:
+
     """Intelligently generate a start, step, stop search range around a default value."""
     if isinstance(val, bool):
         return (0, 1, 1)
@@ -179,6 +362,9 @@ def parse_mql5_file(mq5_path: Path, ea_name: str = "") -> Dict[str, Any]:
             "params": [],
             "error": str(e)
         }
+
+    # Extract all enum definitions in this file
+    file_enums = parse_mql5_enums(content)
 
     # Match input group "..."
     # Match input / sinput declarations:
@@ -297,7 +483,7 @@ def parse_mql5_file(mq5_path: Path, ea_name: str = "") -> Dict[str, Any]:
     # Strategy Parameters (All non-toggles or all tunable inputs)
     for inp in raw_inputs:
         v_name = inp["name"]
-        v_type = inp["type"].lower()
+        v_type = inp["type"]
         v_val = inp["value"]
 
         # If it was already treated as an indicator toggle switch, we don't duplicate it in params
@@ -306,6 +492,9 @@ def parse_mql5_file(mq5_path: Path, ea_name: str = "") -> Dict[str, Any]:
 
         label = inp["comment"] or re.sub(r'([A-Z])', r' \1', v_name).strip()
         category = _categorize_param(v_name, inp["group"])
+
+        # Check if parameter has a dropdown/enum in MT5
+        is_dropdown, drop_options = resolve_dropdown_options(v_name, v_type, v_val, file_enums)
 
         # Range determination
         if v_name in preset_ranges:
@@ -321,7 +510,7 @@ def parse_mql5_file(mq5_path: Path, ea_name: str = "") -> Dict[str, Any]:
             # Mark the top numeric parameters (periods, multipliers, buffers, thresholds) as optimizable
             low_name = v_name.lower()
             is_ignored = any(ign in low_name for ign in ["magic", "slip", "comment", "color", "timer", "digits", "dev", "font"])
-            is_numeric = v_type in ("int", "float", "double", "short", "long", "uint", "ushort", "ulong")
+            is_numeric = v_type.lower() in ("int", "float", "double", "short", "long", "uint", "ushort", "ulong")
             has_valid_range = rng_tuple[2] > rng_tuple[0] and rng_tuple[1] > 0
             
             # Prioritize strategy tunables: period, mult, ratio, buffer, tp, sl, threshold, range
@@ -330,7 +519,7 @@ def parse_mql5_file(mq5_path: Path, ea_name: str = "") -> Dict[str, Any]:
                 "threshold", "range", "level", "step", "fast", "slow", "signal",
                 "filter", "min", "max", "pips"
             ])
-            is_opt = is_numeric and not is_ignored and has_valid_range and (is_tunable_keyword or len([p for p in params if p.get("mode") == "optimize"]) < 4)
+            is_opt = not is_dropdown and is_numeric and not is_ignored and has_valid_range and (is_tunable_keyword or len([p for p in params if p.get("mode") == "optimize"]) < 4)
 
         params.append({
             "name": v_name,
@@ -344,7 +533,10 @@ def parse_mql5_file(mq5_path: Path, ea_name: str = "") -> Dict[str, Any]:
                 "step": rng_tuple[1],
                 "stop": rng_tuple[2]
             },
-            "description": inp["comment"] or f"Parameter {v_name}"
+            "description": inp["comment"] or f"Parameter {v_name}",
+            "isDropdown": is_dropdown,
+            "options": drop_options,
+            "optionValues": [opt["value"] for opt in drop_options] if drop_options else []
         })
 
     return {
@@ -385,15 +577,22 @@ def _parse_set_file_to_config(set_path: Path, ea_name: str) -> Dict[str, Any]:
             else:
                 cur_val = _clean_val(p_body)
                 rng = _generate_range_for_val(cur_val)
+
+            val_type = type(cur_val).__name__
+            is_dropdown, drop_options = resolve_dropdown_options(p_name, val_type, cur_val, {})
+
             params.append({
                 "name": p_name,
                 "label": re.sub(r'([A-Z])', r' \1', p_name).strip(),
-                "type": type(cur_val).__name__,
+                "type": val_type,
                 "category": _categorize_param(p_name, ""),
                 "mode": "optimize" if is_opt else "fixed",
                 "fixedValue": cur_val,
                 "range": {"start": rng[0], "step": rng[1], "stop": rng[2]},
-                "description": f"Parameter {p_name}"
+                "description": f"Parameter {p_name}",
+                "isDropdown": is_dropdown,
+                "options": drop_options,
+                "optionValues": [opt["value"] for opt in drop_options] if drop_options else []
             })
         return {
             "ea_name": ea_name,

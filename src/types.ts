@@ -4,17 +4,28 @@ export interface ParamRange {
   stop: number;
 }
 
+export interface ParamOption {
+  value: string | number | boolean;
+  label: string;
+}
+
 export interface StrategyParam {
   id?: string;
   name: string;
   label: string;
+  type?: string;
   category: 'core' | 'timing' | 'risk' | 'indicator' | 'custom';
   indicatorId?: string;
   mode: 'fixed' | 'optimize';
-  fixedValue: number | string;
+  fixedValue: number | string | boolean;
+  currentValue?: number | string | boolean;
   range: ParamRange;
   description?: string;
   isCustom?: boolean;
+  isDropdown?: boolean;
+  options?: Array<ParamOption | string>;
+  optionValues?: Array<string | number | boolean>;
+  isModified?: boolean;
 }
 
 export interface IndicatorDefinition {
