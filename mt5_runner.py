@@ -144,18 +144,45 @@ def resolve_mt5_symbol(symbol: str, work_dir: Path = None, terminal_data_dir: st
         if not terminal_data_dir:
             terminal_data_dir = os.environ.get("AF_TERMINAL_DATA_DIR")
 
-    # If already an explicit custom symbol with "dukascopy"
-    if "dukascopy" in raw.lower():
-        # Verify exact casing if terminal_data_dir exists
+    raw_lower = raw.lower()
+
+    # If the user explicitly requested a specific data source or custom symbol variant:
+    # e.g. USDJPY_tickstory, USDJPY tickstory, USDJPY_histdata, USDJPY Dukascopy, or has an underscore
+    if any(src in raw_lower for src in ["tickstory", "histdata", "dukascopy"]) or "_" in raw:
         if terminal_data_dir:
             custom_base = Path(terminal_data_dir) / "bases" / "Custom" / "history"
             if custom_base.exists():
                 try:
                     for cdir in custom_base.iterdir():
-                        if cdir.is_dir() and cdir.name.lower() == raw.lower():
-                            return cdir.name
+                        if cdir.is_dir():
+                            c_low = cdir.name.lower()
+                            if (
+                                c_low == raw_lower
+                                or c_low == raw_lower.replace("_", " ")
+                                or c_low == raw_lower.replace(" ", "_")
+                            ):
+                                return cdir.name
                 except Exception:
                     pass
+            bases_dir = Path(terminal_data_dir) / "bases"
+            if bases_dir.exists():
+                try:
+                    for server_dir in bases_dir.iterdir():
+                        if server_dir.is_dir() and server_dir.name != "Custom":
+                            hist_dir = server_dir / "history"
+                            if hist_dir.exists():
+                                for sdir in hist_dir.iterdir():
+                                    if sdir.is_dir():
+                                        s_low = sdir.name.lower()
+                                        if (
+                                            s_low == raw_lower
+                                            or s_low == raw_lower.replace("_", " ")
+                                            or s_low == raw_lower.replace(" ", "_")
+                                        ):
+                                            return sdir.name
+                except Exception:
+                    pass
+        # Preserve user's explicit custom symbol as requested
         return raw
 
     sym_key = raw.split()[0].upper()
@@ -178,7 +205,7 @@ def resolve_mt5_symbol(symbol: str, work_dir: Path = None, terminal_data_dir: st
                     with open(meta_file, "r", encoding="utf-8") as mf:
                         mdata = json.load(mf)
                         msym = mdata.get("symbol")
-                        if msym and (base_key in msym.upper() or sym_key in msym.upper() or not sym_key):
+                        if msym and (msym.upper() == raw.upper() or msym.upper().startswith(raw.upper() + " ") or msym.upper().startswith(raw.upper() + "_")):
                             return msym.strip()
                 except Exception:
                     pass
@@ -191,7 +218,7 @@ def resolve_mt5_symbol(symbol: str, work_dir: Path = None, terminal_data_dir: st
                     m = re.search(r"^Symbol\s*=\s*(.+)$", text, flags=re.MULTILINE)
                     if m:
                         isym = m.group(1).strip()
-                        if base_key in isym.upper() or sym_key in isym.upper() or not sym_key:
+                        if isym.upper() == raw.upper() or isym.upper().startswith(raw.upper() + " ") or isym.upper().startswith(raw.upper() + "_"):
                             return isym
                 except Exception:
                     pass
@@ -210,7 +237,7 @@ def resolve_mt5_symbol(symbol: str, work_dir: Path = None, terminal_data_dir: st
                         c_up = cdir.name.upper()
                         if c_up == raw.upper() or c_up == sym_key or c_up == base_key:
                             return cdir.name
-                        if (base_key in c_up or sym_key in c_up) and "dukascopy" in c_up.lower():
+                        if (base_key in c_up or sym_key in c_up) and "dukascopy" in c_up.lower() and not ("tickstory" in raw_lower or "histdata" in raw_lower):
                             return cdir.name
                 # Priority 2: Any custom folder containing base key
                 for cdir in custom_base.iterdir():
@@ -239,10 +266,11 @@ def resolve_mt5_symbol(symbol: str, work_dir: Path = None, terminal_data_dir: st
                 pass
 
     # 3. If running without terminal data dir or in mock/cloud, check SYMBOL_MAP
-    if base_key in SYMBOL_MAP:
-        return SYMBOL_MAP[base_key]
-    if sym_key in SYMBOL_MAP:
-        return SYMBOL_MAP[sym_key]
+    if not ("tickstory" in raw_lower or "histdata" in raw_lower):
+        if base_key in SYMBOL_MAP:
+            return SYMBOL_MAP[base_key]
+        if sym_key in SYMBOL_MAP:
+            return SYMBOL_MAP[sym_key]
 
     return raw
 

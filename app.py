@@ -34,10 +34,11 @@ except ImportError:
         s = (symbol or "").strip()
         if not s:
             return "USDJPY Dukascopy"
-        if "dukascopy" in s.lower():
+        s_low = s.lower()
+        if "tickstory" in s_low or "histdata" in s_low or "dukascopy" in s_low or "_" in s:
             return s
         m = {"USDJPY": "USDJPY Dukascopy", "EURUSD": "EURUSD dukascopy", "GBPUSD": "GBPUSD dukascopy", "EURJPY": "EURJPY Dukascopy", "XAUUSD": "XAUUSD dukascopy"}
-        return m.get(s.split()[0].upper(), s)
+        return m.get(s.upper(), s)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Theme
@@ -4359,10 +4360,14 @@ class FullBacktestPanel(BasePanel):
         self._ea_cb.grid(row=3, column=1, padx=(0,20), pady=6, sticky="w")
 
         # Market / Symbol
-        MARKETS = ["USDJPY", "EURJPY", "EURUSD", "GBPUSD", "XAUUSD"]
-        default_sym = cfg.get("symbol", "USDJPY").upper()
+        MARKETS = [
+            "USDJPY", "EURJPY", "EURUSD", "GBPUSD", "XAUUSD",
+            "USDJPY_tickstory", "EURJPY_tickstory", "EURUSD_tickstory", "GBPUSD_tickstory", "XAUUSD_tickstory",
+            "USDJPY Dukascopy", "EURJPY Dukascopy", "EURUSD dukascopy", "GBPUSD dukascopy", "XAUUSD dukascopy",
+        ]
+        default_sym = cfg.get("symbol", "USDJPY")
         if default_sym not in MARKETS:
-            default_sym = "USDJPY"
+            MARKETS.insert(0, default_sym)
         self._market_var = ctk.StringVar(value=default_sym)
         make_label(sel, "Market / Symbol", font=FB, color=C["sub"]).grid(
             row=4, column=0, sticky="w", padx=(20,8), pady=6)
@@ -4452,11 +4457,11 @@ class FullBacktestPanel(BasePanel):
                             if detected_ea not in avail:
                                 avail.insert(0, detected_ea)
                                 self._ea_cb.configure(values=avail)
-                            self._ea_var.set(detected_ea)
-
-                        # Auto-detect market/symbol from run metadata
+                        # Auto-detect market/symbol from run metadata unless user already specified a custom dataset (e.g. tickstory)
                         detected_sym = mdata.get("symbol_key") or mdata.get("symbol")
-                        if detected_sym:
+                        current_m = self._market_var.get().strip()
+                        is_custom_user_market = any(k in current_m.lower() for k in ["tickstory", "histdata"]) or "_" in current_m
+                        if detected_sym and not is_custom_user_market:
                             sym_key = detected_sym.split()[0].upper()
                             avail_syms = list(self._market_cb.cget("values"))
                             if sym_key not in avail_syms:
@@ -4546,6 +4551,11 @@ class FullBacktestPanel(BasePanel):
         if not run or not cand or cand == "(none found)":
             messagebox.showwarning("Missing", "Select a run and candidate.")
             return
+
+        avail_syms = list(self._market_cb.cget("values"))
+        if market not in avail_syms:
+            avail_syms.insert(0, market)
+            self._market_cb.configure(values=avail_syms)
 
         # Resolve expert file for the selected EA
         expert = resolve_ea_expert(selected_ea, self.cfg)

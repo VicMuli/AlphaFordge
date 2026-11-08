@@ -4,7 +4,11 @@ import { Play, FolderOpen, RefreshCw, Square, Trash2, X } from 'lucide-react';
 import { useScriptRunner } from '../useScriptRunner';
 
 export default function FullBacktest({ config }: { config: any }) {
-  const MARKETS = ['USDJPY', 'EURJPY', 'EURUSD', 'GBPUSD', 'XAUUSD'];
+  const MARKETS = [
+    'USDJPY', 'EURJPY', 'EURUSD', 'GBPUSD', 'XAUUSD',
+    'USDJPY_tickstory', 'EURJPY_tickstory', 'EURUSD_tickstory', 'GBPUSD_tickstory', 'XAUUSD_tickstory',
+    'USDJPY Dukascopy', 'EURJPY Dukascopy', 'EURUSD dukascopy', 'GBPUSD dukascopy', 'XAUUSD dukascopy'
+  ];
   const { logs, isRunning, runScript, stopScript, clearLogs } = useScriptRunner();
   const [runs, setRuns] = useState<any[]>([]);
   const [selectedRun, setSelectedRun] = useState<string>('');
@@ -110,7 +114,12 @@ export default function FullBacktest({ config }: { config: any }) {
             const detectedSym = first.meta.symbol_key || first.meta.symbol;
             if (detectedSym) {
               const symKey = detectedSym.split(' ')[0].toUpperCase();
-              setSelectedMarket(symKey);
+              setSelectedMarket(prev => {
+                if (prev && (prev.toLowerCase().includes('tickstory') || prev.toLowerCase().includes('histdata') || prev.includes('_'))) {
+                  return prev;
+                }
+                return symKey;
+              });
             }
             if (first.meta.train_from) setFromDate(first.meta.train_from);
             if (first.meta.holdout_to) setToDate(first.meta.holdout_to);
@@ -161,7 +170,12 @@ export default function FullBacktest({ config }: { config: any }) {
       const detectedSym = found.meta.symbol_key || found.meta.symbol;
       if (detectedSym) {
         const symKey = detectedSym.split(' ')[0].toUpperCase();
-        setSelectedMarket(symKey);
+        setSelectedMarket(prev => {
+          if (prev && (prev.toLowerCase().includes('tickstory') || prev.toLowerCase().includes('histdata') || prev.includes('_'))) {
+            return prev;
+          }
+          return symKey;
+        });
       }
       if (found.meta.train_from) {
         setFromDate(found.meta.train_from);
@@ -178,6 +192,24 @@ export default function FullBacktest({ config }: { config: any }) {
   };
 
   const resolveMarketSymbol = (market: string): string => {
+    const m = (market || 'USDJPY').trim();
+    if (!m) return 'USDJPY Dukascopy';
+
+    // If user explicitly specifies tickstory, histdata, dukascopy, or custom suffix/symbol with underscore/dash/dot:
+    // PRESERVE IT! Do NOT override with default Dukascopy.
+    const mLow = m.toLowerCase();
+    if (
+      mLow.includes('tickstory') ||
+      mLow.includes('histdata') ||
+      mLow.includes('dukascopy') ||
+      m.includes('_') ||
+      m.includes('-') ||
+      m.includes('.') ||
+      m.includes('+')
+    ) {
+      return m;
+    }
+
     const map: Record<string, string> = {
       'EURUSD': 'EURUSD dukascopy',
       'GBPUSD': 'GBPUSD dukascopy',
@@ -185,9 +217,7 @@ export default function FullBacktest({ config }: { config: any }) {
       'EURJPY': 'EURJPY Dukascopy',
       'XAUUSD': 'XAUUSD dukascopy',
     };
-    const m = (market || 'USDJPY').trim();
-    if (m.toLowerCase().includes('dukascopy')) return m;
-    const key = m.split(' ')[0].toUpperCase();
+    const key = m.toUpperCase();
     return map[key] || m;
   };
 
@@ -364,15 +394,34 @@ export default function FullBacktest({ config }: { config: any }) {
 
           <div className="flex items-center gap-4">
             <label className="text-[#8b95a6] w-36 text-right text-xs font-semibold">Market / Symbol</label>
-            <select 
-              value={selectedMarket} 
-              onChange={e => setSelectedMarket(e.target.value)}
-              className="bg-[#1a2235] border border-[#2d3748] text-[#f9fafb] rounded-lg px-3 py-2 flex-1 text-sm focus:outline-none focus:border-[#f59e0b]"
-            >
-              {MARKETS.map(m => (
-                <option key={m} value={m}>{m}</option>
-              ))}
-            </select>
+            <div className="flex-1 flex gap-2">
+              <input 
+                type="text"
+                list="fb-market-presets"
+                value={selectedMarket} 
+                onChange={e => setSelectedMarket(e.target.value)}
+                placeholder="e.g. USDJPY_tickstory, USDJPY, EURJPY_tickstory..."
+                className="bg-[#1a2235] border border-[#2d3748] text-[#f9fafb] rounded-lg px-3 py-2 flex-1 text-sm font-mono focus:outline-none focus:border-[#f59e0b]"
+              />
+              <datalist id="fb-market-presets">
+                {MARKETS.map(m => (
+                  <option key={m} value={m} />
+                ))}
+              </datalist>
+              <select
+                value={MARKETS.includes(selectedMarket) ? selectedMarket : ''}
+                onChange={e => {
+                  if (e.target.value) setSelectedMarket(e.target.value);
+                }}
+                className="bg-[#1a2235] border border-[#2d3748] text-[#8b95a6] rounded-lg px-2.5 py-2 text-xs focus:outline-none focus:border-[#f59e0b] w-32 cursor-pointer"
+                title="Select from standard presets"
+              >
+                <option value="" disabled>Presets...</option>
+                {MARKETS.map(m => (
+                  <option key={m} value={m}>{m}</option>
+                ))}
+              </select>
+            </div>
           </div>
         </div>
 
