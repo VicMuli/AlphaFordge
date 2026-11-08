@@ -52,8 +52,12 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+import matplotlib.colors as mcolors
+import matplotlib.cm as mcm
 
 # Prevent Windows console UnicodeEncodeError when running on cp1252 / charmap environments
 try:
@@ -113,6 +117,13 @@ PORTFOLIO_NAME = "TRB_Quant_Portfolio_001"
 # True = reuse/overwrite the selected portfolio folder.
 # False = create _v2, _v3, etc. if the selected folder already exists.
 OVERWRITE_EXISTING = True
+
+TARGET_IS_OOS = False
+IS_OOS_PORTFOLIO = (
+    os.environ.get("AF_IS_OOS", "").lower() in ("1", "true", "yes", "oos")
+    or "--oos" in sys.argv
+    or TARGET_IS_OOS
+)
 
 CANDIDATES = [
     {
@@ -396,18 +407,33 @@ def resolve_candidate_dir(
 
 def find_candidate_report_html(cand_dir: Path, candidate_name: str) -> Path | None:
     """Locate the MT5 HTML report produced for this candidate with recursive fallback."""
-    search_dirs = [
-        cand_dir / "full_backtest_report",
-        cand_dir / "full_backtest",
-        cand_dir,
-    ]
-
-    patterns = [
-        f"Full_BT_{candidate_name}*.htm*",
-        f"*{candidate_name}*.htm*",
-        "*.htm",
-        "*.html",
-    ]
+    if IS_OOS_PORTFOLIO:
+        search_dirs = [
+            cand_dir / "oos_backtest_report",
+            cand_dir / "oos_backtest",
+            cand_dir / "full_backtest_report",
+            cand_dir / "full_backtest",
+            cand_dir,
+        ]
+        patterns = [
+            f"OOS_BT_{candidate_name}*.htm*",
+            f"Full_BT_{candidate_name}*.htm*",
+            f"*{candidate_name}*.htm*",
+            "*.htm",
+            "*.html",
+        ]
+    else:
+        search_dirs = [
+            cand_dir / "full_backtest_report",
+            cand_dir / "full_backtest",
+            cand_dir,
+        ]
+        patterns = [
+            f"Full_BT_{candidate_name}*.htm*",
+            f"*{candidate_name}*.htm*",
+            "*.htm",
+            "*.html",
+        ]
 
     found = []
     for directory in search_dirs:
@@ -445,6 +471,14 @@ def _load_candidate_from_csv(cand_dir: Path, candidate: str, deposit: float = 25
     Fallback deal/trade loader from CSV files when MT5 HTML report is missing or unparseable.
     """
     search_files = [
+        cand_dir / "oos_trades.csv",
+        cand_dir / "oos_backtest_report" / "trades.csv",
+        cand_dir / "trades.csv",
+        cand_dir / "deals.csv",
+        cand_dir / "combined_trades.csv",
+        cand_dir / "full_backtest_report" / "trades.csv",
+        cand_dir / "full_backtest" / "trades.csv",
+    ] if IS_OOS_PORTFOLIO else [
         cand_dir / "trades.csv",
         cand_dir / "deals.csv",
         cand_dir / "combined_trades.csv",
@@ -2236,8 +2270,9 @@ def create_portfolio_word_doc(
 
     doc = docx.Document()
 
+    title_prefix = "Out-of-Sample (OOS) Quant Portfolio Report" if IS_OOS_PORTFOLIO else "Quant Portfolio Report"
     title = doc.add_heading(
-        f"Quant Portfolio Report - {portfolio_name}",
+        f"{title_prefix} - {portfolio_name}",
         0,
     )
 
@@ -3047,6 +3082,7 @@ def save_manifest(
 ):
     manifest = {
         "portfolio_name": portfolio_name,
+        "is_oos": IS_OOS_PORTFOLIO,
         "output_dir": str(portfolio_dir.parent),
         "created_utc": pd.Timestamp.now(tz="UTC").isoformat(),
         "deposit": deposit,
@@ -3114,10 +3150,15 @@ def save_manifest(
 # ===========================================================================
 
 def main():
+    global PORTFOLIO_NAME
     base_work_dir = Path(WORK_DIR)
 
+    if IS_OOS_PORTFOLIO and "_OOS" not in str(PORTFOLIO_NAME).upper() and "OOS" not in str(PORTFOLIO_NAME).upper():
+        PORTFOLIO_NAME = f"{PORTFOLIO_NAME}_OOS"
+
+    mode_label = "OUT-OF-SAMPLE (OOS)" if IS_OOS_PORTFOLIO else "FULL HISTORY"
     print("=" * 76)
-    print(" QUANT PORTFOLIO BUILDER - FIXED TRADE COUNT")
+    print(f" QUANT PORTFOLIO BUILDER — {mode_label}")
     print("=" * 76)
 
     print(f"  Quant:             {QUANT_NAME}")

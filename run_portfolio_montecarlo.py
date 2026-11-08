@@ -95,8 +95,15 @@ PORTFOLIO_DIR = None
 
 # Option B: leave PORTFOLIO_DIR = None and set these instead; the script will
 # resolve <WORK_DIR>/Quant_Portfolios/<QUANT_NAME>_Quant_Portfolios/<PORTFOLIO_NAME>.
-QUANT_NAME = "TRB"
-PORTFOLIO_NAME = "TRB_Quant_Portfolio_001"
+QUANT_NAME = os.environ.get("AF_QUANT_NAME", "TRB")
+PORTFOLIO_NAME = os.environ.get("AF_PORTFOLIO_NAME", "TRB_Quant_Portfolio_001")
+
+TARGET_IS_OOS = False
+IS_OOS = (
+    os.environ.get("AF_IS_OOS", "").lower() in ("1", "true", "yes", "oos")
+    or "--oos" in sys.argv
+    or TARGET_IS_OOS
+)
 
 # --- Simulation settings ----------------------------------------------------
 N_SIMULATIONS = 5000
@@ -141,8 +148,10 @@ ACCOUNT_SIZE = None
 
 def resolve_portfolio_dir() -> Path | None:
     """Locate the portfolio folder from either the explicit path or quant/name pair."""
-    if PORTFOLIO_DIR:
-        p = Path(PORTFOLIO_DIR)
+    env_dir = os.environ.get("AF_PORTFOLIO_DIR", "").strip()
+    target_dir = PORTFOLIO_DIR or (Path(env_dir) if env_dir else None)
+    if target_dir:
+        p = Path(target_dir)
         if p.exists():
             return p
         print(f"ERROR: PORTFOLIO_DIR does not exist: {p}")
@@ -154,11 +163,10 @@ def resolve_portfolio_dir() -> Path | None:
         print("ERROR: PORTFOLIO_DIR not set and run_optimization.WORK_DIR not importable.")
         return None
 
-    p = Path(WORK_DIR) / "Quant_Portfolios" / f"{QUANT_NAME}_Quant_Portfolios" / PORTFOLIO_NAME
-    if p.exists():
-        return p
+    port_names_to_try = [PORTFOLIO_NAME]
+    if IS_OOS and not PORTFOLIO_NAME.endswith("_OOS") and not "_oos" in PORTFOLIO_NAME.lower():
+        port_names_to_try.insert(0, f"{PORTFOLIO_NAME}_OOS")
 
-    # Fallback search across work directories
     work_path = Path(WORK_DIR)
     script_dir = Path(__file__).parent.resolve()
     search_roots = [
@@ -177,19 +185,24 @@ def resolve_portfolio_dir() -> Path | None:
             p_env = script_dir / env_out
         if p_env.exists() and p_env not in search_roots:
             search_roots.insert(0, p_env)
-    for root in search_roots:
-        if root.exists():
-            try:
-                cand = root / PORTFOLIO_NAME
-                if cand.exists() and cand.is_dir() and ((cand / "combined_trades.csv").exists() or (cand / "portfolio_manifest.json").exists()):
-                    return cand
-                for match in root.rglob(PORTFOLIO_NAME):
-                    if match.is_dir() and ((match / "combined_trades.csv").exists() or (match / "portfolio_manifest.json").exists()):
-                        return match
-            except OSError:
-                pass
 
-    print(f"ERROR: Resolved portfolio folder does not exist: {p}")
+    for pname in port_names_to_try:
+        p = Path(WORK_DIR) / "Quant_Portfolios" / f"{QUANT_NAME}_Quant_Portfolios" / pname
+        if p.exists():
+            return p
+        for root in search_roots:
+            if root.exists():
+                try:
+                    cand = root / pname
+                    if cand.exists() and cand.is_dir() and ((cand / "combined_trades.csv").exists() or (cand / "portfolio_manifest.json").exists()):
+                        return cand
+                    for match in root.rglob(pname):
+                        if match.is_dir() and ((match / "combined_trades.csv").exists() or (match / "portfolio_manifest.json").exists()):
+                            return match
+                except OSError:
+                    pass
+
+    print(f"ERROR: Resolved portfolio folder does not exist for {port_names_to_try}")
     return None
 
 
@@ -558,7 +571,9 @@ def create_montecarlo_word_doc(doc_path, portfolio_name, manifest, deposit, trad
         return None
 
     doc = docx.Document()
-    title = doc.add_heading(f"Monte Carlo Simulation Report - {portfolio_name}", 0)
+    is_oos_doc = IS_OOS or bool(manifest and manifest.get("is_oos")) or ("oos" in str(portfolio_name).lower())
+    title_prefix = "Out-of-Sample (OOS) Monte Carlo Simulation Report" if is_oos_doc else "Monte Carlo Simulation Report"
+    title = doc.add_heading(f"{title_prefix} - {portfolio_name}", 0)
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
     doc.add_paragraph(
         f"{N_SIMULATIONS:,} simulated paths generated from the portfolio's combined trade "

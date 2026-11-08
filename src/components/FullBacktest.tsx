@@ -247,6 +247,44 @@ export default function FullBacktest({ config }: { config: any }) {
     });
   };
 
+  const handleRunOOS = () => {
+    let rawFrom = (config?.holdout_from || '2024.01.01').trim();
+    let rawTo = (config?.holdout_to || '2026.07.03').trim();
+    const normFrom = normalizeMt5Date(rawFrom, '2024.01.01', false);
+    const normTo = normalizeMt5Date(rawTo, '2026.07.03', true);
+    const resolvedSymbol = resolveMarketSymbol(selectedMarket);
+
+    setFromDate(normFrom);
+    setToDate(normTo);
+
+    runScript('run_full_backtest.py', {
+      args: ['--oos'],
+      patch: {
+        patches: {
+          TARGET_RUN_DIR: selectedRun || 'latest',
+          TARGET_CANDIDATE: selectedCand || 'cand_001',
+          TARGET_SYMBOL: resolvedSymbol,
+          TARGET_EA: selectedEa || 'TRB',
+          TARGET_SET_FILE: selectedSetFile || '',
+          TARGET_FROM_DATE: normFrom,
+          TARGET_TO_DATE: normTo,
+          TARGET_IS_OOS: true,
+        }
+      },
+      envOverrides: {
+        AF_IS_OOS: '1',
+        AF_ACTIVE_EA: selectedEa || 'TRB',
+        AF_SET_FILE: selectedSetFile || '',
+        AF_SYMBOL: resolvedSymbol,
+        AF_BT_START: normFrom,
+        AF_BT_END: normTo,
+        AF_DEPOSIT: deposit,
+        AF_LOT_SIZE: lotSize,
+        AF_RISK_PCT: riskPct,
+      }
+    });
+  };
+
   return (
     <div className="flex flex-col h-full space-y-4">
       <SectionHeader 
@@ -394,9 +432,14 @@ export default function FullBacktest({ config }: { config: any }) {
               <Square size={16} /> Stop Execution
             </Button>
           ) : (
-            <Button onClick={handleRun}>
-              <Play size={16} /> Run Full Backtest
-            </Button>
+            <>
+              <Button onClick={handleRun}>
+                <Play size={16} /> Run Full Backtest
+              </Button>
+              <Button onClick={handleRunOOS} variant="blue" className="bg-blue-600 hover:bg-blue-700">
+                <Play size={16} /> ⚡ Run OOS Backtest
+              </Button>
+            </>
           )}
           <Button variant="secondary" onClick={clearLogs}>
             <Trash2 size={16} /> Clear Log

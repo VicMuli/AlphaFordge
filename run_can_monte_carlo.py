@@ -400,7 +400,7 @@ def _local_parse_deals_from_html(html_path: Path, deposit: float = 2500.0) -> tu
     return df, eff_deposit
 
 
-def extract_daily_pnl_from_candidate(cand_dir: Path) -> tuple[list[float], float]:
+def extract_daily_pnl_from_candidate(cand_dir: Path, is_oos: bool = False) -> tuple[list[float], float]:
     """
     Scans candidate folder and subfolders for real backtest reports (.htm, .html, .csv) and extracts
     individual trade deals aggregated into a daily P&L series along with the detected base deposit.
@@ -439,27 +439,36 @@ def extract_daily_pnl_from_candidate(cand_dir: Path) -> tuple[list[float], float
             seen_paths.add(rp)
             dedup_files.append(f)
 
-    # Sort files to prioritize:
-    # 1. trades.csv
-    # 2. full backtest reports (*full*)
-    # 3. default / holdout / val / train HTML reports
-    # 4. other csv reports
+    # Sort files prioritizing OOS reports when is_oos is requested
     def report_priority(p: Path):
         name_l = p.name.lower()
         parent_l = p.parent.name.lower()
-        if p.name == "trades.csv":
-            return (0, name_l)
-        if "full" in name_l or "full" in parent_l:
-            return (1, name_l)
-        if p.suffix.lower() in [".htm", ".html"]:
-            if "default" in name_l:
+        if is_oos:
+            if "oos" in name_l and p.suffix.lower() == ".csv":
+                return (0, name_l)
+            if "oos" in parent_l and p.name == "trades.csv":
+                return (1, name_l)
+            if "oos" in name_l or "oos" in parent_l:
                 return (2, name_l)
             if "holdout" in name_l or "holdout" in parent_l:
                 return (3, name_l)
-            if "val" in name_l or "val" in parent_l:
+            if p.name == "trades.csv":
                 return (4, name_l)
             return (5, name_l)
-        return (6, name_l)
+        else:
+            if p.name == "trades.csv":
+                return (0, name_l)
+            if "full" in name_l or "full" in parent_l:
+                return (1, name_l)
+            if p.suffix.lower() in [".htm", ".html"]:
+                if "default" in name_l:
+                    return (2, name_l)
+                if "holdout" in name_l or "holdout" in parent_l:
+                    return (3, name_l)
+                if "val" in name_l or "val" in parent_l:
+                    return (4, name_l)
+                return (5, name_l)
+            return (6, name_l)
 
     dedup_files.sort(key=report_priority)
 
@@ -731,14 +740,16 @@ def run_monte_carlo_simulation(daily_pnls: list[float], starting_capital: float,
 
 
 def create_monte_carlo_word_doc(cand_dir: Path, cand_n: str, deposit: float, p1_res: dict, p2_res: dict,
-                                run_dir: str | None = None, no_max_days: bool = False, max_days: int = 250) -> Path | None:
+                                run_dir: str | None = None, no_max_days: bool = False, max_days: int = 250,
+                                is_oos: bool = False) -> Path | None:
     """Generates the Word document matching the Monte Carlo summary structure."""
     if docx is None:
         return None
 
     try:
         doc = docx.Document()
-        doc.add_heading(f"Monte Carlo Full Results — Candidate {cand_n}", 0)
+        title_prefix = "Out-of-Sample (OOS) Monte Carlo Full Results" if is_oos else "Monte Carlo Full Results"
+        doc.add_heading(f"{title_prefix} — Candidate {cand_n}", 0)
 
         horizon_str = "Unlimited (No time limit)" if no_max_days else f"{max_days} days"
         run_str = f" | Run Folder: {run_dir}" if run_dir else ""
@@ -775,7 +786,8 @@ def create_monte_carlo_word_doc(cand_dir: Path, cand_n: str, deposit: float, p1_
         verdict_run.font.size = Pt(14)
         verdict_run.font.color.rgb = RGBColor(0, 128, 0) if is_certified else RGBColor(255, 0, 0)
 
-        doc_path = cand_dir / f"MonteCarlo_Full_Summary_cand_{cand_n}.docx"
+        doc_filename = f"OOS_Monte_Carlo_Summary_cand_{cand_n}.docx" if is_oos else f"MonteCarlo_Full_Summary_cand_{cand_n}.docx"
+        doc_path = cand_dir / doc_filename
         doc.save(doc_path)
         return doc_path
     except Exception as e:
@@ -797,12 +809,15 @@ def main():
     parser.add_argument("--max-days", type=int, default=None, help="Max simulated days")
     parser.add_argument("--no-max-days", "--disable-max-days", dest="no_max_days", action="store_true", default=False, help="Disable maximum trading days limit")
     parser.add_argument("--deposit", type=float, default=None, help="Starting deposit")
+    parser.add_argument("--oos", dest="is_oos", action="store_true", default=False, help="Run Monte Carlo on Out-of-Sample (OOS) report and trades")
 
     args = parser.parse_args()
 
     # Load configuration from config.json
     cfg = load_project_config()
     mc_cfg = cfg.get("monte_carlo_candidate", {})
+
+    is_oos = bool(args.is_oos or os.environ.get("AF_IS_OOS", "").lower() in ("1", "true", "yes", "oos"))
 
     target_candidate = (
         args.candidate or 
@@ -887,9 +902,11 @@ def main():
     )
 
     print("=" * 72)
-    print("MANUAL MONTE CARLO SIMULATION PIPELINE")
+    mode_text = "OUT-OF-SAMPLE (OOS) " if is_oos else ""
+    print(f"MANUAL {mode_text}MONTE CARLO SIMULATION PIPELINE")
     print("=" * 72)
     print(f"  Target Candidate:      {target_candidate}")
+    print(f"  Mode:                  {'Out-of-Sample (OOS)' if is_oos else 'Standard / Full History'}")
     if run_dir:
         print(f"  Specified Run Folder:  {run_dir}")
     else:
@@ -934,8 +951,8 @@ def main():
     cand_n = target_candidate.replace("cand_", "")
 
     # 1. Extract Daily P&L
-    print("\n[1/4] Extracting historical daily P&L distribution from reports...")
-    daily_pnls, base_deposit = extract_daily_pnl_from_candidate(target_cand_dir)
+    print(f"\n[1/4] Extracting historical {'OOS ' if is_oos else ''}daily P&L distribution from reports...")
+    daily_pnls, base_deposit = extract_daily_pnl_from_candidate(target_cand_dir, is_oos=is_oos)
     print(f"  Extracted {len(daily_pnls)} calendar daily P&L data points (incl. flat weekdays).")
     print(f"  Base Backtest Deposit: ${base_deposit:,.2f}")
     if abs(deposit_amt - base_deposit) > 1.0:
@@ -993,7 +1010,7 @@ def main():
 
     doc_path = create_monte_carlo_word_doc(
         target_cand_dir, cand_n, deposit_amt, p1_results, p2_results,
-        run_dir=run_dir, no_max_days=no_max_days, max_days=max_days
+        run_dir=run_dir, no_max_days=no_max_days, max_days=max_days, is_oos=is_oos
     )
     if doc_path:
         print(f"  [SUCCESS] Word Document Generated: {doc_path}")
@@ -1001,6 +1018,7 @@ def main():
     # Save structured JSON results for Web UI & Desktop app
     summary_data = {
         "candidate": target_candidate,
+        "is_oos": is_oos,
         "run_folder": run_dir if run_dir else None,
         "deposit": deposit_amt,
         "simulations": simulations,
@@ -1017,11 +1035,15 @@ def main():
     }
 
     try:
-        json_out = target_cand_dir / "monte_carlo_results.json"
+        json_filename = "oos_monte_carlo_results.json" if is_oos else "monte_carlo_results.json"
+        json_out = target_cand_dir / json_filename
         with open(json_out, "w", encoding="utf-8") as f:
             json.dump(summary_data, f, indent=2)
         
         # Also copy to root for quick API fetching
+        root_json = "last_mc_candidate_result_oos.json" if is_oos else "last_mc_candidate_result.json"
+        with open(root_json, "w", encoding="utf-8") as f:
+            json.dump(summary_data, f, indent=2)
         with open("last_mc_candidate_result.json", "w", encoding="utf-8") as f:
             json.dump(summary_data, f, indent=2)
         print(f"  [SUCCESS] JSON Results Saved: {json_out}")

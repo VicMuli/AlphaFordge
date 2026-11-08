@@ -81,6 +81,7 @@ interface MonteCarloData {
   phase2: PhaseResult;
   doc_path?: string | null;
   historical_pnl_count?: number;
+  is_oos?: boolean;
 }
 
 export function MonteCarlo() {
@@ -263,6 +264,39 @@ export function MonteCarlo() {
       },
       onDone: (exitCode) => {
         // Refresh result once finished
+        fetchCandidateResult(target, effRunFolder);
+        fetchCandidatesAndRuns();
+      }
+    });
+  };
+
+  const handleRunOOSSimulation = () => {
+    const target = customCandidate.trim() || selectedCandidate;
+    if (!target) return;
+
+    const effRunFolder = customRunFolder.trim() || runFolder.trim();
+
+    let cliArgs = `${target} --sims ${simulations} --p1 ${phase1Target} --p2 ${phase2Target} --max-dd ${maxDrawdown} --daily-dd ${dailyDrawdown} --block-size ${blockSize} --deposit ${startingCapital} --oos`;
+    
+    if (effRunFolder) {
+      cliArgs += ` --run-dir "${effRunFolder}"`;
+    }
+
+    if (noMaxDays) {
+      cliArgs += ` --no-max-days`;
+    } else {
+      cliArgs += ` --max-days ${maxDays}`;
+    }
+
+    runScript('run_can_monte_carlo.py', {
+      args: cliArgs,
+      envOverrides: {
+        AF_IS_OOS: '1',
+      },
+      onStart: () => {
+        // clear previous message
+      },
+      onDone: (exitCode) => {
         fetchCandidateResult(target, effRunFolder);
         fetchCandidatesAndRuns();
       }
@@ -666,17 +700,23 @@ export function MonteCarlo() {
           </div>
 
           {/* Action Trigger Buttons */}
-          <div className="pt-4 mt-4 border-t border-[#2d3748] flex items-center gap-2">
+          <div className="pt-4 mt-4 border-t border-[#2d3748] flex flex-col gap-2">
             {isRunning ? (
               <Button onClick={stopScript} variant="blue" className="bg-red-600 hover:bg-red-700 w-full text-xs font-bold py-2.5">
                 <Square size={15} />
                 <span>Stop Simulation</span>
               </Button>
             ) : (
-              <Button onClick={handleRunSimulation} className="w-full text-xs font-bold py-2.5 bg-[#f59e0b] hover:bg-[#d97706] text-black">
-                <Play size={15} />
-                <span>Run Monte Carlo ({simulations.toLocaleString()} Sims)</span>
-              </Button>
+              <>
+                <Button onClick={handleRunSimulation} className="w-full text-xs font-bold py-2.5 bg-[#f59e0b] hover:bg-[#d97706] text-black">
+                  <Play size={15} />
+                  <span>Run Monte Carlo ({simulations.toLocaleString()} Sims)</span>
+                </Button>
+                <Button onClick={handleRunOOSSimulation} variant="blue" className="w-full text-xs font-bold py-2 bg-blue-600 hover:bg-blue-700 text-white">
+                  <Play size={15} />
+                  <span>⚡ Run OOS Candidate MC</span>
+                </Button>
+              </>
             )}
           </div>
         </Card>
@@ -709,6 +749,11 @@ export function MonteCarlo() {
                   <span className="px-2 py-0.5 rounded text-xs font-mono bg-[#111827] border border-[#2d3748] text-white">
                     {activeCandidateData.candidate}
                   </span>
+                  {activeCandidateData.is_oos && (
+                    <span className="px-2 py-0.5 rounded text-[11px] font-mono bg-blue-900/60 border border-blue-400 text-blue-200 font-bold">
+                      ⚡ Out-of-Sample (OOS)
+                    </span>
+                  )}
                   {activeCandidateData.run_folder && (
                     <span className="px-2 py-0.5 rounded text-[11px] font-mono bg-blue-950/40 border border-blue-600/30 text-blue-300 truncate max-w-[260px]" title={activeCandidateData.run_folder}>
                       📁 {activeCandidateData.run_folder}

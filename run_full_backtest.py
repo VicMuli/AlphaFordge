@@ -39,8 +39,12 @@ try:
 except Exception:
     pass
 
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+import matplotlib.cm as mcm
 import numpy as np
 import pandas as pd
 
@@ -72,6 +76,7 @@ from run_optimization import (
     LEVERAGE,
     SINGLE_TEST_TIMEOUT,
     TRAIN_FROM,
+    HOLDOUT_FROM,
     HOLDOUT_TO,
     WORK_DIR,
 )
@@ -92,12 +97,21 @@ TARGET_EA = ''
 TARGET_SET_FILE = ''
 TARGET_FROM_DATE = '2013.01.01'
 TARGET_TO_DATE = '2026.07.03'
+TARGET_IS_OOS = False
+
+IS_OOS = (
+    os.environ.get("AF_IS_OOS", "").lower() in ("1", "true", "yes", "oos")
+    or "--oos" in sys.argv
+    or TARGET_IS_OOS
+)
 
 # Resolve start and end dates with robust fallbacks and strict MT5 YYYY.MM.DD formatting
-_raw_start = str(os.environ.get("AF_BT_START") or TARGET_FROM_DATE or TRAIN_FROM or "2013.01.01").strip()
-_raw_end   = str(os.environ.get("AF_BT_END") or TARGET_TO_DATE or HOLDOUT_TO or "2026.07.03").strip()
-BT_START = normalize_mt5_date(_raw_start, default="2013.01.01", is_end=False)
-BT_END   = normalize_mt5_date(_raw_end, default="2026.07.03", is_end=True)
+_default_start = HOLDOUT_FROM if IS_OOS else (TRAIN_FROM or "2013.01.01")
+_default_end = HOLDOUT_TO or "2026.07.03"
+_raw_start = str(os.environ.get("AF_BT_START") or (TARGET_FROM_DATE if not IS_OOS else HOLDOUT_FROM) or _default_start).strip()
+_raw_end   = str(os.environ.get("AF_BT_END") or TARGET_TO_DATE or _default_end).strip()
+BT_START = normalize_mt5_date(_raw_start, default=_default_start, is_end=False)
+BT_END   = normalize_mt5_date(_raw_end, default=_default_end, is_end=True)
 
 DEPOSIT_OVERRIDE = os.environ.get("AF_DEPOSIT", str(DEPOSIT))
 SYMBOL_OVERRIDE = os.environ.get("AF_SYMBOL", TARGET_SYMBOL if TARGET_SYMBOL else SYMBOL)
@@ -998,13 +1012,15 @@ def create_full_backtest_word_doc(
     heatmap_path,
     monthly_profit: pd.DataFrame,
     deposit: float,
+    is_oos: bool = False,
 ):
     if docx is None:
         print("    [ERROR] python-docx is not installed; cannot create Word report.")
         return None
 
     doc = docx.Document()
-    title = doc.add_heading(f"Full Backtest Report - Candidate {cand_n}", 0)
+    heading_text = f"Out-of-Sample (OOS) Backtest Report - Candidate {cand_n}" if is_oos else f"Full Backtest Report - Candidate {cand_n}"
+    title = doc.add_heading(heading_text, 0)
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
     derived = calculate_derived_metrics(deals_df, deposit) if deals_df is not None else {}
@@ -1404,40 +1420,59 @@ def main():
     base_work_dir = Path(WORK_DIR)
     target_cand_dir = resolve_candidate_dir(base_work_dir, TARGET_RUN_DIR, TARGET_CANDIDATE)
 
+    mode_label = "OUT-OF-SAMPLE (OOS)" if IS_OOS else "FULL HISTORY"
     print("=" * 76)
-    print(" SINGLE CANDIDATE FULL BACKTEST & ADVANCED REPORTING — FIXED")
+    print(f" SINGLE CANDIDATE BACKTEST & ADVANCED REPORTING — {mode_label}")
     print("=" * 76)
 
     if target_cand_dir is None or not target_cand_dir.exists():
         return
 
     # Dynamic date range resolution: environment -> TARGET constants -> run_meta.json -> defaults
-    run_start = str(os.environ.get("AF_BT_START") or TARGET_FROM_DATE or "").strip()
+    run_start = str(os.environ.get("AF_BT_START") or (TARGET_FROM_DATE if not IS_OOS else "") or "").strip()
     run_end   = str(os.environ.get("AF_BT_END") or TARGET_TO_DATE or "").strip()
 
+    meta_holdout_from = None
+    meta_holdout_to = None
+    meta_train_from = None
     for sdir in (target_cand_dir, target_cand_dir.parent, target_cand_dir.parent.parent):
         meta_file = sdir / "run_meta.json"
         if meta_file.exists():
             try:
                 with open(meta_file, "r", encoding="utf-8") as mf:
                     mdata = json.load(mf)
-                    if (not run_start or run_start in ("2026", "2026.01.01", "2026.12.31")) and mdata.get("train_from"):
+                    if mdata.get("holdout_from"):
+                        meta_holdout_from = mdata["holdout_from"]
+                    if mdata.get("holdout_to"):
+                        meta_holdout_to = mdata["holdout_to"]
+                    if mdata.get("train_from"):
+                        meta_train_from = mdata["train_from"]
+                    if (not run_start or run_start in ("2026", "2026.01.01", "2026.12.31")) and not IS_OOS and mdata.get("train_from"):
                         run_start = mdata["train_from"]
                     if not run_end and mdata.get("holdout_to"):
                         run_end = mdata["holdout_to"]
-                    if run_start and run_end:
+                    if meta_holdout_from and meta_holdout_to:
                         break
             except Exception:
                 pass
 
-    BT_START = normalize_mt5_date(run_start or TRAIN_FROM, default="2013.01.01", is_end=False)
-    BT_END   = normalize_mt5_date(run_end or HOLDOUT_TO, default="2026.07.03", is_end=True)
+    if IS_OOS:
+        default_oos_start = meta_holdout_from or HOLDOUT_FROM or "2024.01.01"
+        default_oos_end = meta_holdout_to or HOLDOUT_TO or "2026.07.03"
+        BT_START = normalize_mt5_date(run_start or default_oos_start, default=default_oos_start, is_end=False)
+        BT_END   = normalize_mt5_date(run_end or default_oos_end, default=default_oos_end, is_end=True)
+    else:
+        default_full_start = meta_train_from or TRAIN_FROM or "2013.01.01"
+        default_full_end = meta_holdout_to or HOLDOUT_TO or "2026.07.03"
+        BT_START = normalize_mt5_date(run_start or default_full_start, default=default_full_start, is_end=False)
+        BT_END   = normalize_mt5_date(run_end or default_full_end, default=default_full_end, is_end=True)
 
-    # Resolve symbol to MT5 custom symbol with 2013-2026 historical data
+    # Resolve symbol to MT5 custom symbol with historical data
     symbol_to_run = resolve_mt5_symbol(SYMBOL_OVERRIDE, work_dir=target_cand_dir, terminal_data_dir=TERMINAL_DATA_DIR)
 
     print(f"  Target Directory:  {target_cand_dir.parent.name}")
     print(f"  Target Candidate:  {TARGET_CANDIDATE}")
+    print(f"  Mode:              {'Out-Of-Sample (OOS)' if IS_OOS else 'Full History'}")
     if EA_OVERRIDE:
         print(f"  Target EA:         {EA_OVERRIDE}")
     if SET_FILE_OVERRIDE:
@@ -1453,7 +1488,7 @@ def main():
 
     profiles_tester_dir = Path(TERMINAL_DATA_DIR) / "MQL5" / "Profiles" / "Tester"
     profiles_tester_dir.mkdir(parents=True, exist_ok=True)
-    temp_set_name = f"full_bt_{TARGET_CANDIDATE}.set"
+    temp_set_name = f"oos_bt_{TARGET_CANDIDATE}.set" if IS_OOS else f"full_bt_{TARGET_CANDIDATE}.set"
     target_set_path = profiles_tester_dir / temp_set_name
     shutil.copy(source_set_file, target_set_path)
 
@@ -1478,9 +1513,9 @@ def main():
         except Exception as e:
             print(f"  [WARNING] Could not apply lot/risk overrides to set file: {e}")
 
-    report_folder = target_cand_dir / "full_backtest_report"
+    report_folder = target_cand_dir / ("oos_backtest_report" if IS_OOS else "full_backtest_report")
     report_folder.mkdir(parents=True, exist_ok=True)
-    report_name = f"Full_BT_{TARGET_CANDIDATE}"
+    report_name = f"OOS_BT_{TARGET_CANDIDATE}" if IS_OOS else f"Full_BT_{TARGET_CANDIDATE}"
 
     # Determine expert from user override, EA override, candidate directory, run_meta.json, run.ini, or config EXPERT
     expert_to_run = EXPERT_OVERRIDE
@@ -1605,12 +1640,40 @@ def main():
             print(f"      Heatmap saved: {heatmap_path.name}")
         else:
             print("      [WARNING] Heatmap could not be generated.")
+
+        # Save extracted deal data to trades.csv in report_folder and candidate folder
+        try:
+            deals_df.to_csv(report_folder / "trades.csv", index=False)
+            deals_df.to_csv(target_cand_dir / ("oos_trades.csv" if IS_OOS else "trades.csv"), index=False)
+            print(f"      Trades CSV saved: {report_folder / 'trades.csv'}")
+        except Exception as exc:
+            print(f"      [Notice] Could not save trades.csv: {exc}")
     else:
         print("  [WARNING] No deal data available; charts and heatmap will be omitted.")
 
+    # Save summary metrics JSON in candidate folder and report folder
+    summary_json_data = {
+        "candidate": TARGET_CANDIDATE,
+        "symbol": symbol_to_run,
+        "is_oos": IS_OOS,
+        "from_date": BT_START,
+        "to_date": BT_END,
+        "deposit": float(DEPOSIT_OVERRIDE),
+        "derived_metrics": derived,
+        "raw_metrics": {k: (v if not isinstance(v, (pd.Timestamp, np.generic)) else str(v)) for k, v in raw_metrics.items() if not isinstance(v, (dict, pd.DataFrame))},
+    }
+    try:
+        with open(report_folder / ("oos_summary_metrics.json" if IS_OOS else "summary_metrics.json"), "w", encoding="utf-8") as f:
+            json.dump(summary_json_data, f, indent=2, default=str)
+        with open(target_cand_dir / ("oos_summary_metrics.json" if IS_OOS else "full_summary_metrics.json"), "w", encoding="utf-8") as f:
+            json.dump(summary_json_data, f, indent=2, default=str)
+    except Exception as exc:
+        print(f"  [Notice] Could not save summary_metrics.json: {exc}")
+
     print("  --> Compiling Word Document...")
     cand_n = TARGET_CANDIDATE.replace("cand_", "")
-    doc_out = report_folder / f"Full_Backtest_Summary_{TARGET_CANDIDATE}.docx"
+    doc_filename = f"OOS_Backtest_Summary_{TARGET_CANDIDATE}.docx" if IS_OOS else f"Full_Backtest_Summary_{TARGET_CANDIDATE}.docx"
+    doc_out = report_folder / doc_filename
     final_doc_path = create_full_backtest_word_doc(
         doc_path=doc_out,
         cand_n=cand_n,
@@ -1620,10 +1683,11 @@ def main():
         heatmap_path=heatmap_path,
         monthly_profit=monthly_profit,
         deposit=float(DEPOSIT_OVERRIDE),
+        is_oos=IS_OOS,
     )
 
     print("\n" + "=" * 76)
-    print(f" FULL BACKTEST COMPLETE FOR {TARGET_CANDIDATE}")
+    print(f" {'OOS' if IS_OOS else 'FULL'} BACKTEST COMPLETE FOR {TARGET_CANDIDATE}")
     if final_doc_path:
         print(f" Word Report:      {final_doc_path}")
     for key, path in charts.items():

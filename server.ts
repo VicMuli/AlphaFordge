@@ -1466,9 +1466,11 @@ async function startServer() {
       }
 
       await scan(optRunsDir);
-      const multiMarketDir = path.join(cwd, 'MultiMarket portfolio');
-      if (existsSync(multiMarketDir)) {
-        await scan(multiMarketDir);
+      for (const pDir of ['MultiMarket portfolio', 'Multi_Market_Quant_Portfolio', 'Quant_Portfolios']) {
+        const fullPDir = path.join(cwd, pDir);
+        if (existsSync(fullPDir)) {
+          await scan(fullPDir);
+        }
       }
       res.json({ portfolios });
     } catch (e: any) {
@@ -1536,35 +1538,47 @@ async function startServer() {
     try {
       const cand = req.query.candidate as string;
       const runFolder = (req.query.run_folder || req.query.run_dir) as string;
+      const isOosQuery = req.query.is_oos === '1' || req.query.is_oos === 'true';
       const cwd = process.cwd();
       const optRunsDir = path.join(cwd, 'optimization_runs');
 
+      const targetJsonFiles = isOosQuery 
+        ? ['oos_monte_carlo_results.json', 'monte_carlo_results.json'] 
+        : ['oos_monte_carlo_results.json', 'monte_carlo_results.json'];
+
       // If runFolder was explicitly provided, check there first
       if (runFolder && cand) {
-        const potentialPaths = [
-          path.isAbsolute(runFolder) ? path.join(runFolder, cand, 'monte_carlo_results.json') : path.join(cwd, runFolder, cand, 'monte_carlo_results.json'),
-          path.isAbsolute(runFolder) ? path.join(runFolder, 'passed_candidates', cand, 'monte_carlo_results.json') : path.join(cwd, runFolder, 'passed_candidates', cand, 'monte_carlo_results.json'),
-          path.join(optRunsDir, runFolder, cand, 'monte_carlo_results.json'),
-          path.join(optRunsDir, runFolder, 'passed_candidates', cand, 'monte_carlo_results.json')
-        ];
-        for (const p of potentialPaths) {
-          if (existsSync(p)) {
-            try {
-              return res.json(JSON.parse(await fs.readFile(p, 'utf-8')));
-            } catch {}
+        for (const jName of targetJsonFiles) {
+          const potentialPaths = [
+            path.isAbsolute(runFolder) ? path.join(runFolder, cand, jName) : path.join(cwd, runFolder, cand, jName),
+            path.isAbsolute(runFolder) ? path.join(runFolder, 'passed_candidates', cand, jName) : path.join(cwd, runFolder, 'passed_candidates', cand, jName),
+            path.join(optRunsDir, runFolder, cand, jName),
+            path.join(optRunsDir, runFolder, 'passed_candidates', cand, jName)
+          ];
+          for (const p of potentialPaths) {
+            if (existsSync(p)) {
+              try {
+                return res.json(JSON.parse(await fs.readFile(p, 'utf-8')));
+              } catch {}
+            }
           }
         }
       }
 
-      // Check root last_mc_candidate_result.json if matching
-      const rootMc = path.join(cwd, 'last_mc_candidate_result.json');
-      if (existsSync(rootMc)) {
-        try {
-          const data = JSON.parse(await fs.readFile(rootMc, 'utf-8'));
-          if (!cand || data.candidate === cand) {
-            return res.json(data);
-          }
-        } catch {}
+      // Check root last_mc_candidate_result_oos.json or last_mc_candidate_result.json if matching
+      const rootFiles = isOosQuery 
+        ? ['last_mc_candidate_result_oos.json', 'last_mc_candidate_result.json']
+        : ['last_mc_candidate_result_oos.json', 'last_mc_candidate_result.json'];
+      for (const rf of rootFiles) {
+        const rootMc = path.join(cwd, rf);
+        if (existsSync(rootMc)) {
+          try {
+            const data = JSON.parse(await fs.readFile(rootMc, 'utf-8'));
+            if (!cand || data.candidate === cand) {
+              return res.json(data);
+            }
+          } catch {}
+        }
       }
 
       // Look in candidate folders
@@ -1577,9 +1591,11 @@ async function startServer() {
               const full = path.join(dir, e.name);
               if (e.isDirectory()) {
                 if (e.name === cand) {
-                  const jsonFile = path.join(full, 'monte_carlo_results.json');
-                  if (existsSync(jsonFile)) {
-                    return JSON.parse(await fs.readFile(jsonFile, 'utf-8'));
+                  for (const jName of targetJsonFiles) {
+                    const jsonFile = path.join(full, jName);
+                    if (existsSync(jsonFile)) {
+                      return JSON.parse(await fs.readFile(jsonFile, 'utf-8'));
+                    }
                   }
                 }
                 const found = await findCandFile(full, depth + 1);

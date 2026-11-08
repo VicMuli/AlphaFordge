@@ -160,6 +160,58 @@ export default function Portfolio({ config }: { config: any }) {
     });
   };
 
+  const handleBuildOOS = () => {
+    let baseName = (portfolioName || 'Quant_Portfolio_001')
+      .replace(/[/\\:]+/g, '_')
+      .replace(/_+/g, '_')
+      .replace(/^_+|_+$/g, '');
+    if (!baseName.endsWith('_OOS')) {
+      baseName = `${baseName}_OOS`;
+    }
+
+    const formattedCandidates = candidateRows.map(row => {
+      const runObj = runs.find(r => r.name === row.runDir || r.path === row.runDir);
+      let detectedMarket: string | undefined = undefined;
+      const combined = `${row.runDir} ${runObj?.path || ''} ${row.candidate}`.toLowerCase();
+      for (const mkt of ['eurjpy', 'usdjpy', 'gbpjpy', 'audusd', 'eurusd', 'xauusd', 'btcusd']) {
+        if (combined.includes(mkt)) {
+          detectedMarket = mkt.toUpperCase();
+          break;
+        }
+      }
+      const cleanRunPath = runObj?.path ? runObj.path.replace(/\\/g, '/') : undefined;
+      const cleanRunDir = row.runDir.replace(/\\/g, '/');
+      return {
+        run_dir: cleanRunDir,
+        ...(cleanRunPath ? { run_path: cleanRunPath } : {}),
+        candidate: row.candidate,
+        weight: parseFloat(row.weight) || 1.0,
+        ...(detectedMarket ? { market: detectedMarket } : {}),
+      };
+    });
+
+    runScript('build_quant_portfolio.py', {
+      args: ['--oos'],
+      patch: {
+        patches: {
+          PORTFOLIO_NAME: baseName,
+          QUANT_NAME: config.quant_name || 'TRB',
+          TARGET_OUTPUT_DIR: outputFolder || 'Multi_Market_Quant_Portfolio',
+          TARGET_IS_OOS: true,
+        },
+        candidates: formattedCandidates
+      },
+      envOverrides: {
+        AF_IS_OOS: '1',
+        AF_PORTFOLIO_OUTPUT_DIR: outputFolder || 'Multi_Market_Quant_Portfolio',
+        AF_PORTFOLIO_NAME: baseName,
+      },
+      onDone: () => {
+        fetchWorkspace();
+      }
+    });
+  };
+
   const handleRunMC = () => {
     const targetName = selectedMCPortfolio || portfolioName;
     runScript('run_portfolio_montecarlo.py', {
@@ -168,6 +220,29 @@ export default function Portfolio({ config }: { config: any }) {
           PORTFOLIO_NAME: targetName,
           QUANT_NAME: config.quant_name || 'TRB',
         }
+      },
+      onDone: () => {
+        fetchWorkspace();
+      }
+    });
+  };
+
+  const handleRunOOSMC = () => {
+    let targetName = selectedMCPortfolio || portfolioName;
+    if (!targetName.includes('_OOS')) {
+      const oosPort = portfolios.find(p => p.includes('_OOS'));
+      if (oosPort) targetName = oosPort;
+    }
+    runScript('run_portfolio_montecarlo.py', {
+      patch: {
+        patches: {
+          PORTFOLIO_NAME: targetName,
+          QUANT_NAME: config.quant_name || 'TRB',
+        }
+      },
+      envOverrides: {
+        AF_IS_OOS: '1',
+        AF_PORTFOLIO_NAME: targetName,
       },
       onDone: () => {
         fetchWorkspace();
@@ -506,8 +581,14 @@ export default function Portfolio({ config }: { config: any }) {
                 <Button onClick={handleBuild}>
                   <Package size={16} /> Build Portfolio
                 </Button>
+                <Button onClick={handleBuildOOS} variant="blue" className="bg-emerald-600 hover:bg-emerald-700">
+                  <Package size={16} /> ⚡ Build OOS Portfolio
+                </Button>
                 <Button variant="blue" onClick={handleRunMC}>
                   <Dices size={16} /> Run Portfolio MC
+                </Button>
+                <Button variant="blue" className="bg-indigo-600 hover:bg-indigo-700" onClick={handleRunOOSMC}>
+                  <Dices size={16} /> ⚡ Run OOS Portfolio MC
                 </Button>
               </>
             )}

@@ -3598,14 +3598,20 @@ class MonteCarloPanel(BasePanel):
         btn_row = ctk.CTkFrame(self, fg_color="transparent")
         btn_row.grid(row=2, column=0, sticky="ew", padx=32, pady=(16, 0))
 
-        make_btn(btn_row, "▶  Run Candidate Monte Carlo", self._run_candidate_mc,
-                 width=220).pack(side="left")
+        make_btn(btn_row, "▶  Candidate MC", self._run_candidate_mc,
+                 width=160).pack(side="left")
 
-        make_btn(btn_row, "🎲 Run Portfolio MC", self._run_portfolio_mc,
+        make_btn(btn_row, "⚡ OOS Candidate MC", self._run_oos_candidate_mc,
                  color=C["blue"], hover="#2563eb", width=180).pack(side="left", padx=(10, 0))
 
+        make_btn(btn_row, "🎲 Portfolio MC", self._run_portfolio_mc,
+                 color=C["card"], hover=C["hover"], width=150).pack(side="left", padx=(10, 0))
+
+        make_btn(btn_row, "⚡ OOS Portfolio MC", self._run_oos_portfolio_mc,
+                 color=C["blue"], hover="#2563eb", width=165).pack(side="left", padx=(10, 0))
+
         make_btn(btn_row, "📄 Open Word Report", self._open_word_report,
-                 color=C["card"], hover=C["hover"], width=170).pack(side="left", padx=(10, 0))
+                 color=C["card"], hover=C["hover"], width=160).pack(side="left", padx=(10, 0))
 
         make_btn(btn_row, "📂 Open Folder", self._open_cand_folder,
                  color=C["card"], hover=C["hover"], width=130).pack(side="left", padx=(10, 0))
@@ -3847,9 +3853,14 @@ class MonteCarloPanel(BasePanel):
             if len(rel) > 42:
                 rel = "..." + rel[-39:]
             self._cand_dir_lbl.configure(text=f"Path: {rel}", text_color="#94a3b8")
-            has_trades = cand_info.get("has_trades") if cand_info else (target_path / "trades.csv").exists()
+            has_trades = cand_info.get("has_trades") if cand_info else (
+                (target_path / "oos_trades.csv").exists() or 
+                (target_path / "trades.csv").exists() or
+                (target_path / "oos_backtest_report" / "trades.csv").exists() or
+                (target_path / "full_backtest_report" / "trades.csv").exists()
+            )
             self._cand_trades_lbl.configure(
-                text="Trades: ✓ trades.csv detected" if has_trades else "Trades: ~ Report calibration available",
+                text="Trades: ✓ trades data detected" if has_trades else "Trades: ~ Report calibration available",
                 text_color=C["success"] if has_trades else C["accent"]
             )
         else:
@@ -3864,16 +3875,24 @@ class MonteCarloPanel(BasePanel):
 
         target_path = find_candidate_path(self.cfg.get("work_dir", ""), target, self._run_var.get().strip())
         res_file = None
-        if target_path and (target_path / "monte_carlo_results.json").exists():
-            res_file = target_path / "monte_carlo_results.json"
-        elif (SCRIPT_DIR / "last_mc_candidate_result.json").exists():
-            try:
-                with open(SCRIPT_DIR / "last_mc_candidate_result.json", "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    if data.get("candidate") == target:
-                        res_file = SCRIPT_DIR / "last_mc_candidate_result.json"
-            except Exception:
-                pass
+        if target_path:
+            # Check OOS MC results first if available, else standard MC results
+            for jname in ["oos_monte_carlo_results.json", "monte_carlo_results.json"]:
+                if (target_path / jname).exists():
+                    res_file = target_path / jname
+                    break
+
+        if not res_file:
+            for rname in ["last_mc_candidate_result_oos.json", "last_mc_candidate_result.json"]:
+                if (SCRIPT_DIR / rname).exists():
+                    try:
+                        with open(SCRIPT_DIR / rname, "r", encoding="utf-8") as f:
+                            data = json.load(f)
+                            if data.get("candidate") == target:
+                                res_file = SCRIPT_DIR / rname
+                                break
+                    except Exception:
+                        pass
 
         if not res_file or not res_file.exists():
             self._reset_results_display()
@@ -3968,7 +3987,7 @@ class MonteCarloPanel(BasePanel):
             text="Pass Rate:             —%\nPasses / Runs:         — / —\nMax DD Breach:         —%\nDaily DD Breach:       —%\nTime Expired (>250d):  —%\nMedian Days to Pass:   —\nMedian Max DD:         —%"
         )
 
-    def _run_candidate_mc(self):
+    def _run_candidate_mc(self, is_oos: bool = False):
         cand = self._get_target_candidate()
         if not cand:
             messagebox.showwarning("Missing", "Please select or enter a candidate name.")
@@ -4017,6 +4036,8 @@ class MonteCarloPanel(BasePanel):
                 "--max-dd", str(max_dd), "--daily-dd", str(daily_dd),
                 "--block-size", str(block), "--deposit", str(deposit)]
 
+        if is_oos:
+            args.append("--oos")
         if run_dir:
             args.extend(["--run-dir", run_dir])
         if no_max:
@@ -4024,20 +4045,33 @@ class MonteCarloPanel(BasePanel):
         else:
             args.extend(["--max-days", str(max_days)])
 
+        prefix = "⚡ Launching OOS Candidate Monte Carlo:" if is_oos else "▶ Launching Candidate Monte Carlo:"
         self.log_clear(self._log)
-        self.log_append(self._log, f"▶ Launching Candidate Monte Carlo: {cand}  (sims={sims}, block={block}d, p1={p1}%, p2={p2}%)\n")
-        self.run_script("run_can_monte_carlo.py", self._log, args=args, on_done=self._on_sim_done)
+        self.log_append(self._log, f"{prefix} {cand}  (sims={sims}, block={block}d, p1={p1}%, p2={p2}%)\n")
+        env_vars = {"AF_IS_OOS": "1"} if is_oos else {}
+        self.run_script("run_can_monte_carlo.py", self._log, args=args, env=env_vars, on_done=self._on_sim_done)
+
+    def _run_oos_candidate_mc(self):
+        self._run_candidate_mc(is_oos=True)
 
     def _on_sim_done(self):
         self._refresh_candidates_list()
         self._load_active_result()
 
-    def _run_portfolio_mc(self):
+    def _run_portfolio_mc(self, is_oos: bool = False):
         portfolios = get_portfolios(self.cfg.get("work_dir", ""), self.cfg.get("quant_name", "TRB"))
         if not portfolios:
             messagebox.showinfo("Portfolio", "No built portfolio found under optimization_runs.\nBuild a portfolio first in the Portfolio tab.")
             return
-        port = portfolios[0]
+
+        port = None
+        if is_oos:
+            oos_ports = [p for p in portfolios if "_OOS" in p or "oos" in p.lower()]
+            if oos_ports:
+                port = oos_ports[0]
+        if not port:
+            port = portfolios[0]
+
         port_path = find_portfolio_path(self.cfg.get("work_dir", ""), self.cfg.get("quant_name", "TRB"), port)
         patches = {
             "PORTFOLIO_NAME": port,
@@ -4047,8 +4081,13 @@ class MonteCarloPanel(BasePanel):
             patches["PORTFOLIO_DIR"] = str(port_path)
         patch_script(SCRIPT_DIR / "run_portfolio_montecarlo.py", patches)
         self.log_clear(self._log)
-        self.log_append(self._log, f"▶ Launching Portfolio Monte Carlo on {port}...\n")
-        self.run_script("run_portfolio_montecarlo.py", self._log)
+        mode_str = "OOS " if (is_oos or "_OOS" in port) else ""
+        self.log_append(self._log, f"▶ Launching {mode_str}Portfolio Monte Carlo on {port}...\n")
+        env_vars = {"AF_IS_OOS": "1"} if (is_oos or "_OOS" in port) else {}
+        self.run_script("run_portfolio_montecarlo.py", self._log, env=env_vars)
+
+    def _run_oos_portfolio_mc(self):
+        self._run_portfolio_mc(is_oos=True)
 
     def _open_word_report(self):
         target = self._get_target_candidate()
@@ -4056,24 +4095,32 @@ class MonteCarloPanel(BasePanel):
 
         doc_found = None
         if target_path and target_path.exists():
-            docs = list(target_path.glob("*.docx"))
+            # Check OOS word reports first, then regular
+            docs = (
+                list(target_path.glob("*OOS_Monte_Carlo*.docx")) +
+                list(target_path.glob("*Monte_Carlo*.docx")) +
+                list(target_path.glob("*.docx"))
+            )
             if docs:
                 doc_found = docs[0]
 
         if not doc_found and target_path:
-            j = target_path / "monte_carlo_results.json"
-            if j.exists():
-                try:
-                    with open(j, "r", encoding="utf-8") as jf:
-                        jd = json.load(jf)
-                        dp = jd.get("doc_path")
-                        if dp and Path(dp).exists():
-                            doc_found = Path(dp)
-                except Exception:
-                    pass
+            for jname in ["oos_monte_carlo_results.json", "monte_carlo_results.json"]:
+                j = target_path / jname
+                if j.exists():
+                    try:
+                        with open(j, "r", encoding="utf-8") as jf:
+                            jd = json.load(jf)
+                            dp = jd.get("doc_path")
+                            if dp and Path(dp).exists():
+                                doc_found = Path(dp)
+                                break
+                    except Exception:
+                        pass
 
         if not doc_found:
-            root_mc = SCRIPT_DIR / "last_mc_candidate_result.json"
+            for rname in ["last_mc_candidate_result_oos.json", "last_mc_candidate_result.json"]:
+                root_mc = SCRIPT_DIR / rname
             if root_mc.exists():
                 try:
                     with open(root_mc, "r", encoding="utf-8") as jf:
@@ -4358,12 +4405,13 @@ class FullBacktestPanel(BasePanel):
         # Buttons
         btn_row = ctk.CTkFrame(sel, fg_color="transparent")
         btn_row.grid(row=6, column=0, columnspan=2, sticky="ew", padx=20, pady=(16,16))
-        make_btn(btn_row, "▶  Run Full Backtest", self._run, width=200).pack(side="left")
+        make_btn(btn_row, "▶  Run Full Backtest", self._run, width=180).pack(side="left")
+        make_btn(btn_row, "⚡ Run OOS Backtest", self._run_oos, color=C["blue"], hover="#2563eb", width=180).pack(side="left", padx=(10,0))
         make_btn(btn_row, "📂 Open Output",
-                 self._open_out, color=C["card"], hover=C["hover"], width=150).pack(side="left", padx=(12,0))
+                 self._open_out, color=C["card"], hover=C["hover"], width=130).pack(side="left", padx=(10,0))
         make_btn(btn_row, "⟳ Refresh",
                  self._refresh_all,
-                 color=C["card"], hover=C["hover"], width=110).pack(side="left", padx=(12,0))
+                 color=C["card"], hover=C["hover"], width=100).pack(side="left", padx=(10,0))
 
         # Log
         log_card = make_card(self)
@@ -4463,7 +4511,33 @@ class FullBacktestPanel(BasePanel):
         self._ea_cb.configure(values=eas or ["TRB"])
         self._refresh_cands(self._run_var.get())
 
-    def _run(self):
+    def _run_oos(self):
+        # Auto-populate holdout/OOS range
+        cfg = self.cfg
+        run = self._run_var.get().strip()
+        run_path = find_run_path(cfg.get("work_dir", ""), run)
+        oos_from = cfg.get("holdout_from", "2024.01.01")
+        oos_to = cfg.get("holdout_to", "2026.07.03")
+        if run_path:
+            meta_file = run_path / "run_meta.json"
+            if meta_file.exists():
+                try:
+                    with open(meta_file, "r", encoding="utf-8") as mf:
+                        mdata = json.load(mf)
+                        if mdata.get("holdout_from"):
+                            oos_from = mdata["holdout_from"]
+                        if mdata.get("holdout_to"):
+                            oos_to = mdata["holdout_to"]
+                except Exception:
+                    pass
+
+        self._from_var.delete(0, "end")
+        self._from_var.insert(0, oos_from)
+        self._to_var.delete(0, "end")
+        self._to_var.insert(0, oos_to)
+        self._run(is_oos=True)
+
+    def _run(self, is_oos=False):
         run    = self._run_var.get().strip()
         cand   = self._cand_var.get().strip()
         selected_ea  = self._ea_var.get().strip() or self.cfg.get("active_ea", "TRB")
@@ -4487,11 +4561,13 @@ class FullBacktestPanel(BasePanel):
                 except Exception:
                     pass
 
-        # Resolve symbol to full custom symbol (e.g. USDJPY Dukascopy) with 2013-2026 history
+        # Resolve symbol to full custom symbol (e.g. USDJPY Dukascopy) with historical data
         resolved_symbol = resolve_mt5_symbol(market, work_dir=run_path)
 
-        raw_from = self._from_var.get().strip() or self.cfg.get("train_from", "2013.01.01")
-        raw_to   = self._to_var.get().strip() or self.cfg.get("holdout_to", "2026.07.03")
+        def_from = self.cfg.get("holdout_from", "2024.01.01") if is_oos else self.cfg.get("train_from", "2013.01.01")
+        def_to   = self.cfg.get("holdout_to", "2026.07.03")
+        raw_from = self._from_var.get().strip() or def_from
+        raw_to   = self._to_var.get().strip() or def_to
 
         # Handle range syntax if entered in From Date (e.g. "2013-2026", "2013 to 2026", "2013..2026")
         for sep in [" to ", " - ", " -> ", ".."]:
@@ -4506,8 +4582,8 @@ class FullBacktestPanel(BasePanel):
                 raw_from = m_range.group(1)
                 raw_to = m_range.group(2)
 
-        norm_from = normalize_mt5_date(raw_from, default="2013.01.01", is_end=False)
-        norm_to   = normalize_mt5_date(raw_to, default="2026.07.03", is_end=True)
+        norm_from = normalize_mt5_date(raw_from, default=def_from, is_end=False)
+        norm_to   = normalize_mt5_date(raw_to, default=def_to, is_end=True)
 
         # Reflect normalized dates back in UI for clarity
         self._from_var.delete(0, "end")
@@ -4523,6 +4599,7 @@ class FullBacktestPanel(BasePanel):
             "TARGET_SET_FILE": selected_set,
             "TARGET_FROM_DATE": norm_from,
             "TARGET_TO_DATE": norm_to,
+            "TARGET_IS_OOS": is_oos,
         })
         env_extra = {
             "AF_ACTIVE_EA": selected_ea,
@@ -4534,6 +4611,7 @@ class FullBacktestPanel(BasePanel):
             "AF_DEPOSIT":   self._dep_var.get().strip() or self.cfg.get("deposit", "2500"),
             "AF_LOT_SIZE":  self._lot_var.get().strip(),
             "AF_RISK_PCT":  self._risk_var.get().strip(),
+            "AF_IS_OOS":    "1" if is_oos else "0",
         }
         self.log_clear(self._log)
         self.run_script("run_full_backtest.py", self._log, env_extra=env_extra)
@@ -4546,9 +4624,11 @@ class FullBacktestPanel(BasePanel):
             run_path = find_run_path(cfg.get("work_dir",""), run)
             if run_path:
                 paths_to_check = [
+                    run_path / "passed_candidates" / cand / "oos_backtest_report",
                     run_path / "passed_candidates" / cand / "full_backtest_report",
                     run_path / "passed_candidates" / cand / "full_backtest",
                     run_path / "passed_candidates" / cand,
+                    run_path / cand / "oos_backtest_report",
                     run_path / cand / "full_backtest_report",
                     run_path / cand / "full_backtest",
                     run_path / cand,
@@ -4617,11 +4697,12 @@ class PortfolioPanel(BasePanel):
         # Action buttons
         btn_row = ctk.CTkFrame(self, fg_color="transparent")
         btn_row.grid(row=2, column=0, sticky="ew", padx=32, pady=(16, 0))
-        make_btn(btn_row, "🏗  Build Portfolio", self._build_portfolio, width=200).pack(side="left")
+        make_btn(btn_row, "🏗  Build Portfolio", self._build_portfolio, width=170).pack(side="left")
+        make_btn(btn_row, "⚡ Build OOS Portfolio", self._build_oos_portfolio, color=C["blue"], hover="#2563eb", width=190).pack(side="left", padx=(10,0))
         make_btn(btn_row, "🎲 Run Portfolio MC",
-                 self._run_mc, color=C["blue"], hover="#2563eb", width=190).pack(side="left", padx=(12,0))
+                 self._run_mc, color=C["card"], hover=C["hover"], width=170).pack(side="left", padx=(10,0))
         make_btn(btn_row, "📂 Open Portfolio Folder",
-                 self._open_portfolio, color=C["card"], hover=C["hover"], width=190).pack(side="left", padx=(12,0))
+                 self._open_portfolio, color=C["card"], hover=C["hover"], width=180).pack(side="left", padx=(10,0))
 
         # MC portfolio selector
         mc_row = ctk.CTkFrame(self, fg_color="transparent")
@@ -4733,7 +4814,10 @@ class PortfolioPanel(BasePanel):
                 cands.append(item)
         return cands
 
-    def _build_portfolio(self):
+    def _build_oos_portfolio(self):
+        self._build_portfolio(is_oos=True)
+
+    def _build_portfolio(self, is_oos=False):
         cands     = self._get_candidates_list()
         port_name = self._port_name.get().strip()
         out_dir   = self._out_dir_var.get().strip() or "Multi_Market_Quant_Portfolio"
@@ -4746,6 +4830,9 @@ class PortfolioPanel(BasePanel):
 
         # Sanitize portfolio name to prevent nested subdirectories like TRB_USDJPY/ or TRB_EURJPY/
         port_name = re.sub(r"[/\\:]+", "_", port_name).strip("_")
+
+        if is_oos and not port_name.endswith("_OOS") and "_oos" not in port_name.lower():
+            port_name = f"{port_name}_OOS"
 
         is_multi_market = (
             "multimarket" in port_name.lower()
@@ -4770,6 +4857,7 @@ class PortfolioPanel(BasePanel):
             "QUANT_NAME":        cfg.get("quant_name","TRB"),
             "PORTFOLIO_TYPE":    "MultiMarket" if is_multi_market else "SingleMarket",
             "TARGET_OUTPUT_DIR": out_dir.replace("\\", "/"),
+            "TARGET_IS_OOS":     is_oos,
         }
         patch_script(script, patches)
         # Also patch the CANDIDATES list using a lambda to prevent backslash escape unescaping
@@ -4785,8 +4873,12 @@ class PortfolioPanel(BasePanel):
             self.log_append(self._log, f"[WARN] Could not patch CANDIDATES list: {e}\n")
 
         self.log_clear(self._log)
+        env_extra = {
+            "AF_PORTFOLIO_OUTPUT_DIR": out_dir.replace("\\", "/"),
+            "AF_IS_OOS": "1" if is_oos else "0"
+        }
         self.run_script("build_quant_portfolio.py", self._log,
-                        env_extra={"AF_PORTFOLIO_OUTPUT_DIR": out_dir.replace("\\", "/")},
+                        env_extra=env_extra,
                         on_done=self._refresh_portfolios)
 
     def _refresh_portfolios(self):
@@ -4822,6 +4914,8 @@ class PortfolioPanel(BasePanel):
                 with open(mf, "r") as mff:
                     mdata = json.load(mff)
                     info_items.append(f"{len(mdata.get('candidates', []))} candidates")
+                    if mdata.get("is_oos"):
+                        info_items.append("OOS: ✓")
             except Exception:
                 pass
         if (p_path / "combined_trades.csv").exists():
@@ -4838,15 +4932,26 @@ class PortfolioPanel(BasePanel):
             return
         cfg = self.cfg
         port_path = find_portfolio_path(cfg.get("work_dir", ""), cfg.get("quant_name", "TRB"), port)
+        is_port_oos = port.endswith("_OOS") or "_oos" in port.lower()
+        if port_path and (port_path / "portfolio_manifest.json").exists():
+            try:
+                with open(port_path / "portfolio_manifest.json", "r") as mf:
+                    if json.load(mf).get("is_oos"):
+                        is_port_oos = True
+            except Exception:
+                pass
+
         patches = {
             "PORTFOLIO_NAME": port,
             "QUANT_NAME":     cfg.get("quant_name", "TRB"),
+            "TARGET_IS_OOS":  is_port_oos,
         }
         if port_path and port_path.exists():
             patches["PORTFOLIO_DIR"] = str(port_path)
         patch_script(SCRIPT_DIR / "run_portfolio_montecarlo.py", patches)
         self.log_clear(self._log)
-        self.run_script("run_portfolio_montecarlo.py", self._log)
+        self.run_script("run_portfolio_montecarlo.py", self._log,
+                        env_extra={"AF_IS_OOS": "1" if is_port_oos else "0", "AF_PORTFOLIO_NAME": port})
 
     def _open_portfolio(self):
         cfg  = self.cfg
