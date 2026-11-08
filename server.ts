@@ -1678,9 +1678,18 @@ async function startServer() {
     
     // Parse arguments
     const scriptArgs: string[] = ['-u', script];
-    if (req.query.args && typeof req.query.args === 'string') {
-      const parsedArgs = req.query.args.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || [];
-      scriptArgs.push(...parsedArgs.map(a => a.replace(/^["']|["']$/g, '')));
+    if (req.query.args) {
+      if (typeof req.query.args === 'string') {
+        const parsedArgs = req.query.args.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || [];
+        scriptArgs.push(...parsedArgs.map(a => a.replace(/^["']|["']$/g, '')));
+      } else if (Array.isArray(req.query.args)) {
+        for (const item of req.query.args) {
+          if (typeof item === 'string') {
+            const parsedArgs = item.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || [];
+            scriptArgs.push(...parsedArgs.map(a => a.replace(/^["']|["']$/g, '')));
+          }
+        }
+      }
     } else if (req.query.candidate && typeof req.query.candidate === 'string') {
       scriptArgs.push(req.query.candidate);
       const runDir = (req.query.run_dir || req.query.run_folder) as string | undefined;

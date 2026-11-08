@@ -936,8 +936,10 @@ class SubprocessMixin:
 
     def run_script(self, script_name: str, log_widget: ctk.CTkTextbox,
                    env_extra: dict = None, args: list = None,
-                   on_done=None, on_line=None):
+                   on_done=None, on_line=None, **kwargs):
         """Launch a script in a daemon thread, streaming output to log_widget."""
+        if env_extra is None and "env" in kwargs:
+            env_extra = kwargs["env"]
         script_path = SCRIPT_DIR / script_name
         if not script_path.exists():
             self.log_append(log_widget, f"[ERROR] Script not found: {script_path}\n")
@@ -3605,12 +3607,6 @@ class MonteCarloPanel(BasePanel):
         make_btn(btn_row, "⚡ OOS Candidate MC", self._run_oos_candidate_mc,
                  color=C["blue"], hover="#2563eb", width=180).pack(side="left", padx=(10, 0))
 
-        make_btn(btn_row, "🎲 Portfolio MC", self._run_portfolio_mc,
-                 color=C["card"], hover=C["hover"], width=150).pack(side="left", padx=(10, 0))
-
-        make_btn(btn_row, "⚡ OOS Portfolio MC", self._run_oos_portfolio_mc,
-                 color=C["blue"], hover="#2563eb", width=165).pack(side="left", padx=(10, 0))
-
         make_btn(btn_row, "📄 Open Word Report", self._open_word_report,
                  color=C["card"], hover=C["hover"], width=160).pack(side="left", padx=(10, 0))
 
@@ -4050,7 +4046,7 @@ class MonteCarloPanel(BasePanel):
         self.log_clear(self._log)
         self.log_append(self._log, f"{prefix} {cand}  (sims={sims}, block={block}d, p1={p1}%, p2={p2}%)\n")
         env_vars = {"AF_IS_OOS": "1"} if is_oos else {}
-        self.run_script("run_can_monte_carlo.py", self._log, args=args, env=env_vars, on_done=self._on_sim_done)
+        self.run_script("run_can_monte_carlo.py", self._log, args=args, env_extra=env_vars, on_done=self._on_sim_done)
 
     def _run_oos_candidate_mc(self):
         self._run_candidate_mc(is_oos=True)
@@ -4058,37 +4054,6 @@ class MonteCarloPanel(BasePanel):
     def _on_sim_done(self):
         self._refresh_candidates_list()
         self._load_active_result()
-
-    def _run_portfolio_mc(self, is_oos: bool = False):
-        portfolios = get_portfolios(self.cfg.get("work_dir", ""), self.cfg.get("quant_name", "TRB"))
-        if not portfolios:
-            messagebox.showinfo("Portfolio", "No built portfolio found under optimization_runs.\nBuild a portfolio first in the Portfolio tab.")
-            return
-
-        port = None
-        if is_oos:
-            oos_ports = [p for p in portfolios if "_OOS" in p or "oos" in p.lower()]
-            if oos_ports:
-                port = oos_ports[0]
-        if not port:
-            port = portfolios[0]
-
-        port_path = find_portfolio_path(self.cfg.get("work_dir", ""), self.cfg.get("quant_name", "TRB"), port)
-        patches = {
-            "PORTFOLIO_NAME": port,
-            "QUANT_NAME": self.cfg.get("quant_name", "TRB"),
-        }
-        if port_path and port_path.exists():
-            patches["PORTFOLIO_DIR"] = str(port_path)
-        patch_script(SCRIPT_DIR / "run_portfolio_montecarlo.py", patches)
-        self.log_clear(self._log)
-        mode_str = "OOS " if (is_oos or "_OOS" in port) else ""
-        self.log_append(self._log, f"▶ Launching {mode_str}Portfolio Monte Carlo on {port}...\n")
-        env_vars = {"AF_IS_OOS": "1"} if (is_oos or "_OOS" in port) else {}
-        self.run_script("run_portfolio_montecarlo.py", self._log, env=env_vars)
-
-    def _run_oos_portfolio_mc(self):
-        self._run_portfolio_mc(is_oos=True)
 
     def _open_word_report(self):
         target = self._get_target_candidate()
@@ -4711,8 +4676,10 @@ class PortfolioPanel(BasePanel):
         make_btn(btn_row, "⚡ Build OOS Portfolio", self._build_oos_portfolio, color=C["blue"], hover="#2563eb", width=190).pack(side="left", padx=(10,0))
         make_btn(btn_row, "🎲 Run Portfolio MC",
                  self._run_mc, color=C["card"], hover=C["hover"], width=170).pack(side="left", padx=(10,0))
+        make_btn(btn_row, "⚡ Run OOS Portfolio MC",
+                 self._run_oos_mc, color=C["blue"], hover="#2563eb", width=185).pack(side="left", padx=(10,0))
         make_btn(btn_row, "📂 Open Portfolio Folder",
-                 self._open_portfolio, color=C["card"], hover=C["hover"], width=180).pack(side="left", padx=(10,0))
+                 self._open_portfolio, color=C["card"], hover=C["hover"], width=170).pack(side="left", padx=(10,0))
 
         # MC portfolio selector
         mc_row = ctk.CTkFrame(self, fg_color="transparent")
@@ -4935,14 +4902,14 @@ class PortfolioPanel(BasePanel):
             info_items.append("Report: ✓")
         self._port_info_lbl.configure(text="  |  ".join(info_items), text_color=C["accent"])
 
-    def _run_mc(self):
+    def _run_mc(self, force_oos: bool = False):
         port = self._mc_port_var.get()
         if not port or port == "(none)":
             messagebox.showwarning("Missing", "No portfolio selected.")
             return
         cfg = self.cfg
         port_path = find_portfolio_path(cfg.get("work_dir", ""), cfg.get("quant_name", "TRB"), port)
-        is_port_oos = port.endswith("_OOS") or "_oos" in port.lower()
+        is_port_oos = force_oos or port.endswith("_OOS") or "_oos" in port.lower()
         if port_path and (port_path / "portfolio_manifest.json").exists():
             try:
                 with open(port_path / "portfolio_manifest.json", "r") as mf:
@@ -4960,8 +4927,19 @@ class PortfolioPanel(BasePanel):
             patches["PORTFOLIO_DIR"] = str(port_path)
         patch_script(SCRIPT_DIR / "run_portfolio_montecarlo.py", patches)
         self.log_clear(self._log)
+        mode_str = "OOS " if is_port_oos else ""
+        self.log_append(self._log, f"▶ Launching {mode_str}Portfolio Monte Carlo on {port}...\n")
         self.run_script("run_portfolio_montecarlo.py", self._log,
                         env_extra={"AF_IS_OOS": "1" if is_port_oos else "0", "AF_PORTFOLIO_NAME": port})
+
+    def _run_oos_mc(self):
+        port = self._mc_port_var.get()
+        if not (port.endswith("_OOS") or "_oos" in port.lower()):
+            avail = [p for p in self._mc_port_cb.cget("values") if p.endswith("_OOS") or "_oos" in p.lower()]
+            if avail:
+                self._mc_port_var.set(avail[0])
+                self._update_port_info()
+        self._run_mc(force_oos=True)
 
     def _open_portfolio(self):
         cfg  = self.cfg

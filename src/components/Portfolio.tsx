@@ -344,6 +344,18 @@ export default function Portfolio({ config }: { config: any }) {
                       </Button>
 
                       <Button 
+                        variant="blue" 
+                        onClick={() => {
+                          setSelectedMCPortfolio(p.name);
+                          handleRunOOSMC();
+                        }} 
+                        className="text-xs py-2 px-3 bg-indigo-600 hover:bg-indigo-700 text-white"
+                      >
+                        <Dices size={14} />
+                        <span>⚡ Run OOS Portfolio MC</span>
+                      </Button>
+
+                      <Button 
                         variant="secondary" 
                         onClick={() => loadPortfolioIntoBuilder(p)} 
                         className="text-xs py-2 px-3 border-[#2d3748]"
