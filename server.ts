@@ -1052,7 +1052,7 @@ async function startServer() {
     }
   });
 
-  // Market Data & HistData Storage Inspector API
+  // Market Data & Dukascopy Storage Inspector API
   app.get("/api/market-data", async (req, res) => {
     try {
       const cwd = process.cwd();

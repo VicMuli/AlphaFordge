@@ -1,0 +1,165 @@
+{
+  "pair": "EURUSD",
+  "feed": "Dukascopy Bank Historical Data Feed",
+  "feed_url": "https://www.dukascopy.com/swiss/english/marketwatch/historical/",
+  "last_updated": "2026-11-09 10:19:54",
+  "m1_count": 1,
+  "m1_total_mb": 0.14,
+  "tick_count": 1,
+  "tick_total_mb": 4.88,
+  "total_mb": 5.02,
+  "m1_files": [
+    {
+      "name": "dukascopy_eurusd_m1_2024.csv",
+      "size_mb": 0.14,
+      "ext": ".csv"
+    }
+  ],
+  "tick_files": [
+    {
+      "name": "dukascopy_eurusd_tick_202403.csv",
+      "size_mb": 4.88,
+      "ext": ".csv"
+    }
+  ],
+  "mt5_excel": {
+    "excel_file": "EURUSD_MT5_M1_bars.xlsx",
+    "csv_file": "EURUSD_MT5_M1_bars.csv",
+    "txt_file": "EURUSD_MT5_M1_bars.txt",
+    "total_bars": 2863,
+    "spread_points": 15,
+    "start_date": "2024.03.01 00:00",
+    "end_date": "2024.03.04 23:59",
+    "xlsx_size_mb": 0.1,
+    "csv_size_mb": 0.18,
+    "last_compiled": "2026-11-09 10:19:56",
+    "columns": [
+      "<DATE>",
+      "<TIME>",
+      "<OPEN>",
+      "<HIGH>",
+      "<LOW>",
+      "<CLOSE>",
+      "<TICKVOL>",
+      "<VOL>",
+      "<SPREAD>"
+    ],
+    "preview_sample": [
+      [
+        "2024.03.01",
+        "00:00",
+        1.08055,
+        1.0806,
+        1.08055,
+        1.08058,
+        1200000,
+        1200000,
+        15
+      ],
+      [
+        "2024.03.01",
+        "00:01",
+        1.08058,
+        1.08065,
+        1.08058,
+        1.08065,
+        2000000,
+        2000000,
+        15
+      ],
+      [
+        "2024.03.01",
+        "00:02",
+        1.08063,
+        1.08068,
+        1.08062,
+        1.08067,
+        2300000,
+        2300000,
+        15
+      ],
+      [
+        "2024.03.01",
+        "00:03",
+        1.0807,
+        1.08073,
+        1.08059,
+        1.08059,
+        2100000,
+        2100000,
+        15
+      ],
+      [
+        "2024.03.01",
+        "00:04",
+        1.08059,
+        1.08063,
+        1.08052,
+        1.0806,
+        2100000,
+        2100000,
+        15
+      ],
+      [
+        "2024.03.01",
+        "00:05",
+        1.0806,
+        1.0806,
+        1.08057,
+        1.08058,
+        2300000,
+        2300000,
+        15
+      ],
+      [
+        "2024.03.01",
+        "00:06",
+        1.08058,
+        1.08058,
+        1.08053,
+        1.08053,
+        1900000,
+        1900000,
+        15
+      ],
+      [
+        "2024.03.01",
+        "00:07",
+        1.08053,
+        1.08056,
+        1.08053,
+        1.08054,
+        800000,
+        800000,
+        15
+      ],
+      [
+        "2024.03.01",
+        "00:08",
+        1.08055,
+        1.08064,
+        1.08055,
+        1.08064,
+        800000,
+        800000,
+        15
+      ],
+      [
+        "2024.03.01",
+        "00:09",
+        1.08064,
+        1.08082,
+        1.08064,
+        1.08079,
+        2800000,
+        2800000,
+        15
+      ]
+    ],
+    "feed": "Dukascopy Bank Historical Data Feed",
+    "feed_url": "https://www.dukascopy.com/swiss/english/marketwatch/historical/",
+    "tick_volume_combined": true,
+    "tick_merged_bars": 2863,
+    "has_files": true
+  }
+}

@@ -175,7 +175,7 @@ export default function MarketData({ config, onUpdateConfig }: { config: any; on
 
     setDownloadProgress({
       percent: 3.0,
-      stage: `Connecting to HistData & initializing download for ${activePairName}...`,
+      stage: `Connecting to Dukascopy feed & initializing download for ${activePairName}...`,
       detail: `Date filter: ${fromDate} → ${toDate} | Type: ${dataType.toUpperCase()}`,
       step: 0,
       totalSteps: 1,
@@ -447,11 +447,20 @@ export default function MarketData({ config, onUpdateConfig }: { config: any; on
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <SectionHeader
-            title="Market Data & HistData Engine"
-            description="Download M1 (1-minute) and real tick quotes from HistData, organize into market_data/<PAIR>/ subfolders, and combine M1 OHLC + Tick Volume into MT5 Excel documents."
+            title="Market Data & Dukascopy Engine"
+            description="Download M1 (1-minute) and real tick quotes from Dukascopy Bank Historical Data Feed, organize into market_data/<PAIR>/ subfolders, and combine M1 OHLC + Tick Volume into MT5 Excel documents."
           />
         </div>
         <div className="flex items-center gap-3">
+          <a
+            href="https://www.dukascopy.com/swiss/english/marketwatch/historical/"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-emerald-400 bg-emerald-950/40 border border-emerald-500/30 rounded-lg hover:bg-emerald-900/40 hover:text-emerald-300 transition-colors"
+          >
+            <span>Dukascopy Feed</span>
+            <ExternalLink className="w-3.5 h-3.5" />
+          </a>
           <Button
             variant="outline"
             size="sm"
@@ -542,7 +551,7 @@ export default function MarketData({ config, onUpdateConfig }: { config: any; on
           <div className="flex items-center gap-2">
             <Download className="w-4 h-4 text-amber-400" />
             <h3 className="text-sm font-bold text-white uppercase tracking-wider">
-              Download HistData Quotes to market_data/
+              Download Dukascopy Quotes to market_data/
             </h3>
           </div>
           <div className="flex items-center gap-2">
@@ -778,7 +787,7 @@ export default function MarketData({ config, onUpdateConfig }: { config: any; on
                 )}
               </div>
               <p className="text-xs text-slate-400 truncate max-w-xl">
-                {downloadProgress?.stage || 'Ready to download quotes from HistData and combine into MT5 Excel format.'}
+                {downloadProgress?.stage || 'Ready to download quotes from Dukascopy Historical Feed and combine into MT5 Excel format.'}
               </p>
             </div>
           </div>
@@ -839,7 +848,7 @@ export default function MarketData({ config, onUpdateConfig }: { config: any; on
         <div className="grid grid-cols-2 md:grid-cols-4 gap-2 pt-2 border-t border-slate-800/60">
           {[
             {
-              label: '1. HistData Request',
+              label: '1. Dukascopy Feed',
               desc: 'Fetch archive payload',
               done: (downloadProgress?.percent ?? 0) >= 20,
               active: (isRunning || isCompilingExcel) && (downloadProgress?.percent ?? 0) < 20
@@ -907,7 +916,7 @@ export default function MarketData({ config, onUpdateConfig }: { config: any; on
                 </span>
               </h3>
               <p className="text-xs text-slate-400">
-                Download and organise quotes into a unified Excel document (<span className="font-mono text-emerald-400">.xlsx</span>) and MT5 bar import file (<span className="font-mono text-emerald-400">.csv</span>) combining HistData M1 OHLC prices and aggregated real tick volume in the exact 9-column order for MT5 Terminal Symbol Import.
+                Download and organise quotes into a unified Excel document (<span className="font-mono text-emerald-400">.xlsx</span>) and MT5 bar import file (<span className="font-mono text-emerald-400">.csv</span>) combining Dukascopy M1 OHLC prices and aggregated real tick volume in the exact 9-column order for MT5 Terminal Symbol Import.
               </p>
             </div>
           </div>
@@ -1259,7 +1268,7 @@ export default function MarketData({ config, onUpdateConfig }: { config: any; on
         <div className="flex items-center justify-between border-b border-slate-800 pb-2 mb-3">
           <div className="flex items-center gap-2 text-slate-400">
             <Terminal className="w-4 h-4 text-amber-400" />
-            <span className="font-semibold text-white">Live HistData Download Stream</span>
+            <span className="font-semibold text-white">Live Dukascopy Download Stream</span>
             {isRunning && (
               <span className="flex items-center gap-1 text-[10px] text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded-full border border-amber-500/20">
                 <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />

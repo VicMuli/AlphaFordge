@@ -1882,8 +1882,8 @@ class MarketDataPanel(BasePanel):
 
     def _build(self):
         pad = dict(padx=32, pady=(24, 0))
-        make_section_header(self, "🌐  Market Data — HistData M1 & Tick Engine",
-            "Download M1 (1-minute) and Tick data directly from HistData, organize into market_data/<PAIR>/ subfolders, and configure active symbols"
+        make_section_header(self, "🌐  Market Data — Dukascopy Historical Data Engine",
+            "Download M1 (1-minute) and Tick data directly from Dukascopy Bank Historical Data Feed (dukascopy.com), organize into market_data/<PAIR>/ subfolders, and configure active symbols"
         ).grid(row=0, column=0, sticky="ew", **pad)
 
         cfg = self.cfg
@@ -1905,7 +1905,7 @@ class MarketDataPanel(BasePanel):
         # Box 2: Downloader Engine Status
         b2 = ctk.CTkFrame(top_card, fg_color="#1a202c", corner_radius=8)
         b2.grid(row=0, column=1, sticky="nsew", padx=8, pady=16)
-        make_label(b2, "HistData Downloader Engine", font=FB, color=C["sub"]).pack(anchor="w", padx=12, pady=(10, 2))
+        make_label(b2, "Dukascopy Downloader Engine", font=FB, color=C["sub"]).pack(anchor="w", padx=12, pady=(10, 2))
         self._lbl_dl_status = ctk.CTkLabel(b2, text="● Engine Idle / Ready", font=FH2, text_color=C["success"])
         self._lbl_dl_status.pack(anchor="w", padx=12)
         make_label(b2, "Direct M1 Bars & Tick Archives (CSV / MT)", font=FSM, color=C["sub"]).pack(anchor="w", padx=12, pady=(4, 10))
@@ -1927,7 +1927,7 @@ class MarketDataPanel(BasePanel):
 
         dl_hdr = ctk.CTkFrame(dl_card, fg_color="transparent")
         dl_hdr.grid(row=0, column=0, sticky="ew", padx=16, pady=(12, 6))
-        make_label(dl_hdr, "📥 Download HistData M1 & Tick Quotes", font=FH3, color=C["sub"]).pack(side="left")
+        make_label(dl_hdr, "📥 Download Dukascopy M1 & Tick Quotes", font=FH3, color=C["sub"]).pack(side="left")
 
         form_f = ctk.CTkFrame(dl_card, fg_color="transparent")
         form_f.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 10))
@@ -2012,7 +2012,7 @@ class MarketDataPanel(BasePanel):
         # Notice badge for combined M1 + Tick Volume
         notice_f = ctk.CTkFrame(dl_card, fg_color="#0b1b15", corner_radius=6)
         notice_f.grid(row=3, column=0, sticky="ew", padx=16, pady=(0, 8))
-        make_label(notice_f, "✨ MT5 Unified Bar Export: HistData M1 OHLC prices and real Tick Volume are combined into 1 Excel doc (<DATE>, <TIME>, <OPEN>, <HIGH>, <LOW>, <CLOSE>, <TICKVOL>, <VOL>, <SPREAD>) ready for MT5 Terminal upload.",
+        make_label(notice_f, "✨ MT5 Unified Bar Export: Dukascopy M1 OHLC prices and real Tick Volume are combined into 1 Excel doc (<DATE>, <TIME>, <OPEN>, <HIGH>, <LOW>, <CLOSE>, <TICKVOL>, <VOL>, <SPREAD>) ready for MT5 Terminal upload.",
                    font=FSM, color="#34d399").pack(anchor="w", padx=10, pady=5)
 
         # Action Buttons Row
