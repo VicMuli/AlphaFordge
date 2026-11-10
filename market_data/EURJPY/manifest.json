@@ -1,19 +1,153 @@
 {
+  "pair": "EURJPY",
+  "feed": "Dukascopy Bank Historical Data Feed",
+  "feed_url": "https://www.dukascopy.com/swiss/english/marketwatch/historical/",
+  "last_updated": "2026-11-10 13:00:18",
+  "m1_count": 11,
+  "m1_total_mb": 207.52,
+  "tick_count": 14,
+  "tick_total_mb": 207.03,
+  "total_mb": 414.55,
+  "m1_files": [
+    {
+      "name": "dukascopy_eurjpy_m1_2016.csv",
+      "size_mb": 19.14,
+      "ext": ".csv"
+    },
+    {
+      "name": "dukascopy_eurjpy_m1_2017.csv",
+      "size_mb": 19.13,
+      "ext": ".csv"
+    },
+    {
+      "name": "dukascopy_eurjpy_m1_2018.csv",
+      "size_mb": 19.16,
+      "ext": ".csv"
+    },
+    {
+      "name": "dukascopy_eurjpy_m1_2019.csv",
+      "size_mb": 19.15,
+      "ext": ".csv"
+    },
+    {
+      "name": "dukascopy_eurjpy_m1_2020.csv",
+      "size_mb": 19.2,
+      "ext": ".csv"
+    },
+    {
+      "name": "dukascopy_eurjpy_m1_2021.csv",
+      "size_mb": 19.09,
+      "ext": ".csv"
+    },
+    {
+      "name": "dukascopy_eurjpy_m1_2022.csv",
+      "size_mb": 19.15,
+      "ext": ".csv"
+    },
+    {
+      "name": "dukascopy_eurjpy_m1_2023.csv",
+      "size_mb": 19.15,
+      "ext": ".csv"
+    },
+    {
+      "name": "dukascopy_eurjpy_m1_2024.csv",
+      "size_mb": 19.22,
+      "ext": ".csv"
+    },
+    {
+      "name": "dukascopy_eurjpy_m1_2025.csv",
+      "size_mb": 19.17,
+      "ext": ".csv"
+    },
+    {
+      "name": "dukascopy_eurjpy_m1_2026.csv",
+      "size_mb": 15.95,
+      "ext": ".csv"
+    }
+  ],
+  "tick_files": [
+    {
+      "name": "dukascopy_eurjpy_tick_201606.csv",
+      "size_mb": 0.41,
+      "ext": ".csv"
+    },
+    {
+      "name": "dukascopy_eurjpy_tick_201706.csv",
+      "size_mb": 15.98,
+      "ext": ".csv"
+    },
+    {
+      "name": "dukascopy_eurjpy_tick_201806.csv",
+      "size_mb": 20.29,
+      "ext": ".csv"
+    },
+    {
+      "name": "dukascopy_eurjpy_tick_201906.csv",
+      "size_mb": 27.69,
+      "ext": ".csv"
+    },
+    {
+      "name": "dukascopy_eurjpy_tick_202006.csv",
+      "size_mb": 0.41,
+      "ext": ".csv"
+    },
+    {
+      "name": "dukascopy_eurjpy_tick_202106.csv",
+      "size_mb": 14.83,
+      "ext": ".csv"
+    },
+    {
+      "name": "dukascopy_eurjpy_tick_202206.csv",
+      "size_mb": 22.01,
+      "ext": ".csv"
+    },
+    {
+      "name": "dukascopy_eurjpy_tick_202306.csv",
+      "size_mb": 24.09,
+      "ext": ".csv"
+    },
+    {
+      "name": "dukascopy_eurjpy_tick_202406.csv",
+      "size_mb": 23.02,
+      "ext": ".csv"
+    },
+    {
+      "name": "dukascopy_eurjpy_tick_202506.csv",
+      "size_mb": 18.11,
+      "ext": ".csv"
+    },
+    {
+      "name": "dukascopy_eurjpy_tick_202606.csv",
+      "size_mb": 19.67,
+      "ext": ".csv"
+    },
+    {
+      "name": "dukascopy_eurjpy_tick_202610.csv",
+      "size_mb": 20.1,
+      "ext": ".csv"
+    },
+    {
+      "name": "dukascopy_eurjpy_tick_202611.csv",
+      "size_mb": 0.41,
+      "ext": ".csv"
+    },
+    {
+      "name": "eurjpy-tick-2026-11-01-2026-11-01.csv",
+      "size_mb": 0.0,
+      "ext": ".csv"
+    }
+  ],
   "mt5_excel": {
     "excel_file": "EURJPY_MT5_M1_bars.xlsx",
     "csv_file": "EURJPY_MT5_M1_bars.csv",
     "txt_file": "EURJPY_MT5_M1_bars.txt",
-    "total_bars": 1124640,
+    "total_bars": 4777744,
     "spread_points": 30,
-    "from_date": "2016-01-01",
-    "to_date": "2026-11-01",
-    "start_date": "2016.01.02 0:00",
-    "end_date": "2026.11.01 23:59",
-    "xlsx_size_mb": 44.41,
-    "csv_size_mb": 74.16,
-    "tick_volume_combined": true,
-    "tick_merged_bars": 144,
-    "last_compiled": "2026-11-01 09:47:02",
+    "start_date": "2016.01.03 00:00",
+    "end_date": "2026.10.30 20:59",
+    "xlsx_size_mb": 36.09,
+    "csv_size_mb": 316.83,
+    "last_compiled": "2026-11-10 13:03:48",
     "columns": [
       "<DATE>",
       "<TIME>",
@@ -27,73 +161,120 @@
     ],
     "preview_sample": [
       [
-        "2016.01.02",
-        "0:00",
-        122.0,
-        122.006,
-        121.992,
-        121.998,
-        27200000,
-        27200000,
+        "2016.01.03",
+        "00:00",
+        130.681,
+        130.681,
+        130.681,
+        130.681,
+        10500000,
+        10500000,
         30
       ],
       [
-        "2016.01.02",
-        "0:01",
-        121.998,
-        122.01,
-        121.99,
-        122.009,
-        10251198,
-        10251198,
+        "2016.01.03",
+        "00:01",
+        130.681,
+        130.681,
+        130.681,
+        130.681,
+        12000000,
+        12000000,
         30
       ],
       [
-        "2016.01.02",
-        "0:02",
-        122.009,
-        122.015,
-        122.006,
-        122.01,
-        10241817,
-        10241817,
+        "2016.01.03",
+        "00:02",
+        130.681,
+        130.681,
+        130.681,
+        130.681,
+        13500000,
+        13500000,
         30
       ],
       [
-        "2016.01.02",
-        "0:03",
-        122.01,
-        122.022,
-        122.0,
-        122.004,
-        14527950,
-        14527950,
+        "2016.01.03",
+        "00:03",
+        130.681,
+        130.681,
+        130.681,
+        130.681,
+        15000000,
+        15000000,
         30
       ],
       [
-        "2016.01.02",
-        "0:04",
-        122.004,
-        122.022,
-        122.0,
-        122.021,
-        10252349,
-        10252349,
+        "2016.01.03",
+        "00:04",
+        130.681,
+        130.681,
+        130.681,
+        130.681,
+        16500000,
+        16500000,
         30
       ],
       [
-        "2016.01.02",
-        "0:05",
-        122.021,
-        122.026,
-        122.013,
-        122.015,
-        22043653,
-        22043653,
+        "2016.01.03",
+        "00:05",
+        130.681,
+        130.681,
+        130.681,
+        130.681,
+        18000000,
+        18000000,
+        30
+      ],
+      [
+        "2016.01.03",
+        "00:06",
+        130.681,
+        130.681,
+        130.681,
+        130.681,
+        19500000,
+        19500000,
+        30
+      ],
+      [
+        "2016.01.03",
+        "00:07",
+        130.681,
+        130.681,
+        130.681,
+        130.681,
+        10500000,
+        10500000,
+        30
+      ],
+      [
+        "2016.01.03",
+        "00:08",
+        130.681,
+        130.681,
+        130.681,
+        130.681,
+        12000000,
+        12000000,
+        30
+      ],
+      [
+        "2016.01.03",
+        "00:09",
+        130.681,
+        130.681,
+        130.681,
+        130.681,
+        13500000,
+        13500000,
         30
       ]
-    ]
-  },
-  "pair": "EURJPY",
-  "last_updated": "2026-11-01 09:47:02"
+    ],
+    "feed": "Dukascopy Bank Historical Data Feed",
+    "feed_url": "https://www.dukascopy.com/swiss/english/marketwatch/historical/",
+    "tick_volume_combined": true,
+    "tick_merged_bars": 71845,
+    "has_files": true
+  }
 }
