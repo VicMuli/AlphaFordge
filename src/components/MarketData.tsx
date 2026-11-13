@@ -30,7 +30,7 @@ interface DownloadProgress {
   active: boolean;
   pair?: string;
   completedAt?: string;
-  mode?: 'download' | 'excel';
+  mode?: 'download' | 'excel' | 'ticks';
 }
 
 interface MT5ExcelMetadata {
@@ -39,6 +39,22 @@ interface MT5ExcelMetadata {
   txt_file?: string;
   total_bars?: number;
   spread_points?: number;
+  start_date?: string;
+  end_date?: string;
+  xlsx_size_mb?: number;
+  csv_size_mb?: number;
+  last_compiled?: string;
+  columns?: string[];
+  preview_sample?: (string | number)[][];
+  has_files?: boolean;
+}
+
+interface MT5TicksMetadata {
+  excel_file?: string;
+  csv_file?: string;
+  txt_file?: string;
+  total_ticks?: number;
+  excel_rows?: number;
   start_date?: string;
   end_date?: string;
   xlsx_size_mb?: number;
@@ -61,6 +77,7 @@ interface DownloadedPair {
   lastUpdated: string;
   isActive: boolean;
   mt5Excel?: MT5ExcelMetadata;
+  mt5Ticks?: MT5TicksMetadata;
 }
 
 interface MarketDataCatalog {
@@ -107,10 +124,14 @@ export default function MarketData({ config, onUpdateConfig }: { config: any; on
   };
 
   // MT5 Excel Engine State
+  const [docFormatTab, setDocFormatTab] = useState<'ticks' | 'bars'>('ticks');
   const [excelPair, setExcelPair] = useState<string>('EURJPY');
   const [excelSpread, setExcelSpread] = useState<number>(30);
+  const [maxTicksExport, setMaxTicksExport] = useState<number>(0);
   const [isCompilingExcel, setIsCompilingExcel] = useState<boolean>(false);
+  const [isCompilingTicks, setIsCompilingTicks] = useState<boolean>(false);
   const [excelResultMsg, setExcelResultMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [ticksResultMsg, setTicksResultMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   // Execution state
   const [isRunning, setIsRunning] = useState<boolean>(false);
@@ -432,6 +453,75 @@ export default function MarketData({ config, onUpdateConfig }: { config: any; on
       } : null);
     } finally {
       setIsCompilingExcel(false);
+    }
+  };
+
+  const handleCompileTicks = async (targetPair?: string, targetFrom?: string, targetTo?: string, targetMaxTicks?: number) => {
+    const p = (targetPair || excelPair).toUpperCase().trim();
+    if (!p) {
+      setTicksResultMsg({ type: 'error', text: 'Please select a pair to compile MT5 Ticks Excel document.' });
+      return;
+    }
+    const sFrom = targetFrom !== undefined ? targetFrom : fromDate;
+    const sTo = targetTo !== undefined ? targetTo : toDate;
+    const mTicks = targetMaxTicks !== undefined ? targetMaxTicks : maxTicksExport;
+    setIsCompilingTicks(true);
+    setTicksResultMsg(null);
+    setDownloadProgress({
+      percent: 15,
+      stage: `Compiling MT5 Ticks Excel document (<DATE>, <BID>, <ASK>, <LAST>, <VOLUME>, <FLAGS>) for ${p}...`,
+      detail: `Structuring millisecond quotes for MT5 Symbols -> Ticks section import`,
+      step: 1,
+      totalSteps: 2,
+      active: true,
+      pair: p,
+      mode: 'ticks'
+    });
+
+    try {
+      const res = await fetch('/api/market-data-build-ticks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pair: p, fromDate: sFrom, toDate: sTo, maxTicks: mTicks })
+      });
+      const data = await res.json();
+      if (res.ok && data.status === 'ok') {
+        setTicksResultMsg({
+          type: 'success',
+          text: `Successfully compiled MT5 Ticks Excel document & CSV for ${p}! Ready to upload directly into MT5 Terminal Ticks section.`
+        });
+        setDownloadProgress({
+          percent: 100,
+          stage: `MT5 Ticks Excel document compiled successfully for ${p}!`,
+          detail: `Generated .xlsx workbook & MT5 .csv tick import file in market_data/${p}/`,
+          active: false,
+          pair: p,
+          completedAt: new Date().toLocaleTimeString(),
+          mode: 'ticks'
+        });
+        await fetchCatalog();
+      } else {
+        setTicksResultMsg({
+          type: 'error',
+          text: data.error || 'Failed compiling MT5 Ticks Excel document'
+        });
+        setDownloadProgress((prev) => prev ? {
+          ...prev,
+          active: false,
+          stage: 'Tick compilation failed',
+          detail: data.error || 'Failed compiling MT5 Ticks Excel document'
+        } : null);
+      }
+    } catch (e: any) {
+      setTicksResultMsg({ type: 'error', text: e.message });
+      setDownloadProgress((prev) => prev ? {
+        ...prev,
+        active: false,
+        stage: 'Tick compilation error',
+        detail: e.message
+      } : null);
+    } finally {
+      setIsCompilingTicks(false);
     }
   };
 
@@ -898,244 +988,522 @@ export default function MarketData({ config, onUpdateConfig }: { config: any; on
         </div>
       </Card>
 
-      {/* ── MT5 Excel Document Engine Card ── */}
+      {/* ── MT5 Excel Document Engine Card (Ticks & Bars) ── */}
       <Card className="p-5 bg-slate-900/70 border-slate-800/80 space-y-5">
-        <div className="flex flex-col md:flex-row md:items-center justify-between border-b border-slate-800/80 pb-3 gap-2">
+        <div className="flex flex-col md:flex-row md:items-center justify-between border-b border-slate-800/80 pb-3 gap-3">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center">
               <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
             </div>
             <div>
               <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
-                MT5 Excel Document Engine — Bar Import Format
+                MT5 Historical Document Engine
                 <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono normal-case">
-                  Dukascopy Format
+                  Dukascopy Feed
                 </span>
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20 font-mono normal-case">
-                  Combined M1 + Tick Volume
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20 font-mono normal-case">
+                  Excel (.xlsx) & CSV (.csv)
                 </span>
               </h3>
               <p className="text-xs text-slate-400">
-                Download and organise quotes into a unified Excel document (<span className="font-mono text-emerald-400">.xlsx</span>) and MT5 bar import file (<span className="font-mono text-emerald-400">.csv</span>) combining Dukascopy M1 OHLC prices and aggregated real tick volume in the exact 9-column order for MT5 Terminal Symbol Import.
+                Organise and export historical market data into native Excel workbooks and CSV files formatted specifically for direct upload into MetaTrader 5 terminal sections.
               </p>
             </div>
           </div>
-        </div>
 
-        {/* Form Controls: Pair, Spread, Date Filter (From & To) */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 bg-slate-950/60 p-4 rounded-xl border border-slate-800/60">
-          <div>
-            <label className="block text-xs font-semibold text-slate-400 mb-1.5">
-              Select Pair / Symbol
-            </label>
-            <select
-              value={excelPair}
-              onChange={(e) => handleExcelPairSelect(e.target.value)}
-              className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white font-mono focus:outline-none focus:border-emerald-500/50"
+          {/* Tab Switcher between Ticks Section and Bars Section */}
+          <div className="flex items-center gap-1.5 p-1 bg-slate-950/80 rounded-xl border border-slate-800/80 shrink-0">
+            <button
+              onClick={() => setDocFormatTab('ticks')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+                docFormatTab === 'ticks'
+                  ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-md shadow-emerald-950/40'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-900'
+              }`}
             >
-              {popularPairsList.map((p) => (
-                <option key={p} value={p}>{p}</option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-xs font-semibold text-slate-400 mb-1.5">
-              Spread (Points)
-            </label>
-            <div className="flex items-center gap-2">
-              <input
-                type="number"
-                value={excelSpread}
-                onChange={(e) => setExcelSpread(Number(e.target.value))}
-                min={1}
-                max={1000}
-                className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white font-mono focus:outline-none focus:border-emerald-500/50"
-              />
-              <span className="text-xs text-slate-500 whitespace-nowrap">
-                {excelPair.includes('JPY') ? '3.0 pips (30 pts)' : '1.5 pips (15 pts)'}
-              </span>
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-xs font-semibold text-slate-400 mb-1.5">
-              Date Filter Range (From → To)
-            </label>
-            <div className="grid grid-cols-2 gap-2">
-              <input
-                type="date"
-                value={fromDate}
-                onChange={(e) => handleFromDateChange(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-emerald-500/50"
-              />
-              <input
-                type="date"
-                value={toDate}
-                onChange={(e) => handleToDateChange(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-emerald-500/50"
-              />
-            </div>
-          </div>
-
-          <div className="flex items-end">
-            <Button
-              variant="default"
-              onClick={() => handleCompileExcel(excelPair, excelSpread, fromDate, toDate)}
-              disabled={isCompilingExcel}
-              className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold h-10 shadow-lg shadow-emerald-950/40"
+              <Zap className="w-3.5 h-3.5 text-amber-300" />
+              MT5 Ticks Section
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-black/40 text-emerald-300 font-mono">6 cols</span>
+            </button>
+            <button
+              onClick={() => setDocFormatTab('bars')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+                docFormatTab === 'bars'
+                  ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-md shadow-blue-950/40'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-900'
+              }`}
             >
-              <FileSpreadsheet className={`w-4 h-4 mr-2 ${isCompilingExcel ? 'animate-spin' : ''}`} />
-              {isCompilingExcel ? `Compiling ${excelPair} Excel...` : `Generate MT5 Excel Doc`}
-            </Button>
+              <Layers className="w-3.5 h-3.5 text-blue-300" />
+              MT5 Bars Section (M1)
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-black/40 text-blue-300 font-mono">9 cols</span>
+            </button>
           </div>
         </div>
 
-        {excelResultMsg && (
-          <div className={`p-3 rounded-lg border text-xs flex items-center justify-between ${
-            excelResultMsg.type === 'success' 
-              ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' 
-              : 'bg-red-500/10 border-red-500/30 text-red-400'
-          }`}>
-            <span>{excelResultMsg.text}</span>
-            <button onClick={() => setExcelResultMsg(null)} className="opacity-60 hover:opacity-100">✕</button>
+        {/* ── VIEW 1: MT5 TICKS SECTION (6 Columns) ── */}
+        {docFormatTab === 'ticks' && (
+          <div className="space-y-4">
+            {/* Guidance banner for MT5 Ticks upload */}
+            <div className="p-3 rounded-xl bg-emerald-950/20 border border-emerald-500/20 text-xs text-slate-300 flex items-start gap-2.5">
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+              <div>
+                <strong className="text-emerald-400 font-semibold block mb-0.5">
+                  MT5 Terminal Ticks Section Import Specification (6 Columns)
+                </strong>
+                Organised with exact MT5 columns: <code className="text-emerald-300 bg-slate-950 px-1 py-0.5 rounded font-mono">&lt;DATE&gt;</code> (with millisecond precision <code className="text-amber-300">YYYY.MM.DD HH:MM:SS.mmm</code>), <code className="text-emerald-300 bg-slate-950 px-1 py-0.5 rounded font-mono">&lt;BID&gt;</code>, <code className="text-emerald-300 bg-slate-950 px-1 py-0.5 rounded font-mono">&lt;ASK&gt;</code>, <code className="text-emerald-300 bg-slate-950 px-1 py-0.5 rounded font-mono">&lt;LAST&gt;</code>, <code className="text-emerald-300 bg-slate-950 px-1 py-0.5 rounded font-mono">&lt;VOLUME&gt;</code>, and <code className="text-emerald-300 bg-slate-950 px-1 py-0.5 rounded font-mono">&lt;FLAGS&gt;</code>.
+                <span className="block mt-1 text-[11px] text-slate-400">
+                  To upload into MT5: In terminal press <strong className="text-white">Ctrl+U</strong> (View → Symbols) → Select symbol → Click <strong className="text-white">Ticks</strong> tab → Click <strong className="text-white">Import Ticks</strong> → Select the downloaded <code className="text-emerald-400 font-mono">.xlsx</code> or <code className="text-emerald-400 font-mono">.csv</code> file.
+                </span>
+              </div>
+            </div>
+
+            {/* Form Controls: Pair, Date Filter (From & To), Max Ticks Limit */}
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 bg-slate-950/60 p-4 rounded-xl border border-slate-800/60">
+              <div>
+                <label className="block text-xs font-semibold text-slate-400 mb-1.5">
+                  Select Pair / Symbol
+                </label>
+                <select
+                  value={excelPair}
+                  onChange={(e) => handleExcelPairSelect(e.target.value)}
+                  className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white font-mono focus:outline-none focus:border-emerald-500/50"
+                >
+                  {popularPairsList.map((p) => (
+                    <option key={p} value={p}>{p}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-400 mb-1.5">
+                  Date Range Filter (From → To)
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <input
+                    type="date"
+                    value={fromDate}
+                    onChange={(e) => handleFromDateChange(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-emerald-500/50"
+                  />
+                  <input
+                    type="date"
+                    value={toDate}
+                    onChange={(e) => handleToDateChange(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-emerald-500/50"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-400 mb-1.5">
+                  Ticks Row Cap (Optional)
+                </label>
+                <select
+                  value={maxTicksExport}
+                  onChange={(e) => setMaxTicksExport(Number(e.target.value))}
+                  className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white font-mono focus:outline-none focus:border-emerald-500/50"
+                >
+                  <option value={0}>All Available Ticks (Up to 1M in Excel)</option>
+                  <option value={25000}>25,000 Ticks (Fast sample)</option>
+                  <option value={50000}>50,000 Ticks</option>
+                  <option value={100000}>100,000 Ticks</option>
+                  <option value={500000}>500,000 Ticks</option>
+                </select>
+              </div>
+
+              <div className="flex items-end">
+                <Button
+                  variant="default"
+                  onClick={() => handleCompileTicks(excelPair, fromDate, toDate, maxTicksExport)}
+                  disabled={isCompilingTicks}
+                  className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold h-10 shadow-lg shadow-emerald-950/40"
+                >
+                  <Zap className={`w-4 h-4 mr-2 ${isCompilingTicks ? 'animate-spin' : ''}`} />
+                  {isCompilingTicks ? `Compiling ${excelPair} Ticks...` : `Generate MT5 Ticks Excel`}
+                </Button>
+              </div>
+            </div>
+
+            {ticksResultMsg && (
+              <div className={`p-3 rounded-lg border text-xs flex items-center justify-between ${
+                ticksResultMsg.type === 'success' 
+                  ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' 
+                  : 'bg-red-500/10 border-red-500/30 text-red-400'
+              }`}>
+                <span>{ticksResultMsg.text}</span>
+                <button onClick={() => setTicksResultMsg(null)} className="opacity-60 hover:opacity-100">✕</button>
+              </div>
+            )}
+
+            {/* Selected Pair Ticks Details & Download Options */}
+            {(() => {
+              const pairObj = catalog?.downloadedPairs?.find((p) => p.pair === excelPair);
+              const mt5Ticks = pairObj?.mt5Ticks;
+              return (
+                <div className="space-y-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3 p-3.5 rounded-xl bg-slate-950 border border-slate-800/80">
+                    <div className="flex flex-wrap items-center gap-4 text-xs">
+                      <div>
+                        <span className="text-slate-500 block">Symbol / Pair:</span>
+                        <span className="font-bold text-white font-mono text-sm">{excelPair}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500 block">Total MT5 Ticks:</span>
+                        <span className="font-semibold text-emerald-400 font-mono">
+                          {mt5Ticks?.total_ticks ? `${mt5Ticks.total_ticks.toLocaleString()} ticks` : 'Not compiled yet'}
+                        </span>
+                      </div>
+                      {mt5Ticks?.start_date && (
+                        <div>
+                          <span className="text-slate-500 block">Date Range (ms precision):</span>
+                          <span className="text-slate-300 font-mono text-[11px]">{mt5Ticks.start_date} → {mt5Ticks.end_date}</span>
+                        </div>
+                      )}
+                      {mt5Ticks?.xlsx_size_mb !== undefined && (
+                        <div>
+                          <span className="text-slate-500 block">Excel Workbook Size:</span>
+                          <span className="text-slate-300 font-mono">{mt5Ticks.xlsx_size_mb} MB</span>
+                        </div>
+                      )}
+                      {mt5Ticks?.csv_size_mb !== undefined && (
+                        <div>
+                          <span className="text-slate-500 block">MT5 Import CSV:</span>
+                          <span className="text-slate-300 font-mono">{mt5Ticks.csv_size_mb} MB</span>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-2 ml-auto">
+                      {mt5Ticks?.has_files || mt5Ticks?.excel_file ? (
+                        <>
+                          <a
+                            href={`/api/market-data-download-file?pair=${excelPair}&file=${excelPair}_MT5_Ticks.xlsx`}
+                            download
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow transition-colors"
+                          >
+                            <FileSpreadsheet className="w-3.5 h-3.5" />
+                            Download Ticks .xlsx
+                          </a>
+                          <a
+                            href={`/api/market-data-download-file?pair=${excelPair}&file=${excelPair}_MT5_Ticks.csv`}
+                            download
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-colors"
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                            Download Ticks .csv
+                          </a>
+                          <a
+                            href={`/api/market-data-download-file?pair=${excelPair}&file=${excelPair}_MT5_Ticks.txt`}
+                            download
+                            className="inline-flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 text-xs font-mono border border-slate-800 transition-colors"
+                          >
+                            .txt
+                          </a>
+                        </>
+                      ) : (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleCompileTicks(excelPair, fromDate, toDate, maxTicksExport)}
+                          disabled={isCompilingTicks}
+                          className="border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/10"
+                        >
+                          <Zap className="w-3.5 h-3.5 mr-1.5" />
+                          Compile Ticks Excel Now
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* 6-Column Data Grid Preview for MT5 Ticks Section */}
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                          MT5 Ticks Section Spreadsheet Grid ({excelPair} 6-Column Standard Order)
+                        </span>
+                        <span className="text-[10px] text-slate-500 font-mono">
+                          [&lt;DATE&gt;, &lt;BID&gt;, &lt;ASK&gt;, &lt;LAST&gt;, &lt;VOLUME&gt;, &lt;FLAGS&gt;]
+                        </span>
+                      </div>
+                      <span className="text-[11px] text-emerald-400 font-mono">
+                        Direct MT5 Symbols → Ticks Import Format
+                      </span>
+                    </div>
+
+                    <div className="overflow-x-auto rounded-lg border border-slate-700 bg-white dark:bg-[#0b101b] shadow-inner">
+                      <table className="w-full text-left border-collapse text-xs font-mono select-text">
+                        <thead>
+                          <tr className="bg-slate-800/90 text-slate-300 font-semibold border-b border-slate-700">
+                            <th className="py-2 px-3 border-r border-slate-700">1: &lt;DATE&gt; (ms)</th>
+                            <th className="py-2 px-3 border-r border-slate-700 text-right">2: &lt;BID&gt;</th>
+                            <th className="py-2 px-3 border-r border-slate-700 text-right">3: &lt;ASK&gt;</th>
+                            <th className="py-2 px-3 border-r border-slate-700 text-right">4: &lt;LAST&gt;</th>
+                            <th className="py-2 px-3 border-r border-slate-700 text-right">5: &lt;VOLUME&gt;</th>
+                            <th className="py-2 px-3 text-right">6: &lt;FLAGS&gt;</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-800 text-slate-200">
+                          {(mt5Ticks?.preview_sample && mt5Ticks.preview_sample.length > 0
+                            ? mt5Ticks.preview_sample
+                            : [
+                                ['2023.01.04 08:00:00.079', 155.006, 155.036, 155.006, 3.78, 6],
+                                ['2023.01.04 08:00:03.176', 155.004, 155.034, 155.004, 0.50, 6],
+                                ['2023.01.04 08:00:06.771', 155.006, 155.036, 155.006, 1.88, 6],
+                                ['2023.01.04 08:00:09.452', 155.003, 155.033, 155.003, 2.75, 6],
+                                ['2023.01.04 08:00:12.453', 155.007, 155.037, 155.007, 2.84, 6]
+                              ]
+                          ).map((row: any, idx: number) => (
+                            <tr key={idx} className="hover:bg-slate-800/40 transition-colors">
+                              <td className="py-2 px-3 border-r border-slate-800 text-amber-300 font-medium whitespace-nowrap">
+                                {row[0]}
+                              </td>
+                              <td className="py-2 px-3 border-r border-slate-800 text-right font-semibold text-blue-400">
+                                {typeof row[1] === 'number' ? row[1].toFixed(excelPair.includes('JPY') ? 3 : 5) : row[1]}
+                              </td>
+                              <td className="py-2 px-3 border-r border-slate-800 text-right font-semibold text-emerald-400">
+                                {typeof row[2] === 'number' ? row[2].toFixed(excelPair.includes('JPY') ? 3 : 5) : row[2]}
+                              </td>
+                              <td className="py-2 px-3 border-r border-slate-800 text-right text-slate-300">
+                                {typeof row[3] === 'number' ? row[3].toFixed(excelPair.includes('JPY') ? 3 : 5) : row[3]}
+                              </td>
+                              <td className="py-2 px-3 border-r border-slate-800 text-right text-slate-400">
+                                {typeof row[4] === 'number' ? row[4].toFixed(2) : row[4]}
+                              </td>
+                              <td className="py-2 px-3 text-right font-bold text-amber-400">
+                                {row[5]}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         )}
 
-        {/* Selected Pair Excel Details & Download Options */}
-        {(() => {
-          const pairObj = catalog?.downloadedPairs?.find((p) => p.pair === excelPair);
-          const mt5 = pairObj?.mt5Excel;
-          return (
-            <div className="space-y-4">
-              <div className="flex flex-wrap items-center justify-between gap-3 p-3.5 rounded-xl bg-slate-950 border border-slate-800/80">
-                <div className="flex flex-wrap items-center gap-4 text-xs">
-                  <div>
-                    <span className="text-slate-500 block">Symbol / Pair:</span>
-                    <span className="font-bold text-white font-mono text-sm">{excelPair}</span>
-                  </div>
-                  <div>
-                    <span className="text-slate-500 block">Total Bars:</span>
-                    <span className="font-semibold text-emerald-400 font-mono">
-                      {mt5?.total_bars ? `${mt5.total_bars.toLocaleString()} bars` : 'Not compiled yet'}
-                    </span>
-                  </div>
-                  {mt5?.start_date && (
-                    <div>
-                      <span className="text-slate-500 block">Date Range:</span>
-                      <span className="text-slate-300 font-mono text-[11px]">{mt5.start_date} → {mt5.end_date}</span>
-                    </div>
-                  )}
-                  {mt5?.spread_points && (
-                    <div>
-                      <span className="text-slate-500 block">Spread:</span>
-                      <span className="font-semibold text-amber-400 font-mono">{mt5.spread_points} points</span>
-                    </div>
-                  )}
-                  {mt5?.xlsx_size_mb !== undefined && (
-                    <div>
-                      <span className="text-slate-500 block">Excel Size:</span>
-                      <span className="text-slate-300 font-mono">{mt5.xlsx_size_mb} MB</span>
-                    </div>
-                  )}
-                </div>
-
-                <div className="flex items-center gap-2 ml-auto">
-                  {mt5?.has_files || mt5?.excel_file ? (
-                    <>
-                      <a
-                        href={`/api/market-data-download-file?pair=${excelPair}&file=${excelPair}_MT5_M1_bars.xlsx`}
-                        download
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow transition-colors"
-                      >
-                        <FileSpreadsheet className="w-3.5 h-3.5" />
-                        Download .xlsx (Excel)
-                      </a>
-                      <a
-                        href={`/api/market-data-download-file?pair=${excelPair}&file=${excelPair}_MT5_M1_bars.csv`}
-                        download
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-colors"
-                      >
-                        <Download className="w-3.5 h-3.5" />
-                        Download .csv (MT5 Import)
-                      </a>
-                    </>
-                  ) : (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handleCompileExcel(excelPair, excelSpread)}
-                      disabled={isCompilingExcel}
-                      className="border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/10"
-                    >
-                      <FileSpreadsheet className="w-3.5 h-3.5 mr-1.5" />
-                      Compile Excel Now
-                    </Button>
-                  )}
-                </div>
+        {/* ── VIEW 2: MT5 BARS SECTION (9 Columns) ── */}
+        {docFormatTab === 'bars' && (
+          <div className="space-y-4">
+            {/* Form Controls: Pair, Spread, Date Filter (From & To) */}
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 bg-slate-950/60 p-4 rounded-xl border border-slate-800/60">
+              <div>
+                <label className="block text-xs font-semibold text-slate-400 mb-1.5">
+                  Select Pair / Symbol
+                </label>
+                <select
+                  value={excelPair}
+                  onChange={(e) => handleExcelPairSelect(e.target.value)}
+                  className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white font-mono focus:outline-none focus:border-blue-500/50"
+                >
+                  {popularPairsList.map((p) => (
+                    <option key={p} value={p}>{p}</option>
+                  ))}
+                </select>
               </div>
 
-              {/* Data Grid Preview Matching Dukascopy Screenshot */}
               <div>
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-bold uppercase tracking-wider text-slate-400">
-                      Excel Spreadsheet Grid Preview ({excelPair} Dukascopy 9-Column Order)
-                    </span>
-                    <span className="text-[10px] text-slate-500 font-mono">
-                      [DATE, TIME, OPEN, HIGH, LOW, CLOSE, TICKVOL, VOL, SPREAD]
-                    </span>
-                  </div>
-                  <span className="text-[11px] text-slate-500">
-                    Exact format ready for MT5 Terminal Import
+                <label className="block text-xs font-semibold text-slate-400 mb-1.5">
+                  Spread (Points)
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    value={excelSpread}
+                    onChange={(e) => setExcelSpread(Number(e.target.value))}
+                    min={1}
+                    max={1000}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white font-mono focus:outline-none focus:border-blue-500/50"
+                  />
+                  <span className="text-xs text-slate-500 whitespace-nowrap">
+                    {excelPair.includes('JPY') ? '3.0 pips (30 pts)' : '1.5 pips (15 pts)'}
                   </span>
                 </div>
+              </div>
 
-                <div className="overflow-x-auto rounded-lg border border-slate-700 bg-white dark:bg-[#0b101b] shadow-inner">
-                  <table className="w-full text-left border-collapse text-xs font-mono select-text">
-                    <thead>
-                      <tr className="bg-slate-800/90 text-slate-300 font-semibold border-b border-slate-700">
-                        <th className="py-2 px-3 border-r border-slate-700">1: &lt;DATE&gt;</th>
-                        <th className="py-2 px-3 border-r border-slate-700">2: &lt;TIME&gt;</th>
-                        <th className="py-2 px-3 border-r border-slate-700 text-right">3: &lt;OPEN&gt;</th>
-                        <th className="py-2 px-3 border-r border-slate-700 text-right">4: &lt;HIGH&gt;</th>
-                        <th className="py-2 px-3 border-r border-slate-700 text-right">5: &lt;LOW&gt;</th>
-                        <th className="py-2 px-3 border-r border-slate-700 text-right">6: &lt;CLOSE&gt;</th>
-                        <th className="py-2 px-3 border-r border-slate-700 text-right">7: &lt;TICKVOL&gt;</th>
-                        <th className="py-2 px-3 border-r border-slate-700 text-right">8: &lt;VOL&gt;</th>
-                        <th className="py-2 px-3 text-right">9: &lt;SPREAD&gt;</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-800 text-slate-200">
-                      {(mt5?.preview_sample && mt5.preview_sample.length > 0
-                        ? mt5.preview_sample
-                        : [
-                            ['2012.12.31', '0:00', 113.349, 113.354, 113.208, 113.208, 27200000, 27200000, 30],
-                            ['2012.12.31', '0:01', 113.233, 113.233, 113.209, 113.217, 10230000, 10230000, 30],
-                            ['2012.12.31', '0:02', 113.194, 113.205, 113.162, 113.205, 30110000, 30110000, 30],
-                            ['2012.12.31', '0:03', 113.205, 113.242, 113.190, 113.220, 15400000, 15400000, 30],
-                            ['2012.12.31', '0:04', 113.220, 113.235, 113.210, 113.228, 18900000, 18900000, 30]
-                          ]
-                      ).map((row: any, idx: number) => (
-                        <tr key={idx} className="hover:bg-slate-800/40 transition-colors">
-                          <td className="py-2 px-3 border-r border-slate-800 text-slate-300 font-medium">{row[0]}</td>
-                          <td className="py-2 px-3 border-r border-slate-800 text-blue-400 font-medium">{row[1]}</td>
-                          <td className="py-2 px-3 border-r border-slate-800 text-right">{typeof row[2] === 'number' ? row[2].toFixed(excelPair.includes('JPY') ? 3 : 5) : row[2]}</td>
-                          <td className="py-2 px-3 border-r border-slate-800 text-right text-emerald-400">{typeof row[3] === 'number' ? row[3].toFixed(excelPair.includes('JPY') ? 3 : 5) : row[3]}</td>
-                          <td className="py-2 px-3 border-r border-slate-800 text-right text-red-400">{typeof row[4] === 'number' ? row[4].toFixed(excelPair.includes('JPY') ? 3 : 5) : row[4]}</td>
-                          <td className="py-2 px-3 border-r border-slate-800 text-right font-semibold">{typeof row[5] === 'number' ? row[5].toFixed(excelPair.includes('JPY') ? 3 : 5) : row[5]}</td>
-                          <td className="py-2 px-3 border-r border-slate-800 text-right text-slate-400">{typeof row[6] === 'number' ? row[6].toLocaleString() : row[6]}</td>
-                          <td className="py-2 px-3 border-r border-slate-800 text-right text-slate-400">{typeof row[7] === 'number' ? row[7].toLocaleString() : row[7]}</td>
-                          <td className="py-2 px-3 text-right font-bold text-amber-400">{row[8]}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+              <div>
+                <label className="block text-xs font-semibold text-slate-400 mb-1.5">
+                  Date Range Filter (From → To)
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <input
+                    type="date"
+                    value={fromDate}
+                    onChange={(e) => handleFromDateChange(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-blue-500/50"
+                  />
+                  <input
+                    type="date"
+                    value={toDate}
+                    onChange={(e) => handleToDateChange(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-blue-500/50"
+                  />
                 </div>
               </div>
+
+              <div className="flex items-end">
+                <Button
+                  variant="default"
+                  onClick={() => handleCompileExcel(excelPair, excelSpread, fromDate, toDate)}
+                  disabled={isCompilingExcel}
+                  className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold h-10 shadow-lg shadow-blue-950/40"
+                >
+                  <FileSpreadsheet className={`w-4 h-4 mr-2 ${isCompilingExcel ? 'animate-spin' : ''}`} />
+                  {isCompilingExcel ? `Compiling ${excelPair} Bars...` : `Generate MT5 Bars Excel`}
+                </Button>
+              </div>
             </div>
-          );
-        })()}
+
+            {excelResultMsg && (
+              <div className={`p-3 rounded-lg border text-xs flex items-center justify-between ${
+                excelResultMsg.type === 'success' 
+                  ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' 
+                  : 'bg-red-500/10 border-red-500/30 text-red-400'
+              }`}>
+                <span>{excelResultMsg.text}</span>
+                <button onClick={() => setExcelResultMsg(null)} className="opacity-60 hover:opacity-100">✕</button>
+              </div>
+            )}
+
+            {/* Selected Pair Bars Details & Download Options */}
+            {(() => {
+              const pairObj = catalog?.downloadedPairs?.find((p) => p.pair === excelPair);
+              const mt5 = pairObj?.mt5Excel;
+              return (
+                <div className="space-y-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3 p-3.5 rounded-xl bg-slate-950 border border-slate-800/80">
+                    <div className="flex flex-wrap items-center gap-4 text-xs">
+                      <div>
+                        <span className="text-slate-500 block">Symbol / Pair:</span>
+                        <span className="font-bold text-white font-mono text-sm">{excelPair}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500 block">Total M1 Bars:</span>
+                        <span className="font-semibold text-blue-400 font-mono">
+                          {mt5?.total_bars ? `${mt5.total_bars.toLocaleString()} bars` : 'Not compiled yet'}
+                        </span>
+                      </div>
+                      {mt5?.start_date && (
+                        <div>
+                          <span className="text-slate-500 block">Date Range:</span>
+                          <span className="text-slate-300 font-mono text-[11px]">{mt5.start_date} → {mt5.end_date}</span>
+                        </div>
+                      )}
+                      {mt5?.spread_points && (
+                        <div>
+                          <span className="text-slate-500 block">Spread:</span>
+                          <span className="font-semibold text-amber-400 font-mono">{mt5.spread_points} points</span>
+                        </div>
+                      )}
+                      {mt5?.xlsx_size_mb !== undefined && (
+                        <div>
+                          <span className="text-slate-500 block">Excel Size:</span>
+                          <span className="text-slate-300 font-mono">{mt5.xlsx_size_mb} MB</span>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-2 ml-auto">
+                      {mt5?.has_files || mt5?.excel_file ? (
+                        <>
+                          <a
+                            href={`/api/market-data-download-file?pair=${excelPair}&file=${excelPair}_MT5_M1_bars.xlsx`}
+                            download
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold shadow transition-colors"
+                          >
+                            <FileSpreadsheet className="w-3.5 h-3.5" />
+                            Download Bars .xlsx
+                          </a>
+                          <a
+                            href={`/api/market-data-download-file?pair=${excelPair}&file=${excelPair}_MT5_M1_bars.csv`}
+                            download
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-colors"
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                            Download Bars .csv
+                          </a>
+                        </>
+                      ) : (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleCompileExcel(excelPair, excelSpread)}
+                          disabled={isCompilingExcel}
+                          className="border-blue-500/40 text-blue-400 hover:bg-blue-500/10"
+                        >
+                          <FileSpreadsheet className="w-3.5 h-3.5 mr-1.5" />
+                          Compile Bars Excel Now
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* 9-Column Data Grid Preview for Bars */}
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                          Excel Spreadsheet Grid Preview ({excelPair} Dukascopy 9-Column Order)
+                        </span>
+                        <span className="text-[10px] text-slate-500 font-mono">
+                          [DATE, TIME, OPEN, HIGH, LOW, CLOSE, TICKVOL, VOL, SPREAD]
+                        </span>
+                      </div>
+                      <span className="text-[11px] text-blue-400 font-mono">
+                        Exact format ready for MT5 Terminal Bars Import
+                      </span>
+                    </div>
+
+                    <div className="overflow-x-auto rounded-lg border border-slate-700 bg-white dark:bg-[#0b101b] shadow-inner">
+                      <table className="w-full text-left border-collapse text-xs font-mono select-text">
+                        <thead>
+                          <tr className="bg-slate-800/90 text-slate-300 font-semibold border-b border-slate-700">
+                            <th className="py-2 px-3 border-r border-slate-700">1: &lt;DATE&gt;</th>
+                            <th className="py-2 px-3 border-r border-slate-700">2: &lt;TIME&gt;</th>
+                            <th className="py-2 px-3 border-r border-slate-700 text-right">3: &lt;OPEN&gt;</th>
+                            <th className="py-2 px-3 border-r border-slate-700 text-right">4: &lt;HIGH&gt;</th>
+                            <th className="py-2 px-3 border-r border-slate-700 text-right">5: &lt;LOW&gt;</th>
+                            <th className="py-2 px-3 border-r border-slate-700 text-right">6: &lt;CLOSE&gt;</th>
+                            <th className="py-2 px-3 border-r border-slate-700 text-right">7: &lt;TICKVOL&gt;</th>
+                            <th className="py-2 px-3 border-r border-slate-700 text-right">8: &lt;VOL&gt;</th>
+                            <th className="py-2 px-3 text-right">9: &lt;SPREAD&gt;</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-800 text-slate-200">
+                          {(mt5?.preview_sample && mt5.preview_sample.length > 0
+                            ? mt5.preview_sample
+                            : [
+                                ['2012.12.31', '0:00', 113.349, 113.354, 113.208, 113.208, 27200000, 27200000, 30],
+                                ['2012.12.31', '0:01', 113.233, 113.233, 113.209, 113.217, 10230000, 10230000, 30],
+                                ['2012.12.31', '0:02', 113.194, 113.205, 113.162, 113.205, 30110000, 30110000, 30],
+                                ['2012.12.31', '0:03', 113.205, 113.242, 113.190, 113.220, 15400000, 15400000, 30],
+                                ['2012.12.31', '0:04', 113.220, 113.235, 113.210, 113.228, 18900000, 18900000, 30]
+                              ]
+                          ).map((row: any, idx: number) => (
+                            <tr key={idx} className="hover:bg-slate-800/40 transition-colors">
+                              <td className="py-2 px-3 border-r border-slate-800 text-slate-300 font-medium">{row[0]}</td>
+                              <td className="py-2 px-3 border-r border-slate-800 text-blue-400 font-medium">{row[1]}</td>
+                              <td className="py-2 px-3 border-r border-slate-800 text-right">{typeof row[2] === 'number' ? row[2].toFixed(excelPair.includes('JPY') ? 3 : 5) : row[2]}</td>
+                              <td className="py-2 px-3 border-r border-slate-800 text-right text-emerald-400">{typeof row[3] === 'number' ? row[3].toFixed(excelPair.includes('JPY') ? 3 : 5) : row[3]}</td>
+                              <td className="py-2 px-3 border-r border-slate-800 text-right text-red-400">{typeof row[4] === 'number' ? row[4].toFixed(excelPair.includes('JPY') ? 3 : 5) : row[4]}</td>
+                              <td className="py-2 px-3 border-r border-slate-800 text-right font-semibold">{typeof row[5] === 'number' ? row[5].toFixed(excelPair.includes('JPY') ? 3 : 5) : row[5]}</td>
+                              <td className="py-2 px-3 border-r border-slate-800 text-right text-slate-400">{typeof row[6] === 'number' ? row[6].toLocaleString() : row[6]}</td>
+                              <td className="py-2 px-3 border-r border-slate-800 text-right text-slate-400">{typeof row[7] === 'number' ? row[7].toLocaleString() : row[7]}</td>
+                              <td className="py-2 px-3 text-right font-bold text-amber-400">{row[8]}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+        )}
       </Card>
 
       {/* Organised Pairs in market_data/ */}
@@ -1166,7 +1534,8 @@ export default function MarketData({ config, onUpdateConfig }: { config: any; on
                 <tr className="border-b border-slate-800 text-slate-400 font-semibold uppercase tracking-wider">
                   <th className="py-2.5 px-3">Pair Subfolder</th>
                   <th className="py-2.5 px-3">M1 Bars</th>
-                  <th className="py-2.5 px-3">MT5 Excel File</th>
+                  <th className="py-2.5 px-3">MT5 Bars Excel</th>
+                  <th className="py-2.5 px-3">MT5 Ticks Excel</th>
                   <th className="py-2.5 px-3">Total Disk Size</th>
                   <th className="py-2.5 px-3">Last Updated</th>
                   <th className="py-2.5 px-3 text-right">Actions</th>
@@ -1202,10 +1571,10 @@ export default function MarketData({ config, onUpdateConfig }: { config: any; on
                           <a
                             href={`/api/market-data-download-file?pair=${p.pair}&file=${p.pair}_MT5_M1_bars.xlsx`}
                             download
-                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[11px] font-mono hover:bg-emerald-500/30 transition-colors"
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30 text-[11px] font-mono hover:bg-blue-500/30 transition-colors"
                           >
-                            <FileSpreadsheet className="w-3 h-3" />
-                            XLSX ({p.mt5Excel.total_bars ? p.mt5Excel.total_bars.toLocaleString() + ' bars' : p.mt5Excel.xlsx_size_mb + 'MB'})
+                            <FileSpreadsheet className="w-3 h-3 text-blue-400" />
+                            Bars ({p.mt5Excel.total_bars ? p.mt5Excel.total_bars.toLocaleString() : p.mt5Excel.xlsx_size_mb + 'MB'})
                           </a>
                           <a
                             href={`/api/market-data-download-file?pair=${p.pair}&file=${p.pair}_MT5_M1_bars.csv`}
@@ -1219,12 +1588,46 @@ export default function MarketData({ config, onUpdateConfig }: { config: any; on
                         <button
                           onClick={() => {
                             setExcelPair(p.pair);
+                            setDocFormatTab('bars');
                             handleCompileExcel(p.pair);
+                          }}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 text-[11px] transition-colors border border-blue-500/20"
+                        >
+                          <FileSpreadsheet className="w-3 h-3" />
+                          Compile Bars
+                        </button>
+                      )}
+                    </td>
+                    <td className="py-3 px-3">
+                      {p.mt5Ticks?.has_files || p.mt5Ticks?.excel_file ? (
+                        <div className="flex items-center gap-1.5">
+                          <a
+                            href={`/api/market-data-download-file?pair=${p.pair}&file=${p.pair}_MT5_Ticks.xlsx`}
+                            download
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[11px] font-mono hover:bg-emerald-500/30 transition-colors"
+                          >
+                            <Zap className="w-3 h-3 text-amber-400" />
+                            Ticks ({p.mt5Ticks.total_ticks ? p.mt5Ticks.total_ticks.toLocaleString() : p.mt5Ticks.xlsx_size_mb + 'MB'})
+                          </a>
+                          <a
+                            href={`/api/market-data-download-file?pair=${p.pair}&file=${p.pair}_MT5_Ticks.csv`}
+                            download
+                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700 text-[10px] font-mono hover:text-white transition-colors"
+                          >
+                            CSV
+                          </a>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => {
+                            setExcelPair(p.pair);
+                            setDocFormatTab('ticks');
+                            handleCompileTicks(p.pair);
                           }}
                           className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 text-[11px] transition-colors border border-emerald-500/20"
                         >
-                          <FileSpreadsheet className="w-3 h-3" />
-                          Compile Excel
+                          <Zap className="w-3 h-3 text-amber-400" />
+                          Compile Ticks
                         </button>
                       )}
                     </td>

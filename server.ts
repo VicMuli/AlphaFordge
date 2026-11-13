@@ -1124,12 +1124,16 @@ async function startServer() {
 
             // Check for mt5_excel compilation metadata
             let mt5Excel: any = null;
+            let mt5Ticks: any = null;
             const manifestFile = path.join(pairDir, 'manifest.json');
             if (existsSync(manifestFile)) {
               try {
                 const manData = JSON.parse(await fs.readFile(manifestFile, 'utf-8'));
                 if (manData.mt5_excel) {
                   mt5Excel = manData.mt5_excel;
+                }
+                if (manData.mt5_ticks) {
+                  mt5Ticks = manData.mt5_ticks;
                 }
               } catch {}
             }
@@ -1150,6 +1154,24 @@ async function startServer() {
                 } catch {}
               }
             }
+            if (!mt5Ticks) {
+              const xlsxTickPath = path.join(pairDir, `${pairName}_MT5_Ticks.xlsx`);
+              const csvTickPath = path.join(pairDir, `${pairName}_MT5_Ticks.csv`);
+              if (existsSync(xlsxTickPath)) {
+                try {
+                  const xStat = await fs.stat(xlsxTickPath);
+                  const cStart = existsSync(csvTickPath) ? await fs.stat(csvTickPath) : null;
+                  mt5Ticks = {
+                    excel_file: `${pairName}_MT5_Ticks.xlsx`,
+                    csv_file: `${pairName}_MT5_Ticks.csv`,
+                    txt_file: `${pairName}_MT5_Ticks.txt`,
+                    xlsx_size_mb: Number((xStat.size / (1024 * 1024)).toFixed(2)),
+                    csv_size_mb: cStart ? Number((cStart.size / (1024 * 1024)).toFixed(2)) : 0,
+                    has_files: true
+                  };
+                } catch {}
+              }
+            }
 
             downloadedPairs.push({
               pair: pairName,
@@ -1162,7 +1184,8 @@ async function startServer() {
               totalMb: pairTotalMb,
               lastUpdated,
               isActive: (cfg.symbol_key === pairName || cfg.symbol?.toUpperCase().includes(pairName)),
-              mt5Excel
+              mt5Excel,
+              mt5Ticks
             });
           }
         }
@@ -1281,6 +1304,50 @@ async function startServer() {
           pair: cleanPair,
           output: stdout,
           mt5Excel: manifest.mt5_excel || null
+        });
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+ 
+  // Compile unified MT5 Ticks Excel document (.xlsx) & MT5 Ticks Import file (.csv)
+  app.post("/api/market-data-build-ticks", async (req, res) => {
+    try {
+      const { pair, maxTicks, fromDate, toDate } = req.body;
+      if (!pair) {
+        return res.status(400).json({ error: "Currency pair is required" });
+      }
+      const cleanPair = String(pair).trim().toUpperCase();
+      const args = [path.join(process.cwd(), 'market_data_downloader.py'), '--pair', cleanPair, '--export-ticks'];
+      if (fromDate) {
+        args.push('--from-date', String(fromDate));
+      }
+      if (toDate) {
+        args.push('--to-date', String(toDate));
+      }
+      if (maxTicks && Number(maxTicks) > 0) {
+        args.push('--max-ticks', String(maxTicks));
+      }
+
+      execFile('python3', args, { cwd: process.cwd() }, async (error, stdout, stderr) => {
+        if (error) {
+          return res.status(500).json({ error: stderr || stdout || error.message });
+        }
+
+        const manifestPath = path.join(process.cwd(), 'market_data', cleanPair, 'manifest.json');
+        let manifest: any = {};
+        if (existsSync(manifestPath)) {
+          try {
+            manifest = JSON.parse(await fs.readFile(manifestPath, 'utf-8'));
+          } catch {}
+        }
+
+        res.json({
+          status: "ok",
+          pair: cleanPair,
+          output: stdout,
+          mt5Ticks: manifest.mt5_ticks || null
         });
       });
     } catch (e: any) {
