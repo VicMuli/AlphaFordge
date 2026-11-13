@@ -1155,17 +1155,17 @@ async function startServer() {
               }
             }
             if (!mt5Ticks) {
-              const xlsxTickPath = path.join(pairDir, `${pairName}_MT5_Ticks.xlsx`);
-              const csvTickPath = path.join(pairDir, `${pairName}_MT5_Ticks.csv`);
-              if (existsSync(xlsxTickPath)) {
+              const csvTickPath = path.join(pairDir, `${pairName}_mt5_ticks.csv`);
+              const xlsxTickPath = path.join(pairDir, `${pairName}_mt5_ticks.xlsx`);
+              if (existsSync(csvTickPath) || existsSync(xlsxTickPath)) {
                 try {
-                  const xStat = await fs.stat(xlsxTickPath);
+                  const xStat = existsSync(xlsxTickPath) ? await fs.stat(xlsxTickPath) : null;
                   const cStart = existsSync(csvTickPath) ? await fs.stat(csvTickPath) : null;
                   mt5Ticks = {
-                    excel_file: `${pairName}_MT5_Ticks.xlsx`,
-                    csv_file: `${pairName}_MT5_Ticks.csv`,
-                    txt_file: `${pairName}_MT5_Ticks.txt`,
-                    xlsx_size_mb: Number((xStat.size / (1024 * 1024)).toFixed(2)),
+                    excel_file: `${pairName}_mt5_ticks.xlsx`,
+                    csv_file: `${pairName}_mt5_ticks.csv`,
+                    txt_file: `${pairName}_mt5_ticks.txt`,
+                    xlsx_size_mb: xStat ? Number((xStat.size / (1024 * 1024)).toFixed(2)) : 0,
                     csv_size_mb: cStart ? Number((cStart.size / (1024 * 1024)).toFixed(2)) : 0,
                     has_files: true
                   };

@@ -368,7 +368,11 @@ def generate_dukascopy_synthetic_ticks_for_range(
 
     pair_clean = pair.upper().strip()
     default_spread, digits = get_pair_spread_and_digits(pair_clean)
-    spread_val = round(default_spread * (10 ** -digits), digits)
+    if "XAU" in pair_clean or "GOLD" in pair_clean:
+        digits = 3
+        spread_val = 0.250
+    else:
+        spread_val = round(default_spread * (10 ** -digits), digits)
 
     pair_specs = {
         "EURJPY": 155.0, "USDJPY": 150.0, "AUDJPY": 95.0, "GBPJPY": 185.0,
@@ -1321,17 +1325,16 @@ def export_mt5_ticks_document(
     auto_generate_if_empty: bool = True
 ) -> dict:
     """
-    Organizes downloaded Dukascopy Tick data for a pair into an Excel file (.xlsx),
-    CSV import file (.csv), and tab-delimited file (.txt) formatted specifically
-    for MT5 Terminal Ticks section import, with the exact 6 columns:
-    [<DATE>, <BID>, <ASK>, <LAST>, <VOLUME>, <FLAGS>]
-    where:
-      <DATE>: YYYY.MM.DD HH:MM:SS.mmm (with millisecond precision)
-      <BID>: Bid quote price
-      <ASK>: Ask quote price
-      <LAST>: Last deal/trade price (same as Bid in forex)
-      <VOLUME>: Tick or contract volume
-      <FLAGS>: MT5 tick flags (6 = TICK_FLAG_BID | TICK_FLAG_ASK)
+    Organizes downloaded Dukascopy Tick data for a pair into an MT5 Tick CSV Excel file
+    (<PAIR>_mt5_ticks.csv), Excel workbook (<PAIR>_mt5_ticks.xlsx), and tab-delimited file
+    (<PAIR>_mt5_ticks.txt) formatted identically to the MT5 / Excel tick import layout:
+      Col A: Date      (YYYYMMDD, e.g. 20191230)
+      Col B: Time      (HH:MM:SS, e.g. 00:00:02)
+      Col C: Bid       (e.g. 1513.455)
+      Col D: Ask       (e.g. 1513.735)
+      Col E: Last      (Bid price, e.g. 1513.455)
+      Col F: Volume    (0)
+    Row 1 begins immediately with the first tick (no header row).
     """
     pair = pair.upper().strip()
     pair_dir = MARKET_DATA_DIR / pair
@@ -1345,7 +1348,12 @@ def export_mt5_ticks_document(
         s_dt, e_dt = e_dt, s_dt
 
     default_spread, default_digits = get_pair_spread_and_digits(pair)
-    spread_val = round(default_spread * (10 ** -default_digits), default_digits)
+    if "XAU" in pair or "GOLD" in pair:
+        tick_digits = 3
+        spread_val = 0.250
+    else:
+        tick_digits = default_digits
+        spread_val = round(default_spread * (10 ** -tick_digits), tick_digits)
 
     # Clean up any interrupted or dangling .part files
     for pf in tick_dir.glob("*.part"):
@@ -1368,19 +1376,28 @@ def export_mt5_ticks_document(
         generate_dukascopy_synthetic_ticks_for_range(pair, cur_s, cur_e, gen_file)
         tick_files = [gen_file]
 
-    headers = ["<DATE>", "<BID>", "<ASK>", "<LAST>", "<VOLUME>", "<FLAGS>"]
+    headers = ["Date (YYYYMMDD)", "Time (HH:MM:SS)", "Bid", "Ask", "Last", "Volume"]
 
     if output_csv is None:
-        output_csv = pair_dir / f"{pair}_MT5_Ticks.csv"
-    output_txt = pair_dir / f"{pair}_MT5_Ticks.txt"
+        output_csv = pair_dir / f"{pair}_mt5_ticks.csv"
+    output_txt = pair_dir / f"{pair}_mt5_ticks.txt"
     if output_xlsx is None:
-        output_xlsx = pair_dir / f"{pair}_MT5_Ticks.xlsx"
+        output_xlsx = pair_dir / f"{pair}_mt5_ticks.xlsx"
 
-    emit_progress(90.0, f"Streaming 6-column MT5 Ticks for {pair} across {len(tick_files)} tick files...")
-    print(f"[TICKS-COMPILER] Streaming {len(tick_files)} tick files directly to {output_xlsx.name} and {output_csv.name}...")
+    # Remove older capitalized filenames if present to keep directory clean
+    for old_name in (f"{pair}_MT5_Ticks.csv", f"{pair}_MT5_Ticks.xlsx", f"{pair}_MT5_Ticks.txt"):
+        old_p = pair_dir / old_name
+        if old_p.exists() and old_p not in (output_csv, output_xlsx, output_txt):
+            try:
+                old_p.unlink()
+            except Exception:
+                pass
 
-    # Excel limit: 1 header row + 1,048,500 data rows
-    excel_max_rows = 1048500
+    emit_progress(90.0, f"Streaming 6-column MT5 Ticks CSV & Excel for {pair} across {len(tick_files)} tick files...")
+    print(f"[TICKS-COMPILER] Streaming {len(tick_files)} tick files directly to {output_csv.name} and {output_xlsx.name}...")
+
+    # Excel worksheet limit (no header row: Row 1 = first tick)
+    excel_max_rows = 1048576
     excel_rows_written = 0
     total_ticks_written = 0
     first_tick_date = ""
@@ -1388,10 +1405,8 @@ def export_mt5_ticks_document(
     preview_sample = []
     excel_batch = []
 
-    f_csv = open(output_csv, "w", encoding="utf-8")
-    f_txt = open(output_txt, "w", encoding="utf-8")
-    f_csv.write(",".join(headers) + "\n")
-    f_txt.write("\t".join(headers) + "\n")
+    f_csv = open(output_csv, "w", encoding="utf-8", newline="")
+    f_txt = open(output_txt, "w", encoding="utf-8", newline="")
 
     zf = zipfile.ZipFile(output_xlsx, "w", compression=zipfile.ZIP_DEFLATED)
     zf.writestr("[Content_Types].xml", (
@@ -1421,28 +1436,26 @@ def export_mt5_ticks_document(
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
         '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">\n'
         '  <sheets>\n'
-        '    <sheet name="Ticks" sheetId="1" r:id="rId1"/>\n'
+        f'    <sheet name="{escape_xml(f"{pair}_mt5_ticks")}" sheetId="1" r:id="rId1"/>\n'
         '  </sheets>\n'
         '</workbook>'
     ))
     zf.writestr("xl/styles.xml", (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
         '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">\n'
-        '  <fonts count="2">\n'
-        '    <font><sz val="10"/><name val="Calibri"/></font>\n'
-        '    <font><b/><sz val="11"/><color rgb="FF1E293B"/><name val="Calibri"/></font>\n'
+        '  <fonts count="1">\n'
+        '    <font><sz val="11"/><name val="Calibri"/></font>\n'
         '  </fonts>\n'
-        '  <fills count="3">\n'
+        '  <fills count="2">\n'
         '    <fill><patternFill patternType="none"/></fill>\n'
         '    <fill><patternFill patternType="gray125"/></fill>\n'
-        '    <fill><patternFill patternType="solid"><fgColor rgb="FFE2E8F0"/></patternFill></fill>\n'
         '  </fills>\n'
         '  <borders count="1">\n'
         '    <border><left/><right/><top/><bottom/></border>\n'
         '  </borders>\n'
         '  <cellXfs count="2">\n'
         '    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>\n'
-        '    <xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/>\n'
+        '    <xf numFmtId="21" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>\n'
         '  </cellXfs>\n'
         '</styleSheet>'
     ))
@@ -1453,12 +1466,6 @@ def export_mt5_ticks_document(
         '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">\n'
         '  <sheetData>\n'
     ).encode("utf-8"))
-
-    hdr_cells = []
-    for ci, col in enumerate(headers):
-        col_let = chr(65 + ci)
-        hdr_cells.append(f'<c r="{col_let}1" t="inlineStr" s="1"><is><t>{escape_xml(col)}</t></is></c>')
-    ws_file.write(f'    <row r="1">{"".join(hdr_cells)}</row>\n'.encode("utf-8"))
 
     try:
         for fpath in tick_files:
@@ -1475,13 +1482,13 @@ def export_mt5_ticks_document(
                             continue
 
                         first_col = parts[0].strip()
-                        d_str = ""
+                        d_col = ""
+                        t_col = ""
                         sort_k = 0
                         bid_val = 0.0
                         ask_val = 0.0
                         last_val = 0.0
-                        vol_val = 1.0
-                        flags_val = 6
+                        vol_val = 0
 
                         # 1. Dukascopy timestamp (ms): timestamp,askPrice,bidPrice,askVolume,bidVolume
                         if first_col.isdigit() and len(first_col) >= 12:
@@ -1494,16 +1501,39 @@ def export_mt5_ticks_document(
                                     continue
                                 if e_dt and bar_d > e_dt:
                                     continue
-                                ms_val = ts_ms % 1000
-                                d_str = dt.strftime("%Y.%m.%d %H:%M:%S") + f".{ms_val:03d}"
-                                ask_val = round(float(parts[1]), default_digits)
-                                bid_val = round(float(parts[2]), default_digits)
+                                d_col = dt.strftime("%Y%m%d")
+                                t_col = dt.strftime("%H:%M:%S")
+                                ask_val = round(float(parts[1]), tick_digits)
+                                bid_val = round(float(parts[2]), tick_digits)
                                 last_val = bid_val
-                                vol_val = round(float(parts[3]), 2) if len(parts) > 3 and parts[3].strip() else 1.0
+                                vol_val = 0
+                            except Exception:
+                                continue
+                        elif first_col.isdigit() and len(first_col) == 8 and ":" in parts[1]:
+                            # 2. Already formatted 6-col MT5 ticks: YYYYMMDD,HH:MM:SS,Bid,Ask,Last,Volume
+                            try:
+                                y_i, m_i, d_i = int(first_col[:4]), int(first_col[4:6]), int(first_col[6:8])
+                                t_date = date(y_i, m_i, d_i)
+                                if s_dt and t_date < s_dt:
+                                    continue
+                                if e_dt and t_date > e_dt:
+                                    continue
+                                d_col = first_col
+                                t_raw = parts[1].strip().split(".")[0]
+                                t_parts = t_raw.split(":")
+                                h_i = int(t_parts[0]) if len(t_parts) > 0 and t_parts[0].isdigit() else 0
+                                min_i = int(t_parts[1]) if len(t_parts) > 1 and t_parts[1].isdigit() else 0
+                                sec_i = int(t_parts[2]) if len(t_parts) > 2 and t_parts[2].isdigit() else 0
+                                t_col = f"{h_i:02d}:{min_i:02d}:{sec_i:02d}"
+                                sort_k = int(datetime(y_i, m_i, d_i, h_i, min_i, sec_i, tzinfo=timezone.utc).timestamp() * 1000)
+                                bid_val = round(float(parts[2]), tick_digits)
+                                ask_val = round(float(parts[3]), tick_digits) if len(parts) > 3 else round(bid_val + spread_val, tick_digits)
+                                last_val = bid_val
+                                vol_val = 0
                             except Exception:
                                 continue
                         else:
-                            # 2. Text date format: YYYY.MM.DD HH:MM:SS.mmm
+                            # 3. Text date format: YYYY.MM.DD HH:MM:SS(.mmm)
                             dt_raw = first_col
                             if " " not in dt_raw and len(parts) >= 2 and (":" in parts[1] or "." in parts[1]):
                                 dt_raw = f"{first_col} {parts[1]}"
@@ -1512,33 +1542,33 @@ def export_mt5_ticks_document(
                             try:
                                 d_part, t_part = dt_raw.split(" ", 1)
                                 d_clean = d_part.replace("-", ".").strip()
-                                t_clean = t_part.strip()
-                                if "." in t_clean and len(t_clean.split(".")[-1]) in (1, 2, 3):
-                                    ms_str = f"{t_clean.split('.')[-1]:0<3}"[:3]
-                                    t_main = t_clean.split(".")[0]
-                                else:
-                                    ms_str = "000"
-                                    t_main = t_clean
-
-                                d_str = f"{d_clean} {t_main}.{ms_str}"
-
+                                t_main = t_part.strip().split(".")[0]
                                 d_p = d_clean.split(".")
                                 if len(d_p) == 3 and all(p.isdigit() for p in d_p):
-                                    t_date = date(int(d_p[0]), int(d_p[1]), int(d_p[2]))
+                                    y_i, m_i, d_i = int(d_p[0]), int(d_p[1]), int(d_p[2])
+                                    t_date = date(y_i, m_i, d_i)
                                     if s_dt and t_date < s_dt:
                                         continue
                                     if e_dt and t_date > e_dt:
                                         continue
+                                    d_col = f"{y_i:04d}{m_i:02d}{d_i:02d}"
+                                    t_parts = t_main.split(":")
+                                    h_i = int(t_parts[0]) if len(t_parts) > 0 and t_parts[0].isdigit() else 0
+                                    min_i = int(t_parts[1]) if len(t_parts) > 1 and t_parts[1].isdigit() else 0
+                                    sec_i = int(t_parts[2]) if len(t_parts) > 2 and t_parts[2].isdigit() else 0
+                                    t_col = f"{h_i:02d}:{min_i:02d}:{sec_i:02d}"
+                                    sort_k = int(datetime(y_i, m_i, d_i, h_i, min_i, sec_i, tzinfo=timezone.utc).timestamp() * 1000)
+                                else:
+                                    continue
 
-                                bid_val = round(float(parts[1]), default_digits)
-                                ask_val = round(float(parts[2]), default_digits) if len(parts) > 2 else round(bid_val + spread_val, default_digits)
-                                last_val = round(float(parts[3]), default_digits) if len(parts) > 3 else bid_val
-                                vol_val = round(float(parts[4]), 2) if len(parts) > 4 else 1.0
-                                flags_val = int(parts[5]) if len(parts) > 5 and parts[5].strip().isdigit() else 6
+                                bid_val = round(float(parts[1]), tick_digits)
+                                ask_val = round(float(parts[2]), tick_digits) if len(parts) > 2 else round(bid_val + spread_val, tick_digits)
+                                last_val = bid_val
+                                vol_val = 0
                             except Exception:
                                 continue
 
-                        file_ticks.append((sort_k, d_str, bid_val, ask_val, last_val, vol_val, flags_val))
+                        file_ticks.append((sort_k, d_col, t_col, bid_val, ask_val, last_val, vol_val))
 
             except Exception as e:
                 print(f"[WARN] Error reading tick file {fpath.name}: {e}")
@@ -1549,29 +1579,37 @@ def export_mt5_ticks_document(
                 if max_ticks and max_ticks > 0 and total_ticks_written >= max_ticks:
                     break
 
-                _, d_str, bid_val, ask_val, last_val, vol_val, flags_val = tick
+                _, d_col, t_col, bid_val, ask_val, last_val, vol_val = tick
                 total_ticks_written += 1
+                disp_dt = f"{d_col[:4]}.{d_col[4:6]}.{d_col[6:8]} {t_col}"
                 if not first_tick_date:
-                    first_tick_date = d_str
-                last_tick_date = d_str
+                    first_tick_date = disp_dt
+                last_tick_date = disp_dt
 
-                if len(preview_sample) < 10:
-                    preview_sample.append([d_str, bid_val, ask_val, last_val, vol_val, flags_val])
+                bid_str = f"{bid_val:.{tick_digits}f}"
+                ask_str = f"{ask_val:.{tick_digits}f}"
+                last_str = f"{last_val:.{tick_digits}f}"
 
-                f_csv.write(f"{d_str},{bid_val},{ask_val},{last_val},{vol_val},{flags_val}\n")
-                f_txt.write(f"{d_str}\t{bid_val}\t{ask_val}\t{last_val}\t{vol_val}\t{flags_val}\n")
+                if len(preview_sample) < 12:
+                    preview_sample.append([d_col, t_col, bid_val, ask_val, last_val, vol_val])
+
+                # Format matching XAUUSD_mt5_ticks.csv: YYYYMMDD,HH:MM:SS,Bid,Ask,Last,0 (no header row)
+                f_csv.write(f"{d_col},{t_col},{bid_str},{ask_str},{last_str},{vol_val}\n")
+                f_txt.write(f"{d_col}\t{t_col}\t{bid_str}\t{ask_str}\t{last_str}\t{vol_val}\n")
 
                 if excel_rows_written < excel_max_rows:
                     excel_rows_written += 1
-                    ri = excel_rows_written + 1
+                    ri = excel_rows_written
+                    tp = t_col.split(":")
+                    excel_time_frac = round(((int(tp[0]) * 3600) + (int(tp[1]) * 60) + int(tp[2])) / 86400.0, 10)
                     excel_batch.append(
                         f'<row r="{ri}">'
-                        f'<c r="A{ri}" t="inlineStr"><is><t>{d_str}</t></is></c>'
-                        f'<c r="B{ri}"><v>{bid_val}</v></c>'
-                        f'<c r="C{ri}"><v>{ask_val}</v></c>'
-                        f'<c r="D{ri}"><v>{last_val}</v></c>'
-                        f'<c r="E{ri}"><v>{vol_val}</v></c>'
-                        f'<c r="F{ri}"><v>{flags_val}</v></c>'
+                        f'<c r="A{ri}"><v>{int(d_col)}</v></c>'
+                        f'<c r="B{ri}" s="1"><v>{excel_time_frac}</v></c>'
+                        f'<c r="C{ri}"><v>{bid_str}</v></c>'
+                        f'<c r="D{ri}"><v>{ask_str}</v></c>'
+                        f'<c r="E{ri}"><v>{last_str}</v></c>'
+                        f'<c r="F{ri}"><v>{vol_val}</v></c>'
                         f'</row>\n'
                     )
 
@@ -1637,15 +1675,15 @@ def export_mt5_ticks_document(
     with open(manifest_file, "w", encoding="utf-8") as fm:
         json.dump(curr_manifest, fm, indent=2)
 
-    emit_progress(100.0, f"MT5 Ticks Excel & CSV build complete for {pair}! Total ticks: {total_ticks_written:,}")
+    emit_progress(100.0, f"MT5 Ticks CSV & Excel build complete for {pair}! Total ticks: {total_ticks_written:,}")
     print(f"\n==========================================")
-    print(f"✅ MT5 Ticks Excel File Successfully Generated for {pair}!")
+    print(f"✅ MT5 Ticks CSV Excel File Successfully Generated for {pair}!")
     print(f"   Dukascopy Feed Source: {DUKASCOPY_HISTORICAL_URL}")
-    print(f"   Excel Workbook: {output_xlsx.name} ({xlsx_size_mb:.2f} MB)")
     print(f"   MT5 Tick CSV:   {output_csv.name} ({csv_size_mb:.2f} MB)")
+    print(f"   Excel Workbook: {output_xlsx.name} ({xlsx_size_mb:.2f} MB)")
     print(f"   Total Ticks:    {total_ticks_written:,}")
     print(f"   Date Span:      {first_tick_date} to {last_tick_date}")
-    print(f"   Columns:        {', '.join(headers)}")
+    print(f"   Layout:         6 Columns (Date YYYYMMDD | Time HH:MM:SS | Bid | Ask | Last | Volume 0)")
     print(f"==========================================")
 
     return {

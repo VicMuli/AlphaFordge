@@ -469,8 +469,8 @@ export default function MarketData({ config, onUpdateConfig }: { config: any; on
     setTicksResultMsg(null);
     setDownloadProgress({
       percent: 15,
-      stage: `Compiling MT5 Ticks Excel document (<DATE>, <BID>, <ASK>, <LAST>, <VOLUME>, <FLAGS>) for ${p}...`,
-      detail: `Structuring millisecond quotes for MT5 Symbols -> Ticks section import`,
+      stage: `Compiling MT5 Ticks Excel CSV (${p}_mt5_ticks.csv) [Date, Time, Bid, Ask, Last, Volume]...`,
+      detail: `Formatting headerless 6 columns (YYYYMMDD, HH:MM:SS, Bid, Ask, Last, 0) for MT5 Ticks import`,
       step: 1,
       totalSteps: 2,
       active: true,
@@ -488,12 +488,12 @@ export default function MarketData({ config, onUpdateConfig }: { config: any; on
       if (res.ok && data.status === 'ok') {
         setTicksResultMsg({
           type: 'success',
-          text: `Successfully compiled MT5 Ticks Excel document & CSV for ${p}! Ready to upload directly into MT5 Terminal Ticks section.`
+          text: `Successfully compiled ${p}_mt5_ticks.csv & .xlsx! Ready to upload directly into MT5 Terminal Ticks section.`
         });
         setDownloadProgress({
           percent: 100,
-          stage: `MT5 Ticks Excel document compiled successfully for ${p}!`,
-          detail: `Generated .xlsx workbook & MT5 .csv tick import file in market_data/${p}/`,
+          stage: `MT5 Ticks Excel CSV compiled successfully for ${p}!`,
+          detail: `Generated ${p}_mt5_ticks.csv, .xlsx & .txt in market_data/${p}/`,
           active: false,
           pair: p,
           completedAt: new Date().toLocaleTimeString(),
@@ -1048,11 +1048,17 @@ export default function MarketData({ config, onUpdateConfig }: { config: any; on
               <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
               <div>
                 <strong className="text-emerald-400 font-semibold block mb-0.5">
-                  MT5 Terminal Ticks Section Import Specification (6 Columns)
+                  MT5 Terminal Ticks Excel CSV Specification (6 Headerless Columns: {excelPair}_mt5_ticks.csv)
                 </strong>
-                Organised with exact MT5 columns: <code className="text-emerald-300 bg-slate-950 px-1 py-0.5 rounded font-mono">&lt;DATE&gt;</code> (with millisecond precision <code className="text-amber-300">YYYY.MM.DD HH:MM:SS.mmm</code>), <code className="text-emerald-300 bg-slate-950 px-1 py-0.5 rounded font-mono">&lt;BID&gt;</code>, <code className="text-emerald-300 bg-slate-950 px-1 py-0.5 rounded font-mono">&lt;ASK&gt;</code>, <code className="text-emerald-300 bg-slate-950 px-1 py-0.5 rounded font-mono">&lt;LAST&gt;</code>, <code className="text-emerald-300 bg-slate-950 px-1 py-0.5 rounded font-mono">&lt;VOLUME&gt;</code>, and <code className="text-emerald-300 bg-slate-950 px-1 py-0.5 rounded font-mono">&lt;FLAGS&gt;</code>.
+                Organised with exact 6-column Excel CSV arrangement (Row 1 starts directly with tick data, no header row):{' '}
+                <code className="text-emerald-300 bg-slate-950 px-1 py-0.5 rounded font-mono">Col A: Date (YYYYMMDD)</code>,{' '}
+                <code className="text-emerald-300 bg-slate-950 px-1 py-0.5 rounded font-mono">Col B: Time (HH:MM:SS)</code>,{' '}
+                <code className="text-emerald-300 bg-slate-950 px-1 py-0.5 rounded font-mono">Col C: Bid</code>,{' '}
+                <code className="text-emerald-300 bg-slate-950 px-1 py-0.5 rounded font-mono">Col D: Ask</code>,{' '}
+                <code className="text-emerald-300 bg-slate-950 px-1 py-0.5 rounded font-mono">Col E: Last</code>, and{' '}
+                <code className="text-emerald-300 bg-slate-950 px-1 py-0.5 rounded font-mono">Col F: Volume (0)</code>.
                 <span className="block mt-1 text-[11px] text-slate-400">
-                  To upload into MT5: In terminal press <strong className="text-white">Ctrl+U</strong> (View → Symbols) → Select symbol → Click <strong className="text-white">Ticks</strong> tab → Click <strong className="text-white">Import Ticks</strong> → Select the downloaded <code className="text-emerald-400 font-mono">.xlsx</code> or <code className="text-emerald-400 font-mono">.csv</code> file.
+                  To upload into MT5: Press <strong className="text-white">Ctrl+U</strong> (View → Symbols) → Select symbol → Open <strong className="text-white">Ticks</strong> tab → Click <strong className="text-white">Import Ticks</strong> → Select <code className="text-emerald-400 font-mono">{excelPair}_mt5_ticks.csv</code> (or <code className="text-emerald-400 font-mono">.xlsx</code>).
                 </span>
               </div>
             </div>
@@ -1174,26 +1180,26 @@ export default function MarketData({ config, onUpdateConfig }: { config: any; on
                     </div>
 
                     <div className="flex items-center gap-2 ml-auto">
-                      {mt5Ticks?.has_files || mt5Ticks?.excel_file ? (
+                      {mt5Ticks?.has_files || mt5Ticks?.csv_file || mt5Ticks?.excel_file ? (
                         <>
                           <a
-                            href={`/api/market-data-download-file?pair=${excelPair}&file=${excelPair}_MT5_Ticks.xlsx`}
+                            href={`/api/market-data-download-file?pair=${excelPair}&file=${mt5Ticks?.csv_file || `${excelPair}_mt5_ticks.csv`}`}
                             download
                             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow transition-colors"
                           >
-                            <FileSpreadsheet className="w-3.5 h-3.5" />
-                            Download Ticks .xlsx
+                            <Download className="w-3.5 h-3.5" />
+                            Download {excelPair}_mt5_ticks.csv
                           </a>
                           <a
-                            href={`/api/market-data-download-file?pair=${excelPair}&file=${excelPair}_MT5_Ticks.csv`}
+                            href={`/api/market-data-download-file?pair=${excelPair}&file=${mt5Ticks?.excel_file || `${excelPair}_mt5_ticks.xlsx`}`}
                             download
                             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-colors"
                           >
-                            <Download className="w-3.5 h-3.5" />
-                            Download Ticks .csv
+                            <FileSpreadsheet className="w-3.5 h-3.5" />
+                            .xlsx
                           </a>
                           <a
-                            href={`/api/market-data-download-file?pair=${excelPair}&file=${excelPair}_MT5_Ticks.txt`}
+                            href={`/api/market-data-download-file?pair=${excelPair}&file=${mt5Ticks?.txt_file || `${excelPair}_mt5_ticks.txt`}`}
                             download
                             className="inline-flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 text-xs font-mono border border-slate-800 transition-colors"
                           >
@@ -1209,7 +1215,7 @@ export default function MarketData({ config, onUpdateConfig }: { config: any; on
                           className="border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/10"
                         >
                           <Zap className="w-3.5 h-3.5 mr-1.5" />
-                          Compile Ticks Excel Now
+                          Compile Ticks CSV Now
                         </Button>
                       )}
                     </div>
@@ -1217,17 +1223,17 @@ export default function MarketData({ config, onUpdateConfig }: { config: any; on
 
                   {/* 6-Column Data Grid Preview for MT5 Ticks Section */}
                   <div>
-                    <div className="flex items-center justify-between mb-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
                       <div className="flex items-center gap-2">
                         <span className="text-xs font-bold uppercase tracking-wider text-slate-400">
-                          MT5 Ticks Section Spreadsheet Grid ({excelPair} 6-Column Standard Order)
+                          Excel CSV Grid Preview ({excelPair}_mt5_ticks.csv • 6 Columns)
                         </span>
                         <span className="text-[10px] text-slate-500 font-mono">
-                          [&lt;DATE&gt;, &lt;BID&gt;, &lt;ASK&gt;, &lt;LAST&gt;, &lt;VOLUME&gt;, &lt;FLAGS&gt;]
+                          [YYYYMMDD, HH:MM:SS, Bid, Ask, Last, 0]
                         </span>
                       </div>
                       <span className="text-[11px] text-emerald-400 font-mono">
-                        Direct MT5 Symbols → Ticks Import Format
+                        No header row in exported .csv (Row 1 = first tick)
                       </span>
                     </div>
 
@@ -1235,46 +1241,49 @@ export default function MarketData({ config, onUpdateConfig }: { config: any; on
                       <table className="w-full text-left border-collapse text-xs font-mono select-text">
                         <thead>
                           <tr className="bg-slate-800/90 text-slate-300 font-semibold border-b border-slate-700">
-                            <th className="py-2 px-3 border-r border-slate-700">1: &lt;DATE&gt; (ms)</th>
-                            <th className="py-2 px-3 border-r border-slate-700 text-right">2: &lt;BID&gt;</th>
-                            <th className="py-2 px-3 border-r border-slate-700 text-right">3: &lt;ASK&gt;</th>
-                            <th className="py-2 px-3 border-r border-slate-700 text-right">4: &lt;LAST&gt;</th>
-                            <th className="py-2 px-3 border-r border-slate-700 text-right">5: &lt;VOLUME&gt;</th>
-                            <th className="py-2 px-3 text-right">6: &lt;FLAGS&gt;</th>
+                            <th className="py-2 px-3 border-r border-slate-700">A: Date (YYYYMMDD)</th>
+                            <th className="py-2 px-3 border-r border-slate-700">B: Time (HH:MM:SS)</th>
+                            <th className="py-2 px-3 border-r border-slate-700 text-right">C: Bid</th>
+                            <th className="py-2 px-3 border-r border-slate-700 text-right">D: Ask</th>
+                            <th className="py-2 px-3 border-r border-slate-700 text-right">E: Last</th>
+                            <th className="py-2 px-3 text-right">F: Volume</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-800 text-slate-200">
                           {(mt5Ticks?.preview_sample && mt5Ticks.preview_sample.length > 0
                             ? mt5Ticks.preview_sample
                             : [
-                                ['2023.01.04 08:00:00.079', 155.006, 155.036, 155.006, 3.78, 6],
-                                ['2023.01.04 08:00:03.176', 155.004, 155.034, 155.004, 0.50, 6],
-                                ['2023.01.04 08:00:06.771', 155.006, 155.036, 155.006, 1.88, 6],
-                                ['2023.01.04 08:00:09.452', 155.003, 155.033, 155.003, 2.75, 6],
-                                ['2023.01.04 08:00:12.453', 155.007, 155.037, 155.007, 2.84, 6]
+                                ['20191230', '00:00:02', 1513.455, 1513.735, 1513.455, 0],
+                                ['20191230', '00:00:02', 1513.475, 1513.745, 1513.475, 0],
+                                ['20191230', '00:00:02', 1513.428, 1513.652, 1513.428, 0],
+                                ['20191230', '00:00:04', 1513.445, 1513.702, 1513.445, 0],
+                                ['20191230', '00:00:05', 1513.445, 1513.652, 1513.445, 0]
                               ]
-                          ).map((row: any, idx: number) => (
-                            <tr key={idx} className="hover:bg-slate-800/40 transition-colors">
-                              <td className="py-2 px-3 border-r border-slate-800 text-amber-300 font-medium whitespace-nowrap">
-                                {row[0]}
-                              </td>
-                              <td className="py-2 px-3 border-r border-slate-800 text-right font-semibold text-blue-400">
-                                {typeof row[1] === 'number' ? row[1].toFixed(excelPair.includes('JPY') ? 3 : 5) : row[1]}
-                              </td>
-                              <td className="py-2 px-3 border-r border-slate-800 text-right font-semibold text-emerald-400">
-                                {typeof row[2] === 'number' ? row[2].toFixed(excelPair.includes('JPY') ? 3 : 5) : row[2]}
-                              </td>
-                              <td className="py-2 px-3 border-r border-slate-800 text-right text-slate-300">
-                                {typeof row[3] === 'number' ? row[3].toFixed(excelPair.includes('JPY') ? 3 : 5) : row[3]}
-                              </td>
-                              <td className="py-2 px-3 border-r border-slate-800 text-right text-slate-400">
-                                {typeof row[4] === 'number' ? row[4].toFixed(2) : row[4]}
-                              </td>
-                              <td className="py-2 px-3 text-right font-bold text-amber-400">
-                                {row[5]}
-                              </td>
-                            </tr>
-                          ))}
+                          ).map((row: any, idx: number) => {
+                            const digits = (excelPair.includes('JPY') || excelPair.includes('XAU') || excelPair.includes('GOLD')) ? 3 : 5;
+                            return (
+                              <tr key={idx} className="hover:bg-slate-800/40 transition-colors">
+                                <td className="py-2 px-3 border-r border-slate-800 text-amber-300 font-medium whitespace-nowrap">
+                                  {row[0]}
+                                </td>
+                                <td className="py-2 px-3 border-r border-slate-800 text-slate-200 font-medium whitespace-nowrap">
+                                  {row[1]}
+                                </td>
+                                <td className="py-2 px-3 border-r border-slate-800 text-right font-semibold text-blue-400">
+                                  {typeof row[2] === 'number' ? row[2].toFixed(digits) : row[2]}
+                                </td>
+                                <td className="py-2 px-3 border-r border-slate-800 text-right font-semibold text-emerald-400">
+                                  {typeof row[3] === 'number' ? row[3].toFixed(digits) : row[3]}
+                                </td>
+                                <td className="py-2 px-3 border-r border-slate-800 text-right text-slate-300">
+                                  {typeof row[4] === 'number' ? row[4].toFixed(digits) : row[4]}
+                                </td>
+                                <td className="py-2 px-3 text-right font-bold text-amber-400">
+                                  {row[5]}
+                                </td>
+                              </tr>
+                            );
+                          })}
                         </tbody>
                       </table>
                     </div>
@@ -1599,22 +1608,22 @@ export default function MarketData({ config, onUpdateConfig }: { config: any; on
                       )}
                     </td>
                     <td className="py-3 px-3">
-                      {p.mt5Ticks?.has_files || p.mt5Ticks?.excel_file ? (
+                      {p.mt5Ticks?.has_files || p.mt5Ticks?.csv_file || p.mt5Ticks?.excel_file ? (
                         <div className="flex items-center gap-1.5">
                           <a
-                            href={`/api/market-data-download-file?pair=${p.pair}&file=${p.pair}_MT5_Ticks.xlsx`}
+                            href={`/api/market-data-download-file?pair=${p.pair}&file=${p.mt5Ticks?.csv_file || `${p.pair}_mt5_ticks.csv`}`}
                             download
                             className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[11px] font-mono hover:bg-emerald-500/30 transition-colors"
                           >
                             <Zap className="w-3 h-3 text-amber-400" />
-                            Ticks ({p.mt5Ticks.total_ticks ? p.mt5Ticks.total_ticks.toLocaleString() : p.mt5Ticks.xlsx_size_mb + 'MB'})
+                            CSV ({p.mt5Ticks.total_ticks ? p.mt5Ticks.total_ticks.toLocaleString() : p.mt5Ticks.csv_size_mb + 'MB'})
                           </a>
                           <a
-                            href={`/api/market-data-download-file?pair=${p.pair}&file=${p.pair}_MT5_Ticks.csv`}
+                            href={`/api/market-data-download-file?pair=${p.pair}&file=${p.mt5Ticks?.excel_file || `${p.pair}_mt5_ticks.xlsx`}`}
                             download
                             className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700 text-[10px] font-mono hover:text-white transition-colors"
                           >
-                            CSV
+                            XLSX
                           </a>
                         </div>
                       ) : (
