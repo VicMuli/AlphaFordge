@@ -1333,7 +1333,7 @@ def export_mt5_ticks_document(
       Col C: Bid       (e.g. 1513.455)
       Col D: Ask       (e.g. 1513.735)
       Col E: Last      (Bid price, e.g. 1513.455)
-      Col F: Volume    (0)
+      Col F: Volume    (positive integer >= 1 derived from Dukascopy askVolume + bidVolume)
     Row 1 begins immediately with the first tick (no header row).
     """
     pair = pair.upper().strip()
@@ -1506,7 +1506,15 @@ def export_mt5_ticks_document(
                                 ask_val = round(float(parts[1]), tick_digits)
                                 bid_val = round(float(parts[2]), tick_digits)
                                 last_val = bid_val
-                                vol_val = 0
+                                a_vol = float(parts[3].strip()) if len(parts) > 3 and parts[3].strip() else 0.0
+                                b_vol = float(parts[4].strip()) if len(parts) > 4 and parts[4].strip() else 0.0
+                                raw_vol = max(0.0, a_vol) + max(0.0, b_vol)
+                                if raw_vol <= 0.0:
+                                    vol_val = 1
+                                elif raw_vol < 1000.0:
+                                    vol_val = max(1, int(round(raw_vol * 100)))
+                                else:
+                                    vol_val = max(1, int(round(raw_vol)))
                             except Exception:
                                 continue
                         elif first_col.isdigit() and len(first_col) == 8 and ":" in parts[1]:
@@ -1529,7 +1537,16 @@ def export_mt5_ticks_document(
                                 bid_val = round(float(parts[2]), tick_digits)
                                 ask_val = round(float(parts[3]), tick_digits) if len(parts) > 3 else round(bid_val + spread_val, tick_digits)
                                 last_val = bid_val
-                                vol_val = 0
+                                if len(parts) > 5 and parts[5].strip():
+                                    raw_v = float(parts[5].strip())
+                                    if raw_v <= 0.0:
+                                        vol_val = 1
+                                    elif raw_v == int(raw_v):
+                                        vol_val = max(1, int(raw_v))
+                                    else:
+                                        vol_val = max(1, int(round(raw_v * 100)))
+                                else:
+                                    vol_val = 1
                             except Exception:
                                 continue
                         else:
@@ -1564,7 +1581,19 @@ def export_mt5_ticks_document(
                                 bid_val = round(float(parts[1]), tick_digits)
                                 ask_val = round(float(parts[2]), tick_digits) if len(parts) > 2 else round(bid_val + spread_val, tick_digits)
                                 last_val = bid_val
-                                vol_val = 0
+                                raw_v = 0.0
+                                if len(parts) > 4 and parts[4].strip():
+                                    raw_v = float(parts[4].strip())
+                                elif len(parts) > 3 and parts[3].strip():
+                                    cand = float(parts[3].strip())
+                                    if abs(cand - bid_val) > 1e-6 and abs(cand - ask_val) > 1e-6:
+                                        raw_v = cand
+                                if raw_v <= 0.0:
+                                    vol_val = 1
+                                elif raw_v == int(raw_v):
+                                    vol_val = max(1, int(raw_v))
+                                else:
+                                    vol_val = max(1, int(round(raw_v * 100)))
                             except Exception:
                                 continue
 
@@ -1683,7 +1712,7 @@ def export_mt5_ticks_document(
     print(f"   Excel Workbook: {output_xlsx.name} ({xlsx_size_mb:.2f} MB)")
     print(f"   Total Ticks:    {total_ticks_written:,}")
     print(f"   Date Span:      {first_tick_date} to {last_tick_date}")
-    print(f"   Layout:         6 Columns (Date YYYYMMDD | Time HH:MM:SS | Bid | Ask | Last | Volume 0)")
+    print(f"   Layout:         6 Columns (Date YYYYMMDD | Time HH:MM:SS | Bid | Ask | Last | Volume)")
     print(f"==========================================")
 
     return {

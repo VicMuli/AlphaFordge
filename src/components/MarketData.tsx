@@ -470,7 +470,7 @@ export default function MarketData({ config, onUpdateConfig }: { config: any; on
     setDownloadProgress({
       percent: 15,
       stage: `Compiling MT5 Ticks Excel CSV (${p}_mt5_ticks.csv) [Date, Time, Bid, Ask, Last, Volume]...`,
-      detail: `Formatting headerless 6 columns (YYYYMMDD, HH:MM:SS, Bid, Ask, Last, 0) for MT5 Ticks import`,
+      detail: `Formatting headerless 6 columns (YYYYMMDD, HH:MM:SS, Bid, Ask, Last, Volume) for MT5 Ticks import`,
       step: 1,
       totalSteps: 2,
       active: true,
@@ -1056,7 +1056,7 @@ export default function MarketData({ config, onUpdateConfig }: { config: any; on
                 <code className="text-emerald-300 bg-slate-950 px-1 py-0.5 rounded font-mono">Col C: Bid</code>,{' '}
                 <code className="text-emerald-300 bg-slate-950 px-1 py-0.5 rounded font-mono">Col D: Ask</code>,{' '}
                 <code className="text-emerald-300 bg-slate-950 px-1 py-0.5 rounded font-mono">Col E: Last</code>, and{' '}
-                <code className="text-emerald-300 bg-slate-950 px-1 py-0.5 rounded font-mono">Col F: Volume (0)</code>.
+                <code className="text-emerald-300 bg-slate-950 px-1 py-0.5 rounded font-mono">Col F: Volume (ulong int)</code>.
                 <span className="block mt-1 text-[11px] text-slate-400">
                   To upload into MT5: Press <strong className="text-white">Ctrl+U</strong> (View → Symbols) → Select symbol → Open <strong className="text-white">Ticks</strong> tab → Click <strong className="text-white">Import Ticks</strong> → Select <code className="text-emerald-400 font-mono">{excelPair}_mt5_ticks.csv</code> (or <code className="text-emerald-400 font-mono">.xlsx</code>).
                 </span>
@@ -1229,7 +1229,7 @@ export default function MarketData({ config, onUpdateConfig }: { config: any; on
                           Excel CSV Grid Preview ({excelPair}_mt5_ticks.csv • 6 Columns)
                         </span>
                         <span className="text-[10px] text-slate-500 font-mono">
-                          [YYYYMMDD, HH:MM:SS, Bid, Ask, Last, 0]
+                          [YYYYMMDD, HH:MM:SS, Bid, Ask, Last, Volume]
                         </span>
                       </div>
                       <span className="text-[11px] text-emerald-400 font-mono">
@@ -1253,11 +1253,11 @@ export default function MarketData({ config, onUpdateConfig }: { config: any; on
                           {(mt5Ticks?.preview_sample && mt5Ticks.preview_sample.length > 0
                             ? mt5Ticks.preview_sample
                             : [
-                                ['20191230', '00:00:02', 1513.455, 1513.735, 1513.455, 0],
-                                ['20191230', '00:00:02', 1513.475, 1513.745, 1513.475, 0],
-                                ['20191230', '00:00:02', 1513.428, 1513.652, 1513.428, 0],
-                                ['20191230', '00:00:04', 1513.445, 1513.702, 1513.445, 0],
-                                ['20191230', '00:00:05', 1513.445, 1513.652, 1513.445, 0]
+                                ['20191230', '00:00:02', 1513.455, 1513.735, 1513.455, 412],
+                                ['20191230', '00:00:02', 1513.475, 1513.745, 1513.475, 385],
+                                ['20191230', '00:00:02', 1513.428, 1513.652, 1513.428, 290],
+                                ['20191230', '00:00:04', 1513.445, 1513.702, 1513.445, 518],
+                                ['20191230', '00:00:05', 1513.445, 1513.652, 1513.445, 340]
                               ]
                           ).map((row: any, idx: number) => {
                             const digits = (excelPair.includes('JPY') || excelPair.includes('XAU') || excelPair.includes('GOLD')) ? 3 : 5;

@@ -15,7 +15,19 @@ export default defineConfig({
     host: '0.0.0.0',
     port: 3000,
     hmr: false,
+    ws: false,
     allowedHosts: true,
+    watch: {
+      ignored: [
+        '**/market_data/**',
+        '**/researched_strategies/**',
+        '**/optimization_runs/**',
+        '**/backup_temp/**',
+        '**/.aistudio/**',
+        '**/dist/**',
+        '**/__pycache__/**',
+      ],
+    },
   },
   resolve: {
     alias: {
